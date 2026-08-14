@@ -11,6 +11,7 @@ requires-python = ">=3.9"
 dependencies = [
     "PySide6",
     "matplotlib",
+    "pandas",
 ]
 
 [project.optional-dependencies]

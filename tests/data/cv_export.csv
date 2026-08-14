@@ -1,0 +1,19 @@
+Instrument: CV-3000 Potentiostat
+Operator: J. Doe
+Date: 2024-03-01
+Sample: Pt electrode in 0.1M KCl
+Results:
+Channel 1:
+Segment 1:
+Segment 2:
+Segment 3:
+Segment 4:
+Segment 5:
+Segment 6:
+Potential/V,Current/A
+-0.200,3.312e-05
+-0.199,3.240e-05
+-0.198,3.198e-05
+-0.197,3.150e-05
+-0.196,3.100e-05
+-0.195,3.050e-05
