@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
+from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_column, numeric_xy
 
 
 def test_numeric_xy_extracts_clean_pairs():
@@ -40,3 +40,33 @@ def test_numeric_xy_missing_column_raises_key_error():
     df = pd.DataFrame({"x": [1, 2]})
     with pytest.raises(KeyError):
         numeric_xy(df, "x", "does_not_exist")
+
+
+def test_numeric_column_extracts_clean_values():
+    df = pd.DataFrame({"current": [1.0, 2.0, 3.0]})
+    values = numeric_column(df, "current")
+    assert list(values) == [1.0, 2.0, 3.0]
+
+
+def test_numeric_column_drops_non_numeric_rows():
+    df = pd.DataFrame({"current": ["1", "bad", "3", "4"]})
+    values = numeric_column(df, "current")
+    assert list(values) == [1, 3, 4]
+
+
+def test_numeric_column_does_not_mutate_original_dataframe():
+    df = pd.DataFrame({"current": ["1", "bad", "3"]})
+    numeric_column(df, "current")
+    assert df["current"].tolist() == ["1", "bad", "3"]
+
+
+def test_numeric_column_raises_when_too_few_valid_points_remain():
+    df = pd.DataFrame({"current": ["bad", "also bad"]})
+    with pytest.raises(InsufficientNumericDataError):
+        numeric_column(df, "current", min_points=1)
+
+
+def test_numeric_column_missing_column_raises_key_error():
+    df = pd.DataFrame({"x": [1, 2]})
+    with pytest.raises(KeyError):
+        numeric_column(df, "does_not_exist")

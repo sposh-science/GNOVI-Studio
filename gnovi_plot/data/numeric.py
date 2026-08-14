@@ -29,3 +29,17 @@ def numeric_xy(
             f"(found {len(x)}, need at least {min_points})."
         )
     return x, y
+
+
+def numeric_column(dataframe: pd.DataFrame, column: str, min_points: int = 1) -> pd.Series:
+    """Extract a single numeric column for plotting (e.g. a histogram), without
+    mutating `dataframe`. Non-numeric values are coerced to NaN and dropped.
+    """
+    values = pd.to_numeric(dataframe[column], errors="coerce").dropna()
+
+    if len(values) < min_points:
+        raise InsufficientNumericDataError(
+            f"Not enough numeric data points in column '{column}' to plot "
+            f"(found {len(values)}, need at least {min_points})."
+        )
+    return values

@@ -31,3 +31,24 @@ def test_import_data_package():
 
 def test_import_import_data_dialog():
     import gnovi_plot.gui.dialogs.import_data_dialog  # noqa: F401
+
+
+def test_import_plotting_package():
+    import gnovi_plot.plotting.figure  # noqa: F401
+    import gnovi_plot.plotting.series  # noqa: F401
+
+
+def test_import_plot_series_panel():
+    import gnovi_plot.gui.widgets.plot_series_panel  # noqa: F401
+
+
+def test_import_figure_properties_panel():
+    import gnovi_plot.gui.widgets.figure_properties_panel  # noqa: F401
+
+
+def test_import_styles():
+    import gnovi_plot.gui.styles  # noqa: F401
+
+
+def test_import_analysis_cycles():
+    import gnovi_plot.analysis.cycles  # noqa: F401
