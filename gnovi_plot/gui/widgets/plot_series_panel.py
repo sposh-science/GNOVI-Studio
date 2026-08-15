@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gnovi_plot.gui.styles import STALE_COLOR
+from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.series import PlotSeries, PlotType
 
@@ -112,9 +114,12 @@ class PlotSeriesPanel(QWidget):
         form.addRow(self.bins_label, self.bins_spin)
         form.addRow(self.visible_check)
 
+        self.list_section = CollapsibleSection("Plot Series", list_group)
+        self.props_section = CollapsibleSection("Series Properties", props_group)
+
         layout = QVBoxLayout(self)
-        layout.addWidget(list_group)
-        layout.addWidget(props_group)
+        layout.addWidget(self.list_section)
+        layout.addWidget(self.props_section)
         layout.addStretch(1)
 
         self.series_list.currentRowChanged.connect(self._on_selection_changed)
@@ -132,12 +137,18 @@ class PlotSeriesPanel(QWidget):
 
         self.refresh()
 
+    @staticmethod
+    def _item_text(series: PlotSeries) -> str:
+        return f"{series.label}  [stale — re-add]" if series.stale else series.label
+
     def refresh(self, select_id: str | None = None) -> None:
         self.series_list.blockSignals(True)
         self.series_list.clear()
         target_row = -1
         for i, series in enumerate(self._figure.series):
-            item = QListWidgetItem(series.label)
+            item = QListWidgetItem(self._item_text(series))
+            if series.stale:
+                item.setForeground(QColor(STALE_COLOR))
             item.setData(Qt.UserRole, series.id)
             self.series_list.addItem(item)
             if select_id is not None and series.id == select_id:
@@ -202,7 +213,7 @@ class PlotSeriesPanel(QWidget):
         item = self.series_list.currentItem()
         series = self._current_series()
         if item is not None and series is not None:
-            item.setText(series.label)
+            item.setText(self._item_text(series))
 
     def _apply_label(self) -> None:
         series = self._current_series()

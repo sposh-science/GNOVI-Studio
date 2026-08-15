@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.plotting.series import PlotSeries
 
 # Matplotlib's default "tab10" cycle, reproduced as plain hex strings so this
@@ -61,3 +62,31 @@ class GnoviFigure:
     def reset_limits(self) -> None:
         self.xlim = None
         self.ylim = None
+
+    def invalidate_series_for_dataset(self, dataset: Dataset, row_set_changed: bool) -> list[PlotSeries]:
+        """Mark series referencing `dataset` stale after a transformation.
+
+        A series is marked stale if a column it uses no longer exists in the
+        dataset's working data (e.g. a calculated column dropped by
+        `reset_working_data()`), or -- when `row_set_changed` is True, i.e.
+        the transformation was `exclude_rows`/`keep_rows`/`reset_working_data`
+        -- if it has a `row_range` at all. Row ranges are invalidated
+        unconditionally rather than only when out of bounds, because a
+        row-count/order change can silently shift what a still-in-bounds
+        range actually contains (e.g. a manual or detected cycle); guessing
+        that it's still correct isn't safe. Already-stale series and series
+        for other datasets are left untouched. Returns the series newly
+        marked stale.
+        """
+        newly_stale = []
+        for series in self.series:
+            if series.dataset.id != dataset.id or series.stale:
+                continue
+            missing_column = series.x_column not in dataset.columns or (
+                series.y_column is not None and series.y_column not in dataset.columns
+            )
+            row_range_invalid = row_set_changed and series.row_range is not None
+            if missing_column or row_range_invalid:
+                series.stale = True
+                newly_stale.append(series)
+        return newly_stale

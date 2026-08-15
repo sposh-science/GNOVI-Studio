@@ -50,6 +50,9 @@ class PlotSeries:
     alpha: float = 1.0
     bins: int | str = "auto"
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    # Set by GnoviFigure.invalidate_series_for_dataset() after a dataset
+    # transformation invalidates this series (missing column / stale row_range).
+    stale: bool = False
 
     def __post_init__(self) -> None:
         if not self.x_column:

@@ -29,6 +29,7 @@ from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_column, numeric_xy
 from gnovi_plot.gui.dialogs.import_data_dialog import ImportDataDialog
+from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.plotting.series import PlotSeries, PlotType
 
 _FILE_FILTER = "Data files (*.csv *.txt *.tsv *.dat);;All files (*)"
@@ -77,6 +78,7 @@ class DatasetPanel(QWidget):
 
         self.dataset_list = QListWidget()
         self.import_button = QPushButton("Import Data")
+        self.import_button.setProperty("primary", True)
         self.remove_button = QPushButton("Remove Dataset")
 
         self.plot_type_combo = QComboBox()
@@ -112,6 +114,7 @@ class DatasetPanel(QWidget):
         self.add_manual_cycles_button = QPushButton("Add Manual Cycles to Plot")
 
         self.add_to_plot_button = QPushButton("Add to Plot")
+        self.add_to_plot_button.setProperty("primary", True)
         self.clear_plot_button = QPushButton("Clear Plot")
 
         dataset_group = QGroupBox("Datasets")
@@ -151,9 +154,12 @@ class DatasetPanel(QWidget):
         plot_layout.addWidget(self.add_to_plot_button)
         plot_layout.addWidget(self.clear_plot_button)
 
+        self.dataset_section = CollapsibleSection("Datasets", dataset_group)
+        self.plot_section = CollapsibleSection("Add to Plot", plot_group)
+
         layout = QVBoxLayout(self)
-        layout.addWidget(dataset_group)
-        layout.addWidget(plot_group)
+        layout.addWidget(self.dataset_section)
+        layout.addWidget(self.plot_section)
         layout.addStretch(1)
 
         self.import_button.clicked.connect(self._on_import_clicked)
@@ -238,6 +244,40 @@ class DatasetPanel(QWidget):
         self._reset_manual_cycles()
         self.dataset_selected.emit(dataset)
         self._update_cycle_preview()
+
+    def refresh_columns(self) -> None:
+        """Re-populate the X/Y column selectors for the currently selected
+        dataset (e.g. after a calculated column was added to it), preserving
+        the current selection where the chosen columns still exist."""
+        dataset = self._current_dataset()
+        if dataset is None:
+            return
+        x_current = self.x_combo.currentText()
+        y_current = self.y_combo.currentText()
+        columns = [str(c) for c in dataset.columns]
+
+        self.x_combo.blockSignals(True)
+        self.y_combo.blockSignals(True)
+        self.x_combo.clear()
+        self.y_combo.clear()
+        self.x_combo.addItems(columns)
+        self.y_combo.addItems(columns)
+        if x_current in columns:
+            self.x_combo.setCurrentText(x_current)
+        if y_current in columns:
+            self.y_combo.setCurrentText(y_current)
+        elif len(columns) > 1:
+            self.y_combo.setCurrentIndex(1)
+        self.x_combo.blockSignals(False)
+        self.y_combo.blockSignals(False)
+        self._update_cycle_preview()
+
+    def reset_manual_cycles(self) -> None:
+        """Public wrapper: manual cycle row positions are only meaningful
+        against the working-data row set they were defined against, so any
+        row-filtering transformation must discard them rather than risk
+        guessing stale boundaries."""
+        self._reset_manual_cycles()
 
     def _populate_columns(self, dataset: Dataset | None) -> None:
         self.x_combo.clear()

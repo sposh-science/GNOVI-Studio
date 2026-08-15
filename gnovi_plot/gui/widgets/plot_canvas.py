@@ -22,7 +22,7 @@ class PlotCanvas(FigureCanvasQTAgg):
         self.axes.cla()
 
         for series in figure.series:
-            if series.visible:
+            if series.visible and not series.stale:
                 self._draw_series(series)
 
         self.axes.set_title(figure.title)

@@ -12,6 +12,7 @@ dependencies = [
     "PySide6",
     "matplotlib",
     "pandas",
+    "sympy",
 ]
 
 [project.optional-dependencies]
