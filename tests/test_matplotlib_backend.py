@@ -177,3 +177,269 @@ def test_xrd_style_line_series_has_no_marker_by_default():
     dataset = _make_dataset()
     series = PlotSeries.line(dataset, "x", "y")
     assert series.marker == ""
+
+
+# --- dark_mode theming -------------------------------------------------------
+
+
+def test_dark_mode_recolors_figure_and_axes_background():
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+    mpl_figure, axes_list = _axes_for(figure)
+
+    render_figure(axes_list, figure, dark_mode=True)
+
+    assert mpl_figure.get_facecolor() != (1.0, 1.0, 1.0, 1.0)
+    assert axes_list[0].get_facecolor() != (1.0, 1.0, 1.0, 1.0)
+
+
+def test_light_mode_is_the_default_and_uses_a_white_background():
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+    mpl_figure, axes_list = _axes_for(figure)
+
+    render_figure(axes_list, figure)
+
+    assert mpl_figure.get_facecolor() == (1.0, 1.0, 1.0, 1.0)
+    assert axes_list[0].get_facecolor() == (1.0, 1.0, 1.0, 1.0)
+
+
+def test_dark_mode_is_fully_reversible_on_the_same_axes():
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+    mpl_figure, axes_list = _axes_for(figure)
+
+    render_figure(axes_list, figure, dark_mode=True)
+    render_figure(axes_list, figure, dark_mode=False)
+
+    assert mpl_figure.get_facecolor() == (1.0, 1.0, 1.0, 1.0)
+    assert axes_list[0].get_facecolor() == (1.0, 1.0, 1.0, 1.0)
+
+
+def test_dark_mode_does_not_change_series_color():
+    figure = GnoviFigure()
+    series = PlotSeries.line(_make_dataset(), "x", "y")
+    figure.add_series(series)
+    original_color = series.color
+
+    _mpl_figure, axes_list = _axes_for(figure)
+    render_figure(axes_list, figure, dark_mode=True)
+
+    assert series.color == original_color
+    assert axes_list[0].lines[0].get_color() == original_color
+
+
+# --- Regression: log scale + scientific notation must not crash --------------
+#
+# `ax.ticklabel_format(style="scientific")` only works with Matplotlib's
+# ScalarFormatter; a log-scale axis uses LogFormatterSciNotation instead and
+# raises AttributeError if asked for scientific-notation styling. Toggling
+# Log scale and Scientific notation together in the Axes & Ticks panel is an
+# ordinary, unremarkable user action, and previously reached this uncaught,
+# surfacing as the app's generic "Unexpected Error" dialog.
+
+
+def test_log_scale_with_scientific_notation_x_does_not_raise():
+    figure = GnoviFigure()
+    panel = figure.active_panel
+    panel.xscale = "log"
+    panel.scientific_notation_x = True
+    figure.add_series(PlotSeries.line(_make_dataset(x=(1.0, 2.0, 3.0, 4.0)), "x", "y"))
+
+    _mpl_figure, axes_list = _axes_for(figure)
+    render_figure(axes_list, figure)  # must not raise
+
+    assert axes_list[0].get_xscale() == "log"
+
+
+def test_log_scale_with_scientific_notation_y_does_not_raise():
+    figure = GnoviFigure()
+    panel = figure.active_panel
+    panel.yscale = "log"
+    panel.scientific_notation_y = True
+    figure.add_series(PlotSeries.line(_make_dataset(y=(1.0, 2.0, 3.0, 4.0)), "x", "y"))
+
+    _mpl_figure, axes_list = _axes_for(figure)
+    render_figure(axes_list, figure)  # must not raise
+
+    assert axes_list[0].get_yscale() == "log"
+
+
+def test_linear_scale_with_scientific_notation_still_applies():
+    """The fix must not disable scientific notation for the (default)
+    linear-scale case it actually works for."""
+    figure = GnoviFigure()
+    panel = figure.active_panel
+    panel.scientific_notation_x = True
+    figure.add_series(PlotSeries.line(_make_dataset(x=(100000.0, 200000.0, 300000.0, 400000.0)), "x", "y"))
+
+    _mpl_figure, axes_list = _axes_for(figure)
+    render_figure(axes_list, figure)
+    ax = axes_list[0]
+
+    assert ax.xaxis.get_major_formatter()._scientific is True
+
+
+# --- Universal Grid Appearance (figure-wide) ----------------------------------
+
+
+def test_grid_appearance_style_width_and_alpha_are_applied():
+    figure = GnoviFigure()
+    figure.active_panel.grid = True
+    figure.grid_linestyle = ":"
+    figure.grid_linewidth = 2.5
+    figure.grid_alpha = 0.3
+    figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+
+    _mpl_figure, axes_list = _axes_for(figure)
+    render_figure(axes_list, figure)
+    ax = axes_list[0]
+
+    gridlines = ax.xaxis.get_gridlines()
+    assert gridlines
+    assert gridlines[0].get_linestyle() == ":"
+    assert gridlines[0].get_linewidth() == pytest.approx(2.5)
+    assert gridlines[0].get_alpha() == pytest.approx(0.3)
+
+
+def test_grid_appearance_is_uniform_across_panels():
+    """Grid appearance is figure-wide -- unlike `Panel.grid`/`grid_which`
+    (on/off, per panel), every panel that has its grid on renders it with
+    the same style/width/opacity/color."""
+    figure = GnoviFigure()
+    figure.set_layout(1, 2)
+    figure.grid_linewidth = 3.0
+    for panel in figure.panels:
+        panel.grid = True
+
+    _mpl_figure, axes_list = _axes_for(figure)
+    render_figure(axes_list, figure)
+
+    widths = [ax.xaxis.get_gridlines()[0].get_linewidth() for ax in axes_list]
+    assert widths == [pytest.approx(3.0), pytest.approx(3.0)]
+
+
+def test_custom_grid_color_overrides_the_theme_default():
+    figure = GnoviFigure()
+    figure.active_panel.grid = True
+    figure.grid_color = "#ff00ff"
+    figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+
+    _mpl_figure, axes_list = _axes_for(figure)
+    render_figure(axes_list, figure, dark_mode=True)
+    ax = axes_list[0]
+
+    from matplotlib.colors import to_hex
+
+    assert to_hex(ax.xaxis.get_gridlines()[0].get_color()) == "#ff00ff"
+
+
+def test_grid_color_none_falls_back_to_the_theme_default():
+    figure = GnoviFigure()
+    figure.active_panel.grid = True
+    assert figure.grid_color is None
+    figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+
+    _mpl_figure, axes_list = _axes_for(figure)
+    render_figure(axes_list, figure, dark_mode=False)
+    render_figure(axes_list, figure, dark_mode=True)  # must not raise either theme
+
+
+def test_dark_mode_with_grid_disabled_does_not_warn(recwarn):
+    figure = GnoviFigure()
+    figure.active_panel.grid = False
+    figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+    _mpl_figure, axes_list = _axes_for(figure)
+
+    render_figure(axes_list, figure, dark_mode=True)
+
+    assert not any("grid" in str(w.message).lower() for w in recwarn.list)
+
+
+# --- Tick length/width (major/minor) ------------------------------------------
+
+
+def test_major_and_minor_tick_length_and_width_are_applied():
+    figure = GnoviFigure()
+    figure.active_panel.minor_ticks = True
+    figure.active_panel.major_tick_length = 7.0
+    figure.active_panel.major_tick_width = 2.0
+    figure.active_panel.minor_tick_length = 3.0
+    figure.active_panel.minor_tick_width = 0.4
+    figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+
+    _mpl_figure, axes_list = _axes_for(figure)
+    render_figure(axes_list, figure)
+    ax = axes_list[0]
+
+    major_tick = ax.xaxis.get_major_ticks()[0]
+    minor_tick = ax.xaxis.get_minor_ticks()[0]
+    assert major_tick.tick1line.get_markersize() == pytest.approx(7.0)
+    assert major_tick.tick1line.get_markeredgewidth() == pytest.approx(2.0)
+    assert minor_tick.tick1line.get_markersize() == pytest.approx(3.0)
+    assert minor_tick.tick1line.get_markeredgewidth() == pytest.approx(0.4)
+
+
+# --- Legend: Outside Right / Outside Bottom -----------------------------------
+
+
+def test_outside_right_legend_uses_a_bbox_to_anchor_outside_the_axes():
+    figure = GnoviFigure()
+    figure.active_panel.legend_loc = "outside right"
+    figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+
+    _mpl_figure, axes_list = _axes_for(figure)
+    render_figure(axes_list, figure)
+    legend = axes_list[0].get_legend()
+
+    assert legend is not None
+    assert legend._loc == 6  # "center left" -- the anchor corner for "outside right"
+
+
+def test_outside_bottom_legend_uses_a_bbox_to_anchor_outside_the_axes():
+    figure = GnoviFigure()
+    figure.active_panel.legend_loc = "outside bottom"
+    figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+
+    _mpl_figure, axes_list = _axes_for(figure)
+    render_figure(axes_list, figure)
+    legend = axes_list[0].get_legend()
+
+    assert legend is not None
+    assert legend._loc == 9  # "upper center" -- the anchor corner for "outside bottom"
+
+
+# --- Theme-aware contrast checking (manual series colors only) ---------------
+
+
+def test_contrast_ratio_of_a_color_against_itself_is_one():
+    from gnovi_plot.plotting.backends.matplotlib_backend import contrast_ratio
+
+    assert contrast_ratio("#ffffff", "#ffffff") == pytest.approx(1.0)
+
+
+def test_contrast_ratio_black_vs_white_is_maximal():
+    from gnovi_plot.plotting.backends.matplotlib_backend import contrast_ratio
+
+    assert contrast_ratio("#000000", "#ffffff") == pytest.approx(21.0, rel=1e-3)
+
+
+def test_is_low_contrast_flags_a_near_background_color_on_light_theme():
+    from gnovi_plot.plotting.backends.matplotlib_backend import is_low_contrast
+
+    # Near-white on the light theme's white axes background.
+    assert is_low_contrast("#fafafa", dark_mode=False) is True
+
+
+def test_is_low_contrast_flags_a_near_background_color_on_dark_theme():
+    from gnovi_plot.plotting.backends.matplotlib_backend import is_low_contrast
+
+    # Near the dark theme's dark axes background.
+    assert is_low_contrast("#26272e", dark_mode=True) is True
+
+
+def test_is_low_contrast_is_false_for_a_clearly_readable_color():
+    from gnovi_plot.plotting.backends.matplotlib_backend import is_low_contrast
+
+    assert is_low_contrast("#1f77b4", dark_mode=False) is False
+    assert is_low_contrast("#1f77b4", dark_mode=True) is False

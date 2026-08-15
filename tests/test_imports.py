@@ -52,3 +52,7 @@ def test_import_styles():
 
 def test_import_analysis_cycles():
     import gnovi_plot.analysis.cycles  # noqa: F401
+
+
+def test_import_core_app_info():
+    import gnovi_plot.core.app_info  # noqa: F401

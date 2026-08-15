@@ -27,6 +27,7 @@ from gnovi_plot.analysis.segments import (
 )
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.data.dataset_manager import DatasetManager
+from gnovi_plot.data.importers.text_importer import DataImportError
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_column, numeric_xy
 from gnovi_plot.gui.dialogs.import_data_dialog import ImportDataDialog
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
@@ -206,7 +207,11 @@ class DatasetPanel(QWidget):
         if not path:
             return
 
-        dialog = ImportDataDialog(path, self)
+        try:
+            dialog = ImportDataDialog(path, self)
+        except DataImportError as exc:
+            QMessageBox.critical(self, "Import Data", str(exc))
+            return
         if dialog.exec() != ImportDataDialog.Accepted or dialog.result is None:
             return
 
@@ -262,7 +267,12 @@ class DatasetPanel(QWidget):
         return self._current_dataset()
 
     def _current_plot_type(self) -> PlotType:
-        return self.plot_type_combo.currentData()
+        # QComboBox.itemData() round-trips a str-subclassed Enum through
+        # QVariant and hands back a plain str (same Qt marshalling behavior
+        # as PlotTheme/ReferenceCursorMode in main_window.py) -- normalize
+        # here so callers always get a real PlotType.
+        data = self.plot_type_combo.currentData()
+        return data if isinstance(data, PlotType) else PlotType(data)
 
     def _current_preset(self) -> str:
         return self.plot_preset_combo.currentData()

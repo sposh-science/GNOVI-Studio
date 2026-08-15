@@ -6,8 +6,9 @@ from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.plotting.series import PlotSeries
 
 # Matplotlib's default "tab10" cycle, reproduced as plain hex strings so this
-# module has no Matplotlib/rendering dependency of its own.
-_DEFAULT_COLOR_CYCLE = [
+# module has no Matplotlib/rendering dependency of its own. Used to
+# auto-assign colors for the Light plot theme.
+_DEFAULT_COLOR_CYCLE_LIGHT = [
     "#1f77b4",
     "#ff7f0e",
     "#2ca02c",
@@ -19,6 +20,35 @@ _DEFAULT_COLOR_CYCLE = [
     "#bcbd22",
     "#17becf",
 ]
+
+# A brighter/higher-saturation cycle for the Dark plot theme -- tab10's
+# darker members (e.g. the navy blue, brick red) read poorly against the
+# dark canvas background (see gui.styles/matplotlib_backend's dark chrome),
+# so auto-assigned series use this cycle instead whenever a series is added
+# while Dark is the active Plot Theme.
+_DEFAULT_COLOR_CYCLE_DARK = [
+    "#8ab4f8",
+    "#ffb74d",
+    "#81c995",
+    "#f28b82",
+    "#c58af9",
+    "#d7a486",
+    "#f6a8d0",
+    "#b0b4bd",
+    "#e1e05a",
+    "#7fd8e8",
+]
+
+
+def theme_color_cycle(dark_mode: bool) -> list[str]:
+    """The default auto-assigned series color cycle for the given Plot
+    Theme. Only ever used to pick a color -- for a fresh auto-assignment
+    (`Panel.add_series`) or an explicit "Optimize Colors for Theme" action
+    (`gui.widgets.plot_series_panel`) -- never to silently reinterpret an
+    already-assigned color when the theme changes later; see
+    `PlotSeries.color_is_manual`.
+    """
+    return _DEFAULT_COLOR_CYCLE_DARK if dark_mode else _DEFAULT_COLOR_CYCLE_LIGHT
 
 _PANEL_LABEL_LETTERS = "abcdefghijklmnopqrstuvwxyz"
 
@@ -45,6 +75,10 @@ _PANEL_STYLE_FIELDS = [
     "major_tick_spacing_y",
     "minor_tick_spacing_x",
     "minor_tick_spacing_y",
+    "major_tick_length",
+    "major_tick_width",
+    "minor_tick_length",
+    "minor_tick_width",
     "tick_label_size",
     "axis_label_size",
     "title_size",
@@ -97,6 +131,14 @@ class Panel:
     major_tick_spacing_y: float | None = None
     minor_tick_spacing_x: float | None = None
     minor_tick_spacing_y: float | None = None
+    # Matplotlib's own rcParam defaults (xtick.major.size/width,
+    # xtick.minor.size/width), reproduced explicitly so a panel's tick
+    # geometry is always part of its own declarative state rather than
+    # inherited implicitly from whatever rcParams happen to be active.
+    major_tick_length: float = 3.5
+    major_tick_width: float = 0.8
+    minor_tick_length: float = 2.0
+    minor_tick_width: float = 0.6
     tick_label_size: float | None = None
     axis_label_size: float | None = None
     title_size: float | None = None
@@ -116,9 +158,10 @@ class Panel:
     series: list[PlotSeries] = field(default_factory=list)
     _next_color_index: int = field(default=0, repr=False)
 
-    def add_series(self, series: PlotSeries) -> None:
+    def add_series(self, series: PlotSeries, *, dark_mode: bool = False) -> None:
         if series.color is None:
-            series.color = _DEFAULT_COLOR_CYCLE[self._next_color_index % len(_DEFAULT_COLOR_CYCLE)]
+            cycle = theme_color_cycle(dark_mode)
+            series.color = cycle[self._next_color_index % len(cycle)]
             self._next_color_index += 1
         self.series.append(series)
 
@@ -201,6 +244,16 @@ class GnoviFigure:
         axis_label_font_size: float = 10.0,
         tick_label_font_size: float = 9.0,
         legend_font_size: float = 9.0,
+        grid_linestyle: str = "--",
+        grid_linewidth: float = 0.8,
+        grid_alpha: float = 0.6,
+        grid_color: str | None = None,
+        margin_left: float = 0.125,
+        margin_right: float = 0.9,
+        margin_bottom: float = 0.11,
+        margin_top: float = 0.88,
+        panel_wspace: float = 0.2,
+        panel_hspace: float = 0.2,
         **panel_kwargs,
     ) -> None:
         self.panels: list[Panel] = panels if panels is not None else [Panel(**panel_kwargs)]
@@ -219,6 +272,41 @@ class GnoviFigure:
         self.axis_label_font_size = axis_label_font_size
         self.tick_label_font_size = tick_label_font_size
         self.legend_font_size = legend_font_size
+
+        # "Universal" Grid Appearance: unlike `Panel.grid`/`grid_which`
+        # (per-panel on/off + major/minor, since panels may reasonably
+        # differ on whether a grid is shown at all), the grid's *look* is a
+        # figure-wide publication-consistency setting -- every panel that
+        # has its grid on renders it with this same style/width/opacity/
+        # color. `grid_color=None` means "use the current Plot Theme's
+        # default grid color" (see matplotlib_backend._grid_color).
+        self.grid_linestyle = grid_linestyle
+        self.grid_linewidth = grid_linewidth
+        self.grid_alpha = grid_alpha
+        self.grid_color = grid_color
+
+        # Outer margins + inter-panel spacing (Matplotlib's
+        # `figure.subplots_adjust(left/right/bottom/top/wspace/hspace)`
+        # parameters), stored explicitly on the figure rather than
+        # recomputed by an automatic layout engine on every render -- see
+        # `gui.widgets.figure_layout_panel` and
+        # `plotting.backends.matplotlib_backend.apply_figure_layout`. This
+        # keeps a figure's on-screen preview and every exported format
+        # (PNG/TIFF/SVG/PDF) driven by the exact same stored numbers, and
+        # keeps a session's saved state enough to reproduce its layout
+        # deterministically (Matplotlib's own automatic "tight" layout
+        # depends on the rendering environment's font metrics, which isn't
+        # reproducible from stored parameters alone). Defaults match
+        # Matplotlib's own rcParams (`figure.subplot.*`), so a fresh
+        # GnoviFigure renders identically to plain Matplotlib without any
+        # layout call. `apply_tight_layout()` computes a good one-off
+        # starting point on demand; it never runs implicitly.
+        self.margin_left = margin_left
+        self.margin_right = margin_right
+        self.margin_bottom = margin_bottom
+        self.margin_top = margin_top
+        self.panel_wspace = panel_wspace
+        self.panel_hspace = panel_hspace
 
         self._renumber_panel_labels()
 
@@ -331,8 +419,8 @@ class GnoviFigure:
     def series(self, value: list[PlotSeries]) -> None:
         self.active_panel.series = value
 
-    def add_series(self, series: PlotSeries) -> None:
-        self.active_panel.add_series(series)
+    def add_series(self, series: PlotSeries, *, dark_mode: bool = False) -> None:
+        self.active_panel.add_series(series, dark_mode=dark_mode)
 
     def remove_series(self, series_id: str) -> None:
         for panel in self.panels:

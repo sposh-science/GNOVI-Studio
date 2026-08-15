@@ -43,6 +43,13 @@ class PlotSeries:
     row_range: tuple[int, int] | None = None
     visible: bool = True
     color: str | None = None
+    # True once the user has explicitly picked `color` (see
+    # gui.widgets.plot_series_panel._pick_color) -- distinguishes an
+    # explicit choice (never silently changed, see
+    # plotting.backends.matplotlib_backend.is_low_contrast) from an
+    # auto-assigned cycle color (which may be re-picked from a
+    # theme-appropriate cycle, see plotting.figure.theme_color_cycle).
+    color_is_manual: bool = False
     line_width: float = 1.5
     line_style: str = "-"
     marker: str = ""

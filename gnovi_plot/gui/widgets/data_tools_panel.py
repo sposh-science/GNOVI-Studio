@@ -3,7 +3,6 @@ from __future__ import annotations
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -19,12 +18,23 @@ from gnovi_plot.equations.parser import FormulaError
 from gnovi_plot.gui.dialogs.calculated_column_dialog import CalculatedColumnDialog
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 
+# Shown before every destructive Working Data operation (Keep/Exclude
+# Selected Rows) -- these mutate `Dataset.dataframe` and can invalidate
+# existing PlotSeries whose `row_range` no longer applies (see
+# `Panel.invalidate_series_for_dataset`), unlike "Plot Selected Rows" which
+# never touches Working Data at all.
+_ROW_OPERATION_CONFIRMATION = (
+    "This operation changes the Working Data and may invalidate plots that "
+    "depend on the current row structure. Existing plotted data may need to "
+    "be re-added."
+)
+
 
 class DataToolsPanel(QWidget):
-    """Right-side companion to the Data Preview table: a plot-only row
-    selection action, calculated columns, non-destructive Working Data
-    transformations, and transformation history for the currently selected
-    Dataset.
+    """Right-side companion to the Data tab's table (see `gui.bottom_panel`):
+    a plot-only row selection action, calculated columns, non-destructive
+    Working Data transformations, and transformation history for the
+    currently selected Dataset.
 
     Every operation in the "Working Data" / "Data Tools" groups mutates only
     `Dataset.dataframe` (the working data); the raw imported DataFrame is
@@ -36,7 +46,14 @@ class DataToolsPanel(QWidget):
     nothing about the plot/series layer -- it emits `transformation_applied`
     after each Working Data operation and `plot_selected_rows_requested`
     for the plot-only action, so the owner can refresh dependent UI
-    (Data Preview model, plot column selectors, PlotSeries staleness).
+    (Data tab model, plot column selectors, PlotSeries staleness).
+
+    The Transformation History list (`history_group`) is built here --
+    where the history is actually tracked and refreshed -- but is not added
+    to this panel's own layout; the owner relocates it into the bottom
+    panel's "Transformations" tab (see `gui.widgets.bottom_panel`), keeping
+    the quick action buttons a user reaches for while looking at the plot
+    separate from a log they glance at occasionally.
     """
 
     transformation_applied = Signal(object, bool)  # Dataset, row_set_changed
@@ -56,15 +73,20 @@ class DataToolsPanel(QWidget):
 
         self.calculated_column_button = QPushButton("Calculated Column…")
         self.calculated_column_button.setProperty("primary", True)
-        self.exclude_button = QPushButton("Exclude Selection")
-        self.keep_button = QPushButton("Keep Selection")
+        self.exclude_button = QPushButton("Exclude Selected Rows from Working Data")
+        self.keep_button = QPushButton("Keep Selected Rows in Working Data")
         self.reset_button = QPushButton("Reset Working Data")
 
         self.history_list = QListWidget()
 
-        preview_actions_group = QGroupBox("Data Preview Actions")
-        preview_actions_layout = QVBoxLayout(preview_actions_group)
-        preview_actions_layout.addWidget(self.plot_selected_rows_button)
+        # "Row Selection", not "Data Preview Actions": the Bottom panel's
+        # tab hosting this table is just named "Data" (see gui.bottom_panel)
+        # -- "Data Preview" isn't UI terminology used anywhere else, so
+        # keeping it here was a stale, redundant label with nothing left to
+        # be consistent with.
+        row_selection_group = QGroupBox("Row Selection")
+        row_selection_layout = QVBoxLayout(row_selection_group)
+        row_selection_layout.addWidget(self.plot_selected_rows_button)
 
         status_group = QGroupBox("Working Data")
         status_layout = QVBoxLayout(status_group)
@@ -74,26 +96,31 @@ class DataToolsPanel(QWidget):
         tools_group = QGroupBox("Working Data Actions")
         tools_layout = QVBoxLayout(tools_group)
         tools_layout.addWidget(self.calculated_column_button)
-        selection_row = QHBoxLayout()
-        selection_row.addWidget(self.exclude_button)
-        selection_row.addWidget(self.keep_button)
-        tools_layout.addLayout(selection_row)
+        # Stacked, not a side-by-side row: the right Working Data drawer is
+        # narrow (~21% of window width), and these two buttons' combined
+        # label width (~540px) never fits it -- with the drawer's scroll
+        # area horizontal scrollbar disabled (see main_window._wrap_scrollable),
+        # a side-by-side row clipped most of both buttons with no way to
+        # reach the clipped part.
+        tools_layout.addWidget(self.exclude_button)
+        tools_layout.addWidget(self.keep_button)
         tools_layout.addWidget(self.reset_button)
 
-        history_group = QGroupBox("Transformation History")
-        history_layout = QVBoxLayout(history_group)
+        # Built here (where the history is tracked) but not added to this
+        # panel's own layout -- see the class docstring.
+        self.history_group = QGroupBox("Transformation History")
+        history_layout = QVBoxLayout(self.history_group)
         history_layout.addWidget(self.history_list)
 
-        self.preview_actions_section = CollapsibleSection("Data Preview Actions", preview_actions_group)
+        self.row_selection_section = CollapsibleSection("Row Selection", row_selection_group)
         self.status_section = CollapsibleSection("Working Data", status_group)
         self.tools_section = CollapsibleSection("Working Data Actions", tools_group)
-        self.history_section = CollapsibleSection("Transformation History", history_group)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self.preview_actions_section)
+        layout.addWidget(self.row_selection_section)
         layout.addWidget(self.status_section)
         layout.addWidget(self.tools_section)
-        layout.addWidget(self.history_section, 1)
+        layout.addStretch(1)
 
         self.plot_selected_rows_button.clicked.connect(self._on_plot_selected_rows_clicked)
         self.calculated_column_button.clicked.connect(self._on_calculated_column)
@@ -165,7 +192,7 @@ class DataToolsPanel(QWidget):
         positions = self._selected_row_positions()
         if len(positions) < 2:
             QMessageBox.warning(
-                self, "Plot Selected Rows", "Select at least 2 rows in the Data Preview first."
+                self, "Plot Selected Rows", "Select at least 2 rows in the Data tab first."
             )
             return
         self.plot_selected_rows_requested.emit(positions)
@@ -181,7 +208,16 @@ class DataToolsPanel(QWidget):
             return
         positions = self._selected_row_positions()
         if not positions:
-            QMessageBox.warning(self, title, "Select at least one row in the Data Preview first.")
+            QMessageBox.warning(self, title, "Select at least one row in the Data tab first.")
+            return
+        confirmed = QMessageBox.question(
+            self,
+            title,
+            _ROW_OPERATION_CONFIRMATION,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirmed != QMessageBox.Yes:
             return
         try:
             operation(positions)

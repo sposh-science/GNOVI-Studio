@@ -8,14 +8,39 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from gnovi_plot.gui.styles import PlotTheme
 from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.units import ASPECT_RATIO_PRESETS, PUBLICATION_PRESETS_MM, from_inches, to_inches
 
 _UNITS = ["mm", "cm", "in"]
+
+_PLOT_THEME_OPTIONS = [(PlotTheme.LIGHT, "Light"), (PlotTheme.DARK, "Dark")]
+
+# Figure-wide scalar fields this panel edits, in scope for the Apply /
+# Cancel / Reset behavior of the dialog that hosts it (see gui.dialogs.
+# live_dialog.LiveDialog) -- deliberately excludes `layout`/`panels`/
+# `active_panel_index`: those are structural (they add/remove Panel objects
+# and can hold series a user added while this dialog stayed open), so
+# reverting them on Cancel risks discarding unrelated work. Reset restores
+# each of these to a fresh GnoviFigure()'s default, same scope.
+_FIGURE_SCALAR_FIELDS = [
+    "figure_width_in",
+    "figure_height_in",
+    "aspect_preset",
+    "lock_aspect_ratio",
+    "font_family",
+    "base_font_size",
+    "title_font_size",
+    "axis_label_font_size",
+    "tick_label_font_size",
+    "legend_font_size",
+    "panel_labels_visible",
+]
 
 # Order matters: existing indices (e.g. index 3 == "2 x 2") are relied on by
 # tests and by the Panels menu, so new presets are appended rather than
@@ -50,6 +75,7 @@ class FigureSizePanel(QWidget):
 
     changed = Signal()
     panel_switched = Signal()
+    theme_change_requested = Signal(object)  # PlotTheme (see `_on_theme_combo_changed`)
 
     def __init__(self, figure: GnoviFigure, parent=None):
         super().__init__(parent)
@@ -97,6 +123,22 @@ class FigureSizePanel(QWidget):
         panels_form.addRow("Active panel", self.panel_combo)
         panels_form.addRow(self.panel_labels_check)
 
+        # Plot Theme lives here (not GnoviFigure -- it's MainWindow-owned,
+        # persisted state, see gui.main_window) purely as a display
+        # convenience so it's reachable from the Figure page alongside the
+        # rest of the figure's look; `theme_change_requested` routes the
+        # actual change through MainWindow._on_theme_changed, the same
+        # handler the View menu and toolbar already use, and
+        # `set_current_theme` below keeps this combo in sync with whichever
+        # of those the user changed it from.
+        self.theme_combo = QComboBox()
+        for mode, label in _PLOT_THEME_OPTIONS:
+            self.theme_combo.addItem(label, mode)
+
+        theme_group = QGroupBox("Plot Theme")
+        theme_form = QFormLayout(theme_group)
+        theme_form.addRow("Theme", self.theme_combo)
+
         self.font_family_combo = QComboBox()
         self.font_family_combo.addItem(_SYSTEM_DEFAULT_FONT)
         self.font_family_combo.addItems(QFontDatabase.families())
@@ -116,10 +158,18 @@ class FigureSizePanel(QWidget):
         font_form.addRow("Tick label size", self.tick_font_spin)
         font_form.addRow("Legend size", self.legend_font_spin)
 
+        # Grid Appearance lives on the Axes page now -- see
+        # gui.widgets.figure_properties_panel's "single authoritative
+        # location" docstring note; it isn't duplicated here.
+
+        self.reset_button = QPushButton("Reset to Defaults")
+
         layout = QVBoxLayout(self)
         layout.addWidget(size_group)
         layout.addWidget(panels_group)
+        layout.addWidget(theme_group)
         layout.addWidget(font_group)
+        layout.addWidget(self.reset_button)
         layout.addStretch(1)
 
         self.aspect_combo.currentTextChanged.connect(self._apply_aspect_preset)
@@ -131,12 +181,14 @@ class FigureSizePanel(QWidget):
         self.layout_combo.currentIndexChanged.connect(self._apply_layout)
         self.panel_combo.currentIndexChanged.connect(self._apply_active_panel)
         self.panel_labels_check.toggled.connect(self._apply_panel_labels)
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
         self.font_family_combo.currentTextChanged.connect(self._apply_font_family)
         self.base_font_spin.valueChanged.connect(self._apply_base_font)
         self.title_font_spin.valueChanged.connect(self._apply_title_font)
         self.axis_font_spin.valueChanged.connect(self._apply_axis_font)
         self.tick_font_spin.valueChanged.connect(self._apply_tick_font)
         self.legend_font_spin.valueChanged.connect(self._apply_legend_font)
+        self.reset_button.clicked.connect(self.reset_to_defaults)
 
         self._sync_from_figure()
 
@@ -171,6 +223,12 @@ class FigureSizePanel(QWidget):
         self.tick_font_spin.setValue(self._figure.tick_label_font_size)
         self.legend_font_spin.setValue(self._figure.legend_font_size)
         self._updating = False
+
+    def refresh(self) -> None:
+        """Reload every field from the live `GnoviFigure` -- call this after
+        an external mutation (e.g. Undo/Redo restoring a snapshot), in
+        addition to after construction."""
+        self._sync_from_figure()
 
     def _refresh_panel_options(self) -> None:
         self.panel_combo.blockSignals(True)
@@ -320,4 +378,42 @@ class FigureSizePanel(QWidget):
         if self._updating:
             return
         self._figure.legend_font_size = value
+        self.changed.emit()
+
+    # --- Plot Theme (MainWindow-owned state -- see the constructor's
+    # theme_group comment) ---------------------------------------------------
+
+    def _on_theme_combo_changed(self, index: int) -> None:
+        if self._updating or index < 0:
+            return
+        self.theme_change_requested.emit(self.theme_combo.itemData(index))
+
+    def set_current_theme(self, mode: PlotTheme) -> None:
+        """Reflect the app's current Plot Theme without re-emitting
+        `theme_change_requested` -- called by MainWindow whenever the
+        toolbar combo or View menu changes it instead."""
+        self._updating = True
+        self.theme_combo.setCurrentIndex(max(self.theme_combo.findData(mode), 0))
+        self._updating = False
+
+    # --- Apply / Cancel / Reset (see gui.dialogs.live_dialog.LiveDialog) ---
+
+    def capture_state(self) -> dict:
+        """Snapshot the figure-wide scalar fields this panel edits, for the
+        hosting LiveDialog's Cancel to restore on close."""
+        return {name: getattr(self._figure, name) for name in _FIGURE_SCALAR_FIELDS}
+
+    def restore_state(self, state: dict) -> None:
+        for name, value in state.items():
+            setattr(self._figure, name, value)
+        self._sync_from_figure()
+        self.changed.emit()
+
+    def reset_to_defaults(self) -> None:
+        """Reset just the fields in `_FIGURE_SCALAR_FIELDS` to a fresh
+        GnoviFigure()'s defaults -- panel layout/content is untouched."""
+        defaults = GnoviFigure()
+        for name in _FIGURE_SCALAR_FIELDS:
+            setattr(self._figure, name, getattr(defaults, name))
+        self._sync_from_figure()
         self.changed.emit()

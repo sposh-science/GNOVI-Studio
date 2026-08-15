@@ -26,6 +26,38 @@ def test_add_series_respects_an_explicit_color():
     assert series.color == "#ff00ff"
 
 
+def test_auto_assigned_color_is_not_marked_manual():
+    figure = GnoviFigure()
+    series = PlotSeries.line(_make_dataset(), "x", "y")
+
+    figure.add_series(series)
+
+    assert series.color_is_manual is False
+
+
+def test_add_series_uses_the_dark_theme_cycle_when_dark_mode_is_true():
+    from gnovi_plot.plotting.figure import theme_color_cycle
+
+    figure = GnoviFigure()
+    series = PlotSeries.line(_make_dataset(), "x", "y")
+
+    figure.add_series(series, dark_mode=True)
+
+    assert series.color == theme_color_cycle(dark_mode=True)[0]
+    assert series.color != theme_color_cycle(dark_mode=False)[0]
+
+
+def test_add_series_uses_the_light_theme_cycle_by_default():
+    from gnovi_plot.plotting.figure import theme_color_cycle
+
+    figure = GnoviFigure()
+    series = PlotSeries.line(_make_dataset(), "x", "y")
+
+    figure.add_series(series)
+
+    assert series.color == theme_color_cycle(dark_mode=False)[0]
+
+
 def test_default_colors_are_distinct_and_stable_across_hide():
     figure = GnoviFigure()
     a = PlotSeries.line(_make_dataset("a"), "x", "y")

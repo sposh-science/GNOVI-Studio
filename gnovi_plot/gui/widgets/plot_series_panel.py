@@ -20,9 +20,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gnovi_plot.gui.styles import STALE_COLOR
+from gnovi_plot.gui.styles import STALE_COLOR, WARNING_COLOR
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
-from gnovi_plot.plotting.figure import GnoviFigure
+from gnovi_plot.plotting.backends.matplotlib_backend import is_low_contrast
+from gnovi_plot.plotting.figure import GnoviFigure, theme_color_cycle
 from gnovi_plot.plotting.series import PlotSeries, PlotType
 from gnovi_plot.plotting.stacking import auto_stack_offsets, reset_offsets
 
@@ -72,10 +73,24 @@ class PlotSeriesPanel(QWidget):
         super().__init__(parent)
         self._figure = figure
         self._updating = False
+        self._low_contrast_series: list[PlotSeries] = []
+        self._dark_mode = False
 
         self.series_list = QListWidget()
         self.remove_button = QPushButton("Remove Series")
         self.clear_button = QPushButton("Clear All")
+
+        # Non-modal low-contrast warning for manually-colored series (see
+        # `update_contrast_warnings`) -- never blocks anything, just surfaces
+        # the option to fix it. Automatic (non-manual) colors are already
+        # picked from a theme-appropriate cycle at assignment time (see
+        # `plotting.figure.theme_color_cycle`) so they never trigger this.
+        self.contrast_warning_label = QLabel("")
+        self.contrast_warning_label.setWordWrap(True)
+        self.contrast_warning_label.setStyleSheet(f"color: {WARNING_COLOR}; font-weight: 600;")
+        self.contrast_warning_label.setVisible(False)
+        self.optimize_colors_button = QPushButton("Optimize Colors for Theme")
+        self.optimize_colors_button.setVisible(False)
 
         self.label_edit = QLineEdit()
         self.color_button = QPushButton()
@@ -132,6 +147,8 @@ class PlotSeriesPanel(QWidget):
         buttons.addWidget(self.remove_button)
         buttons.addWidget(self.clear_button)
         list_layout.addLayout(buttons)
+        list_layout.addWidget(self.contrast_warning_label)
+        list_layout.addWidget(self.optimize_colors_button)
 
         props_group = QGroupBox("Series Properties")
         form = QFormLayout(props_group)
@@ -197,6 +214,7 @@ class PlotSeriesPanel(QWidget):
 
         self.auto_stack_button.clicked.connect(self._on_auto_stack)
         self.reset_offsets_button.clicked.connect(self._on_reset_offsets)
+        self.optimize_colors_button.clicked.connect(self._on_optimize_colors)
 
         self.refresh()
 
@@ -314,7 +332,12 @@ class PlotSeriesPanel(QWidget):
         if not color.isValid():
             return
         series.color = color.name()
+        # Explicit user choice -- never silently overridden by a later
+        # theme switch or "Optimize Colors for Theme" auto-pass (see
+        # `update_contrast_warnings`/`_on_optimize_colors` below).
+        series.color_is_manual = True
         self._set_color_swatch(series.color)
+        self.update_contrast_warnings(self._dark_mode)
         self.changed.emit()
 
     def _apply_visible(self, checked: bool) -> None:
@@ -433,4 +456,42 @@ class PlotSeriesPanel(QWidget):
     def _on_reset_offsets(self) -> None:
         reset_offsets(self._figure.active_panel)
         self._on_selection_changed(self.series_list.currentRow())
+        self.changed.emit()
+
+    # --- Theme-aware contrast warning (manual colors only) -----------------
+
+    def update_contrast_warnings(self, dark_mode: bool) -> None:
+        """Refresh the non-modal low-contrast banner for the active panel's
+        visible, manually-colored series against the current Plot Theme.
+        Call after every render (theme switch, series edit, panel switch) --
+        see `MainWindow._rerender`. Never changes a color itself."""
+        self._dark_mode = dark_mode
+        self._low_contrast_series = [
+            series
+            for series in self._figure.active_panel.series
+            if series.visible
+            and not series.stale
+            and series.color_is_manual
+            and series.color
+            and is_low_contrast(series.color, dark_mode)
+        ]
+        count = len(self._low_contrast_series)
+        if count:
+            noun = "series has" if count == 1 else "series have"
+            self.contrast_warning_label.setText(f"{count} {noun} low contrast on the current plot background.")
+        self.contrast_warning_label.setVisible(bool(count))
+        self.optimize_colors_button.setVisible(bool(count))
+
+    def _on_optimize_colors(self) -> None:
+        """Explicit, user-triggered re-color of the currently flagged
+        low-contrast manual colors from the theme-appropriate cycle --
+        the only way a manually chosen color ever changes (see
+        `PlotSeries.color_is_manual`)."""
+        cycle = theme_color_cycle(self._dark_mode)
+        for i, series in enumerate(self._low_contrast_series):
+            series.color = cycle[i % len(cycle)]
+            series.color_is_manual = False
+        current = self._current_series()
+        self.refresh(select_id=current.id if current is not None else None)
+        self.update_contrast_warnings(self._dark_mode)
         self.changed.emit()

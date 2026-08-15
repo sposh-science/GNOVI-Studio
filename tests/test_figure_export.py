@@ -129,3 +129,27 @@ def test_creates_parent_directories(tmp_path):
     nested = tmp_path / "a" / "b" / "out.png"
     out = export_figure(figure, nested)
     assert out.exists()
+
+
+def test_export_defaults_to_a_light_background_regardless_of_gui_theme(tmp_path):
+    """Publication-light stays the default -- export never infers its
+    background from the app's current GUI theme, only from an explicit
+    `dark_mode` argument (wired to the Export Figure dialog's own
+    checkbox, unchecked by default)."""
+    figure = _make_figure()
+    out = export_figure(figure, tmp_path / "out.png")
+
+    with Image.open(out) as img:
+        corner = img.convert("RGB").getpixel((0, 0))
+    assert corner == (255, 255, 255)
+
+
+def test_export_dark_mode_produces_a_dark_background(tmp_path):
+    figure = _make_figure()
+    out = export_figure(figure, tmp_path / "out.png", dark_mode=True)
+
+    with Image.open(out) as img:
+        corner = img.convert("RGB").getpixel((0, 0))
+    assert corner != (255, 255, 255)
+    # Genuinely dark, not just "not pure white".
+    assert sum(corner) < 255

@@ -1,41 +1,77 @@
-"""Centralized QSS styling for GNOVI PLOT.
+"""Centralized QSS styling for Gnovi Studio.
 
 Restrained, modern scientific-desktop look using PySide6/QSS only -- no
 additional theme dependency. Deliberately avoids hard-coded font families so
 each platform's native font is used.
+
+Gnovi Studio's own chrome (menus, toolbars, sidebars, bottom panel, data
+table, dialogs, status bar) is always styled with the single light palette
+below -- it is never user-switchable. What *is* user-switchable is the
+`PlotTheme` applied to the Matplotlib preview canvas only (see
+`plotting.backends.matplotlib_backend.render_figure`'s `dark_mode` flag);
+the two are deliberately independent so a dark plot never drags the rest of
+the interface into dark mode with it, and publication export background
+stays its own explicit, separate choice (see `export.figure_export`).
 """
 
 from __future__ import annotations
 
+from enum import Enum
+
 from PySide6.QtWidgets import QApplication
 
-_BACKGROUND = "#f4f5f7"
-_PANEL_BACKGROUND = "#ffffff"
-_SUBTLE_BACKGROUND = "#f8f9fb"
-_BORDER = "#d5d8dd"
-_TEXT = "#20242b"
-_MUTED_TEXT = "#5b6270"
-_ACCENT = "#2f6fed"
-_ACCENT_HOVER = "#255ac9"
-_ACCENT_PRESSED = "#1e4aa8"
-_ACCENT_TEXT = "#ffffff"
-_SELECTION_BG = "#e4ecfd"
-_STALE = "#b3261e"
 
-MAIN_STYLESHEET = f"""
+class PlotTheme(str, Enum):
+    """User-selected theme for the scientific figure/canvas only -- never
+    the application chrome (see module docstring)."""
+
+    LIGHT = "light"
+    DARK = "dark"
+
+
+_LIGHT_PALETTE = {
+    "background": "#f4f5f7",
+    "panel_background": "#ffffff",
+    "subtle_background": "#f8f9fb",
+    "border": "#d5d8dd",
+    "text": "#20242b",
+    "muted_text": "#5b6270",
+    "accent": "#2f6fed",
+    "accent_hover": "#255ac9",
+    "accent_pressed": "#1e4aa8",
+    "accent_text": "#ffffff",
+    "selection_bg": "#e4ecfd",
+    "scrollbar": "#c7cbd3",
+}
+
+# A single stale-series indicator color -- the application chrome (where
+# this labels list items, not the plot canvas) is always light, so this
+# never needs a dark counterpart.
+STALE_COLOR = "#e5484d"
+
+# Non-modal low-contrast-warning text color (see
+# gui.widgets.plot_series_panel) -- same "always-light chrome" reasoning as
+# STALE_COLOR above.
+WARNING_COLOR = "#b06000"
+
+_STYLESHEET_TEMPLATE = """
 QWidget {{
-    background-color: {_BACKGROUND};
-    color: {_TEXT};
+    background-color: {background};
+    color: {text};
     font-size: 10pt;
 }}
 
 QMainWindow {{
-    background-color: {_BACKGROUND};
+    background-color: {background};
+}}
+
+QDialog {{
+    background-color: {background};
 }}
 
 QGroupBox {{
-    background-color: {_PANEL_BACKGROUND};
-    border: 1px solid {_BORDER};
+    background-color: {panel_background};
+    border: 1px solid {border};
     border-radius: 6px;
     margin-top: 16px;
     padding: 12px 10px 10px 10px;
@@ -47,63 +83,63 @@ QGroupBox::title {{
     subcontrol-position: top left;
     left: 8px;
     padding: 0 4px;
-    color: {_MUTED_TEXT};
+    color: {muted_text};
     letter-spacing: 0.3px;
 }}
 
 QPushButton {{
-    background-color: {_PANEL_BACKGROUND};
-    border: 1px solid {_BORDER};
+    background-color: {panel_background};
+    border: 1px solid {border};
     border-radius: 4px;
     padding: 5px 12px;
     min-height: 22px;
 }}
 
 QPushButton:hover {{
-    border-color: {_ACCENT};
+    border-color: {accent};
 }}
 
 QPushButton:pressed {{
-    background-color: {_SELECTION_BG};
+    background-color: {selection_bg};
 }}
 
 QPushButton:disabled {{
-    color: {_MUTED_TEXT};
+    color: {muted_text};
 }}
 
 QPushButton[primary="true"] {{
-    background-color: {_ACCENT};
-    border-color: {_ACCENT};
-    color: {_ACCENT_TEXT};
+    background-color: {accent};
+    border-color: {accent};
+    color: {accent_text};
     font-weight: 600;
 }}
 
 QPushButton[primary="true"]:hover {{
-    background-color: {_ACCENT_HOVER};
-    border-color: {_ACCENT_HOVER};
+    background-color: {accent_hover};
+    border-color: {accent_hover};
 }}
 
 QPushButton[primary="true"]:pressed {{
-    background-color: {_ACCENT_PRESSED};
-    border-color: {_ACCENT_PRESSED};
+    background-color: {accent_pressed};
+    border-color: {accent_pressed};
 }}
 
 QPushButton[primary="true"]:disabled {{
-    background-color: {_SUBTLE_BACKGROUND};
-    border-color: {_BORDER};
-    color: {_MUTED_TEXT};
+    background-color: {subtle_background};
+    border-color: {border};
+    color: {muted_text};
 }}
 
 QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {{
-    background-color: {_PANEL_BACKGROUND};
-    border: 1px solid {_BORDER};
+    background-color: {panel_background};
+    border: 1px solid {border};
     border-radius: 4px;
     padding: 3px 6px;
     min-height: 22px;
 }}
 
 QComboBox:focus, QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
-    border-color: {_ACCENT};
+    border-color: {accent};
 }}
 
 QComboBox::drop-down {{
@@ -112,11 +148,11 @@ QComboBox::drop-down {{
 }}
 
 QListWidget, QTableView {{
-    background-color: {_PANEL_BACKGROUND};
-    border: 1px solid {_BORDER};
+    background-color: {panel_background};
+    border: 1px solid {border};
     border-radius: 4px;
-    alternate-background-color: {_SUBTLE_BACKGROUND};
-    gridline-color: {_BORDER};
+    alternate-background-color: {subtle_background};
+    gridline-color: {border};
 }}
 
 QListWidget::item {{
@@ -126,26 +162,26 @@ QListWidget::item {{
 }}
 
 QListWidget::item:selected {{
-    background-color: {_SELECTION_BG};
-    color: {_TEXT};
-    border-left: 3px solid {_ACCENT};
+    background-color: {selection_bg};
+    color: {text};
+    border-left: 3px solid {accent};
     font-weight: 600;
 }}
 
 QTableView::item:selected {{
-    background-color: {_SELECTION_BG};
-    color: {_TEXT};
+    background-color: {selection_bg};
+    color: {text};
 }}
 
 QHeaderView::section {{
-    background-color: {_SUBTLE_BACKGROUND};
+    background-color: {subtle_background};
     border: none;
-    border-right: 1px solid {_BORDER};
-    border-bottom: 1px solid {_BORDER};
+    border-right: 1px solid {border};
+    border-bottom: 1px solid {border};
     padding: 5px 6px;
     font-weight: 600;
     letter-spacing: 0.2px;
-    color: {_MUTED_TEXT};
+    color: {muted_text};
 }}
 
 QCheckBox {{
@@ -153,7 +189,7 @@ QCheckBox {{
 }}
 
 QSplitter::handle {{
-    background-color: {_BORDER};
+    background-color: {border};
 }}
 
 QSplitter::handle:horizontal {{
@@ -170,28 +206,173 @@ QToolButton[collapsible="true"] {{
     text-align: left;
     padding: 4px 2px;
     font-weight: 600;
-    color: {_MUTED_TEXT};
+    color: {muted_text};
 }}
 
 QToolButton[collapsible="true"]:hover {{
-    color: {_TEXT};
+    color: {text};
+}}
+
+QWidget#ToolStripLeft {{
+    background-color: {panel_background};
+    border-right: 1px solid {border};
+}}
+
+QWidget#ToolStripRight {{
+    background-color: {panel_background};
+    border-left: 1px solid {border};
+}}
+
+QToolButton#ToolStripButtonLeft, QToolButton#ToolStripButtonRight {{
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 6px 2px;
+    color: {muted_text};
+    font-size: 8pt;
+}}
+
+QToolButton#ToolStripButtonLeft:hover, QToolButton#ToolStripButtonRight:hover {{
+    background-color: {subtle_background};
+    color: {text};
+}}
+
+QToolButton#ToolStripButtonLeft:checked {{
+    background-color: {selection_bg};
+    color: {text};
+    border-left: 3px solid {accent};
+    font-weight: 600;
+}}
+
+QToolButton#ToolStripButtonRight:checked {{
+    background-color: {selection_bg};
+    color: {text};
+    border-right: 3px solid {accent};
+    font-weight: 600;
 }}
 
 QMenuBar {{
-    background-color: {_PANEL_BACKGROUND};
-    border-bottom: 1px solid {_BORDER};
+    background-color: {panel_background};
+    border-bottom: 1px solid {border};
+}}
+
+QMenuBar::item:selected {{
+    background-color: {selection_bg};
+}}
+
+QMenu {{
+    background-color: {panel_background};
+    border: 1px solid {border};
+    padding: 4px;
+}}
+
+QMenu::item {{
+    padding: 4px 20px 4px 12px;
+    border-radius: 3px;
+}}
+
+QMenu::item:selected {{
+    background-color: {selection_bg};
+    color: {text};
 }}
 
 QToolBar {{
-    background-color: {_PANEL_BACKGROUND};
-    border-bottom: 1px solid {_BORDER};
+    background-color: {panel_background};
+    border-bottom: 1px solid {border};
     spacing: 4px;
+}}
+
+QStatusBar {{
+    background-color: {panel_background};
+    border-top: 1px solid {border};
+    color: {muted_text};
+}}
+
+QTabWidget::pane {{
+    background-color: {panel_background};
+    border: 1px solid {border};
+    border-radius: 4px;
+    top: -1px;
+}}
+
+QTabBar::tab {{
+    background-color: {subtle_background};
+    border: 1px solid {border};
+    border-bottom: none;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    padding: 5px 12px;
+    color: {muted_text};
+}}
+
+QTabBar::tab:selected {{
+    background-color: {panel_background};
+    color: {text};
+    font-weight: 600;
+}}
+
+QScrollBar:vertical {{
+    background: transparent;
+    width: 12px;
+    margin: 0;
+}}
+
+QScrollBar::handle:vertical {{
+    background: {scrollbar};
+    border-radius: 5px;
+    min-height: 24px;
+}}
+
+QScrollBar:horizontal {{
+    background: transparent;
+    height: 12px;
+    margin: 0;
+}}
+
+QScrollBar::handle:horizontal {{
+    background: {scrollbar};
+    border-radius: 5px;
+    min-width: 24px;
+}}
+
+QScrollBar::add-line, QScrollBar::sub-line {{
+    height: 0;
+    width: 0;
 }}
 """
 
 
-STALE_COLOR = _STALE
+def build_stylesheet(palette: dict[str, str] = _LIGHT_PALETTE) -> str:
+    """Render the shared QSS template against `palette` (the app's single
+    light palette by default, or a custom dict with the same keys)."""
+    return _STYLESHEET_TEMPLATE.format(**palette)
 
 
-def apply_style(app: QApplication) -> None:
-    app.setStyleSheet(MAIN_STYLESHEET)
+_THEME_APPLIED_PROPERTY = "_gnovi_studio_theme_applied"
+
+
+def apply_app_theme(app: QApplication) -> None:
+    """Apply Gnovi Studio's one, fixed, light application stylesheet.
+
+    Not user-switchable and not affected by `PlotTheme` -- see the module
+    docstring for why the app chrome and the plot canvas theme are kept
+    independent.
+
+    Idempotent per `QApplication` instance (guarded by a dynamic property):
+    the real app calls this exactly once (`MainWindow.__init__`, and there
+    is only ever one `MainWindow`), so the guard changes nothing there --
+    but `QApplication::setStyleSheet` unconditionally re-polishes every
+    widget the application has ever created, including ones from windows
+    that were `.close()`d but not (yet) garbage-collected. In a test
+    session that constructs many `MainWindow`s against one shared,
+    session-scoped `QApplication`, calling this on every construction made
+    that repeated, unnecessary re-polish (of a stylesheet that never
+    actually changes) the dominant cost -- measured growing from ~0.15s to
+    several seconds per `MainWindow()` over just a few dozen instances.
+    Since the stylesheet content is static, applying it more than once has
+    no observable effect to guard against.
+    """
+    if app.property(_THEME_APPLIED_PROPERTY):
+        return
+    app.setStyleSheet(build_stylesheet())
+    app.setProperty(_THEME_APPLIED_PROPERTY, True)

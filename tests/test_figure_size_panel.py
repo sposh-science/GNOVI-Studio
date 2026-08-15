@@ -1,5 +1,6 @@
 import pytest
 
+from gnovi_plot.gui.styles import PlotTheme
 from gnovi_plot.gui.widgets.figure_size_panel import FigureSizePanel
 from gnovi_plot.plotting.figure import GnoviFigure
 
@@ -149,3 +150,84 @@ def test_panel_labels_checkbox_toggles_figure_flag(qapp):
     panel.panel_labels_check.setChecked(True)
 
     assert figure.panel_labels_visible is True
+
+
+# --- Plot Theme -----------------------------------------------------------------
+
+
+def test_theme_combo_defaults_to_light_and_emits_the_selected_mode(qapp):
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+    assert panel.theme_combo.currentText() == "Light"
+
+    received = []
+    panel.theme_change_requested.connect(received.append)
+    panel.theme_combo.setCurrentIndex(panel.theme_combo.findText("Dark"))
+
+    assert received == [PlotTheme.DARK]
+
+
+def test_set_current_theme_updates_the_combo_without_emitting(qapp):
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+    received = []
+    panel.theme_change_requested.connect(received.append)
+
+    panel.set_current_theme(PlotTheme.DARK)
+
+    assert panel.theme_combo.currentText() == "Dark"
+    assert received == []
+
+
+# --- Apply / Cancel / Reset (capture_state / restore_state / reset_to_defaults) -
+
+
+def test_capture_and_restore_state_round_trips_figure_scalar_fields(qapp):
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+    snapshot = panel.capture_state()
+
+    panel.width_spin.setValue(12.0)
+    assert figure.figure_width_in != snapshot["figure_width_in"]
+
+    panel.restore_state(snapshot)
+
+    assert figure.figure_width_in == pytest.approx(snapshot["figure_width_in"])
+
+
+def test_restore_state_does_not_touch_panel_layout(qapp):
+    """Layout/panels are deliberately out of scope for Cancel -- see
+    `_FIGURE_SCALAR_FIELDS`'s comment."""
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+    snapshot = panel.capture_state()
+
+    panel.layout_combo.setCurrentIndex(3)  # "2 x 2"
+    assert figure.layout == (2, 2)
+
+    panel.restore_state(snapshot)
+
+    assert figure.layout == (2, 2)  # untouched by restore
+
+
+def test_reset_to_defaults_restores_a_fresh_gnovifigures_values(qapp):
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+    panel.width_spin.setValue(20.0)
+
+    panel.reset_to_defaults()
+
+    defaults = GnoviFigure()
+    assert figure.figure_width_in == pytest.approx(defaults.figure_width_in)
+
+
+def test_refresh_reloads_widgets_from_an_externally_mutated_figure(qapp):
+    """Covers Undo/Redo restoring a snapshot onto the live figure in place
+    -- the panel must pick up the new values on `refresh()`."""
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+
+    figure.figure_width_in = 11.0
+    panel.refresh()
+
+    assert panel.width_spin.value() == pytest.approx(11.0)
