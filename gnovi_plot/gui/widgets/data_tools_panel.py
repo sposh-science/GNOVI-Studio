@@ -21,18 +21,26 @@ from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 
 
 class DataToolsPanel(QWidget):
-    """Right-side companion to the Data Preview table: calculated columns,
-    non-destructive row-selection operations, and transformation history for
-    the currently selected Dataset.
+    """Right-side companion to the Data Preview table: a plot-only row
+    selection action, calculated columns, non-destructive Working Data
+    transformations, and transformation history for the currently selected
+    Dataset.
 
-    Every operation here mutates only `Dataset.dataframe` (the working
-    data); the raw imported DataFrame is never touched. This panel knows
+    Every operation in the "Working Data" / "Data Tools" groups mutates only
+    `Dataset.dataframe` (the working data); the raw imported DataFrame is
+    never touched. "Plot Selected Rows" is deliberately kept separate: it
+    never touches `Dataset.dataframe` at all (raw or working) and never adds
+    a transformation-history entry -- it only asks the owner to add a new
+    PlotSeries scoped to the current row selection via `row_range`, so
+    existing panels/series are completely unaffected. This panel knows
     nothing about the plot/series layer -- it emits `transformation_applied`
-    after each successful operation so the owner can refresh dependent UI
+    after each Working Data operation and `plot_selected_rows_requested`
+    for the plot-only action, so the owner can refresh dependent UI
     (Data Preview model, plot column selectors, PlotSeries staleness).
     """
 
     transformation_applied = Signal(object, bool)  # Dataset, row_set_changed
+    plot_selected_rows_requested = Signal(list)  # list[int] selected row positions
 
     def __init__(self, preview_table: QTableView, parent=None):
         super().__init__(parent)
@@ -43,6 +51,9 @@ class DataToolsPanel(QWidget):
         self.calculated_columns_label = QLabel("")
         self.calculated_columns_label.setWordWrap(True)
 
+        self.plot_selected_rows_button = QPushButton("Plot Selected Rows")
+        self.plot_selected_rows_button.setProperty("primary", True)
+
         self.calculated_column_button = QPushButton("Calculated Column…")
         self.calculated_column_button.setProperty("primary", True)
         self.exclude_button = QPushButton("Exclude Selection")
@@ -51,12 +62,16 @@ class DataToolsPanel(QWidget):
 
         self.history_list = QListWidget()
 
+        preview_actions_group = QGroupBox("Data Preview Actions")
+        preview_actions_layout = QVBoxLayout(preview_actions_group)
+        preview_actions_layout.addWidget(self.plot_selected_rows_button)
+
         status_group = QGroupBox("Working Data")
         status_layout = QVBoxLayout(status_group)
         status_layout.addWidget(self.row_count_label)
         status_layout.addWidget(self.calculated_columns_label)
 
-        tools_group = QGroupBox("Data Tools")
+        tools_group = QGroupBox("Working Data Actions")
         tools_layout = QVBoxLayout(tools_group)
         tools_layout.addWidget(self.calculated_column_button)
         selection_row = QHBoxLayout()
@@ -69,15 +84,18 @@ class DataToolsPanel(QWidget):
         history_layout = QVBoxLayout(history_group)
         history_layout.addWidget(self.history_list)
 
+        self.preview_actions_section = CollapsibleSection("Data Preview Actions", preview_actions_group)
         self.status_section = CollapsibleSection("Working Data", status_group)
-        self.tools_section = CollapsibleSection("Data Tools", tools_group)
+        self.tools_section = CollapsibleSection("Working Data Actions", tools_group)
         self.history_section = CollapsibleSection("Transformation History", history_group)
 
         layout = QVBoxLayout(self)
+        layout.addWidget(self.preview_actions_section)
         layout.addWidget(self.status_section)
         layout.addWidget(self.tools_section)
         layout.addWidget(self.history_section, 1)
 
+        self.plot_selected_rows_button.clicked.connect(self._on_plot_selected_rows_clicked)
         self.calculated_column_button.clicked.connect(self._on_calculated_column)
         self.exclude_button.clicked.connect(self._on_exclude_selection)
         self.keep_button.clicked.connect(self._on_keep_selection)
@@ -92,6 +110,7 @@ class DataToolsPanel(QWidget):
     def _refresh_status(self) -> None:
         has_dataset = self._dataset is not None
         for widget in (
+            self.plot_selected_rows_button,
             self.calculated_column_button,
             self.exclude_button,
             self.keep_button,
@@ -139,6 +158,17 @@ class DataToolsPanel(QWidget):
             return
         self._refresh_status()
         self.transformation_applied.emit(self._dataset, False)
+
+    def _on_plot_selected_rows_clicked(self) -> None:
+        if self._dataset is None:
+            return
+        positions = self._selected_row_positions()
+        if len(positions) < 2:
+            QMessageBox.warning(
+                self, "Plot Selected Rows", "Select at least 2 rows in the Data Preview first."
+            )
+            return
+        self.plot_selected_rows_requested.emit(positions)
 
     def _on_exclude_selection(self) -> None:
         self._apply_row_operation("Exclude Selected Rows", self._dataset.exclude_rows if self._dataset else None)

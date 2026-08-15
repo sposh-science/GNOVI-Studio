@@ -61,6 +61,19 @@ _CYCLE_SOURCE_OPTIONS = [
     ("Select from data table", _CYCLE_SOURCE_MANUAL),
 ]
 
+_PLOT_PRESET_NONE = "none"
+_PLOT_PRESET_XRD = "xrd"
+
+_PLOT_PRESET_OPTIONS = [
+    ("None", _PLOT_PRESET_NONE),
+    ("XRD Pattern", _PLOT_PRESET_XRD),
+]
+
+# Applied only when the user explicitly picks the "XRD Pattern" preset --
+# never inferred from column names. General plotting stays domain-agnostic;
+# full XRD analysis (Scherrer, peak fitting, etc.) is a later milestone.
+_XRD_AXIS_PRESET = {"xlabel": "2θ (°)", "ylabel": "Intensity (a.u.)"}
+
 
 class DatasetPanel(QWidget):
     """Left-side panel: dataset list/import/remove plus plot-type and column
@@ -69,6 +82,7 @@ class DatasetPanel(QWidget):
     dataset_selected = Signal(object)  # Dataset | None
     add_to_plot_requested = Signal(list)  # list[PlotSeries]
     clear_plot_requested = Signal()
+    axis_preset_requested = Signal(dict)  # {"xlabel": ..., "ylabel": ...}
 
     def __init__(self, dataset_manager: DatasetManager, preview_table: QTableView, parent=None):
         super().__init__(parent)
@@ -80,6 +94,10 @@ class DatasetPanel(QWidget):
         self.import_button = QPushButton("Import Data")
         self.import_button.setProperty("primary", True)
         self.remove_button = QPushButton("Remove Dataset")
+
+        self.plot_preset_combo = QComboBox()
+        for text, preset in _PLOT_PRESET_OPTIONS:
+            self.plot_preset_combo.addItem(text, preset)
 
         self.plot_type_combo = QComboBox()
         for text, plot_type in _PLOT_TYPE_OPTIONS:
@@ -127,6 +145,8 @@ class DatasetPanel(QWidget):
 
         plot_group = QGroupBox("Add to Plot")
         plot_layout = QVBoxLayout(plot_group)
+        plot_layout.addWidget(QLabel("Plot preset"))
+        plot_layout.addWidget(self.plot_preset_combo)
         plot_layout.addWidget(QLabel("Plot type"))
         plot_layout.addWidget(self.plot_type_combo)
         plot_layout.addWidget(self.x_label)
@@ -165,6 +185,7 @@ class DatasetPanel(QWidget):
         self.import_button.clicked.connect(self._on_import_clicked)
         self.remove_button.clicked.connect(self._on_remove_clicked)
         self.dataset_list.currentItemChanged.connect(self._on_selection_changed)
+        self.plot_preset_combo.currentIndexChanged.connect(self._on_preset_changed)
         self.plot_type_combo.currentIndexChanged.connect(self._on_plot_type_changed)
         self.plot_mode_combo.currentIndexChanged.connect(self._update_cycle_preview)
         self.plot_mode_combo.currentIndexChanged.connect(self._update_manual_cycle_visibility)
@@ -235,8 +256,25 @@ class DatasetPanel(QWidget):
             return None
         return self._manager.get(item.data(Qt.UserRole))
 
+    @property
+    def current_dataset(self) -> Dataset | None:
+        """The Dataset currently selected in the list, if any."""
+        return self._current_dataset()
+
     def _current_plot_type(self) -> PlotType:
         return self.plot_type_combo.currentData()
+
+    def _current_preset(self) -> str:
+        return self.plot_preset_combo.currentData()
+
+    def _on_preset_changed(self, *_args) -> None:
+        is_xrd = self._current_preset() == _PLOT_PRESET_XRD
+        if is_xrd:
+            self.plot_type_combo.setCurrentIndex(self.plot_type_combo.findData(PlotType.LINE))
+            self.plot_mode_combo.setCurrentIndex(self.plot_mode_combo.findData(_PLOT_MODE_ENTIRE))
+        self.plot_type_combo.setEnabled(not is_xrd)
+        self.plot_mode_combo.setEnabled(not is_xrd)
+        self._on_plot_type_changed()
 
     def _on_selection_changed(self, current, previous) -> None:
         dataset = self._current_dataset()
@@ -479,3 +517,5 @@ class DatasetPanel(QWidget):
             return
 
         self.add_to_plot_requested.emit(series_list)
+        if self._current_preset() == _PLOT_PRESET_XRD:
+            self.axis_preset_requested.emit(dict(_XRD_AXIS_PRESET))

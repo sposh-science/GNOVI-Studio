@@ -47,8 +47,16 @@ class PlotSeries:
     line_style: str = "-"
     marker: str = ""
     marker_size: float = 6.0
+    marker_filled: bool = True
+    marker_edge_width: float = 1.0
     alpha: float = 1.0
+    zorder: float = 2.0
     bins: int | str = "auto"
+    hist_mode: str = "frequency"  # "frequency" | "percentage" | "cumulative"
+    # Plotting-only transformations -- never applied to dataset/dataframe
+    # data, only to the values handed to Matplotlib at draw time.
+    y_offset: float = 0.0
+    normalize_to_max: bool = False
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     # Set by GnoviFigure.invalidate_series_for_dataset() after a dataset
     # transformation invalidates this series (missing column / stale row_range).
@@ -66,6 +74,8 @@ class PlotSeries:
                 raise ValueError("Histogram series must not have a y_column")
             if not (self.bins == "auto" or (isinstance(self.bins, int) and self.bins > 0)):
                 raise ValueError("Histogram bins must be 'auto' or a positive integer")
+            if self.hist_mode not in ("frequency", "percentage", "cumulative"):
+                raise ValueError("Histogram hist_mode must be 'frequency', 'percentage' or 'cumulative'")
 
         if not 0.0 <= self.alpha <= 1.0:
             raise ValueError("PlotSeries.alpha must be between 0.0 and 1.0")

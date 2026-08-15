@@ -24,6 +24,7 @@ from gnovi_plot.gui.styles import STALE_COLOR
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.series import PlotSeries, PlotType
+from gnovi_plot.plotting.stacking import auto_stack_offsets, reset_offsets
 
 _LINE_STYLE_OPTIONS = [
     ("Solid", "-"),
@@ -43,15 +44,26 @@ _MARKER_OPTIONS = [
     ("Star", "*"),
 ]
 
+_HIST_MODE_OPTIONS = [
+    ("Frequency", "frequency"),
+    ("Percentage", "percentage"),
+    ("Cumulative", "cumulative"),
+]
+
 _DEFAULT_COLOR = "#1f77b4"
+_OFFSET_RANGE = 1e9
 
 
 class PlotSeriesPanel(QWidget):
-    """Lists every PlotSeries on a GnoviFigure and edits the selected one.
+    """Lists every PlotSeries on the currently active Panel and edits the
+    selected one, plus panel-wide stacked/offset controls.
 
     Editing a series mutates only that PlotSeries instance; nothing else on
     the figure is touched. `changed` is emitted after every mutation so the
-    owner can re-render the plot.
+    owner can re-render the plot. Since `figure.series`/`add_series`/etc.
+    delegate to `figure.active_panel`, this panel automatically follows
+    whichever panel is active -- call `refresh()` again after switching
+    panels to reload the list for the new one.
     """
 
     changed = Signal()
@@ -85,14 +97,33 @@ class PlotSeriesPanel(QWidget):
         self.marker_size_spin = QDoubleSpinBox()
         self.marker_size_spin.setRange(1.0, 30.0)
 
+        self.marker_filled_check = QCheckBox("Filled marker")
+        self.marker_edge_width_spin = QDoubleSpinBox()
+        self.marker_edge_width_spin.setRange(0.1, 10.0)
+        self.marker_edge_width_spin.setSingleStep(0.1)
+
         self.alpha_spin = QDoubleSpinBox()
         self.alpha_spin.setRange(0.05, 1.0)
         self.alpha_spin.setSingleStep(0.05)
+
+        self.zorder_spin = QDoubleSpinBox()
+        self.zorder_spin.setRange(-100.0, 100.0)
+
+        self.offset_label = QLabel("Y offset")
+        self.offset_spin = QDoubleSpinBox()
+        self.offset_spin.setRange(-_OFFSET_RANGE, _OFFSET_RANGE)
+        self.offset_spin.setDecimals(4)
+
+        self.normalize_check = QCheckBox("Normalize to max")
 
         self.bins_label = QLabel("Bins")
         self.bins_spin = QSpinBox()
         self.bins_spin.setRange(0, 1000)
         self.bins_spin.setSpecialValueText("Auto")
+        self.hist_mode_label = QLabel("Histogram mode")
+        self.hist_mode_combo = QComboBox()
+        for text, code in _HIST_MODE_OPTIONS:
+            self.hist_mode_combo.addItem(text, code)
 
         list_group = QGroupBox("Plot Series")
         list_layout = QVBoxLayout(list_group)
@@ -110,16 +141,39 @@ class PlotSeriesPanel(QWidget):
         form.addRow("Line style", self.style_combo)
         form.addRow("Marker", self.marker_combo)
         form.addRow("Marker size", self.marker_size_spin)
+        form.addRow(self.marker_filled_check)
+        form.addRow("Marker edge width", self.marker_edge_width_spin)
         form.addRow("Transparency", self.alpha_spin)
+        form.addRow("Z-order", self.zorder_spin)
+        form.addRow(self.offset_label, self.offset_spin)
+        form.addRow(self.normalize_check)
         form.addRow(self.bins_label, self.bins_spin)
+        form.addRow(self.hist_mode_label, self.hist_mode_combo)
         form.addRow(self.visible_check)
+
+        self.offset_step_spin = QDoubleSpinBox()
+        self.offset_step_spin.setRange(0.0, _OFFSET_RANGE)
+        self.offset_step_spin.setDecimals(4)
+        self.offset_step_spin.setSpecialValueText("Auto")
+        self.auto_stack_button = QPushButton("Auto-Stack Offsets")
+        self.reset_offsets_button = QPushButton("Reset Offsets")
+
+        stack_group = QGroupBox("Stacked / Offset Curves")
+        stack_form = QFormLayout(stack_group)
+        stack_form.addRow("Offset step (0 = auto)", self.offset_step_spin)
+        stack_buttons = QHBoxLayout()
+        stack_buttons.addWidget(self.auto_stack_button)
+        stack_buttons.addWidget(self.reset_offsets_button)
+        stack_form.addRow(stack_buttons)
 
         self.list_section = CollapsibleSection("Plot Series", list_group)
         self.props_section = CollapsibleSection("Series Properties", props_group)
+        self.stack_section = CollapsibleSection("Stacked / Offset Curves", stack_group)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.list_section)
         layout.addWidget(self.props_section)
+        layout.addWidget(self.stack_section)
         layout.addStretch(1)
 
         self.series_list.currentRowChanged.connect(self._on_selection_changed)
@@ -132,8 +186,17 @@ class PlotSeriesPanel(QWidget):
         self.style_combo.currentIndexChanged.connect(self._apply_style)
         self.marker_combo.currentIndexChanged.connect(self._apply_marker)
         self.marker_size_spin.valueChanged.connect(self._apply_marker_size)
+        self.marker_filled_check.toggled.connect(self._apply_marker_filled)
+        self.marker_edge_width_spin.valueChanged.connect(self._apply_marker_edge_width)
         self.alpha_spin.valueChanged.connect(self._apply_alpha)
+        self.zorder_spin.valueChanged.connect(self._apply_zorder)
+        self.offset_spin.valueChanged.connect(self._apply_offset)
+        self.normalize_check.toggled.connect(self._apply_normalize)
         self.bins_spin.valueChanged.connect(self._apply_bins)
+        self.hist_mode_combo.currentIndexChanged.connect(self._apply_hist_mode)
+
+        self.auto_stack_button.clicked.connect(self._on_auto_stack)
+        self.reset_offsets_button.clicked.connect(self._on_reset_offsets)
 
         self.refresh()
 
@@ -178,8 +241,14 @@ class PlotSeriesPanel(QWidget):
             self.style_combo,
             self.marker_combo,
             self.marker_size_spin,
+            self.marker_filled_check,
+            self.marker_edge_width_spin,
             self.alpha_spin,
+            self.zorder_spin,
+            self.offset_spin,
+            self.normalize_check,
             self.bins_spin,
+            self.hist_mode_combo,
         ):
             widget.setEnabled(enabled)
 
@@ -200,13 +269,26 @@ class PlotSeriesPanel(QWidget):
         self.style_combo.setCurrentIndex(max(self.style_combo.findData(series.line_style), 0))
         self.marker_combo.setCurrentIndex(max(self.marker_combo.findData(series.marker), 0))
         self.marker_size_spin.setValue(series.marker_size)
+        self.marker_filled_check.setChecked(series.marker_filled)
+        self.marker_edge_width_spin.setValue(series.marker_edge_width)
         self.alpha_spin.setValue(series.alpha)
+        self.zorder_spin.setValue(series.zorder)
 
         is_histogram = series.plot_type == PlotType.HISTOGRAM
         self.bins_label.setVisible(is_histogram)
         self.bins_spin.setVisible(is_histogram)
+        self.hist_mode_label.setVisible(is_histogram)
+        self.hist_mode_combo.setVisible(is_histogram)
         if is_histogram:
             self.bins_spin.setValue(0 if series.bins == "auto" else int(series.bins))
+            self.hist_mode_combo.setCurrentIndex(max(self.hist_mode_combo.findData(series.hist_mode), 0))
+
+        self.offset_label.setVisible(not is_histogram)
+        self.offset_spin.setVisible(not is_histogram)
+        self.normalize_check.setVisible(not is_histogram)
+        if not is_histogram:
+            self.offset_spin.setValue(series.y_offset)
+            self.normalize_check.setChecked(series.normalize_to_max)
         self._updating = False
 
     def _refresh_current_item_text(self) -> None:
@@ -270,6 +352,20 @@ class PlotSeriesPanel(QWidget):
         series.marker_size = value
         self.changed.emit()
 
+    def _apply_marker_filled(self, checked: bool) -> None:
+        series = self._current_series()
+        if series is None or self._updating:
+            return
+        series.marker_filled = checked
+        self.changed.emit()
+
+    def _apply_marker_edge_width(self, value: float) -> None:
+        series = self._current_series()
+        if series is None or self._updating:
+            return
+        series.marker_edge_width = value
+        self.changed.emit()
+
     def _apply_alpha(self, value: float) -> None:
         series = self._current_series()
         if series is None or self._updating:
@@ -277,11 +373,39 @@ class PlotSeriesPanel(QWidget):
         series.alpha = value
         self.changed.emit()
 
+    def _apply_zorder(self, value: float) -> None:
+        series = self._current_series()
+        if series is None or self._updating:
+            return
+        series.zorder = value
+        self.changed.emit()
+
+    def _apply_offset(self, value: float) -> None:
+        series = self._current_series()
+        if series is None or self._updating:
+            return
+        series.y_offset = value
+        self.changed.emit()
+
+    def _apply_normalize(self, checked: bool) -> None:
+        series = self._current_series()
+        if series is None or self._updating:
+            return
+        series.normalize_to_max = checked
+        self.changed.emit()
+
     def _apply_bins(self, value: int) -> None:
         series = self._current_series()
         if series is None or self._updating:
             return
         series.bins = "auto" if value == 0 else value
+        self.changed.emit()
+
+    def _apply_hist_mode(self, _index: int) -> None:
+        series = self._current_series()
+        if series is None or self._updating:
+            return
+        series.hist_mode = self.hist_mode_combo.currentData()
         self.changed.emit()
 
     def _on_remove_clicked(self) -> None:
@@ -295,4 +419,18 @@ class PlotSeriesPanel(QWidget):
     def _on_clear_clicked(self) -> None:
         self._figure.clear_series()
         self.refresh()
+        self.changed.emit()
+
+    def _on_auto_stack(self) -> None:
+        step = self.offset_step_spin.value() or None
+        used_step = auto_stack_offsets(self._figure.active_panel, step=step)
+        self._updating = True
+        self.offset_step_spin.setValue(used_step)
+        self._updating = False
+        self._on_selection_changed(self.series_list.currentRow())
+        self.changed.emit()
+
+    def _on_reset_offsets(self) -> None:
+        reset_offsets(self._figure.active_panel)
+        self._on_selection_changed(self.series_list.currentRow())
         self.changed.emit()

@@ -3,87 +3,50 @@ from __future__ import annotations
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
-from gnovi_plot.data.numeric import numeric_column, numeric_xy
+from gnovi_plot.plotting.backends.matplotlib_backend import render_figure
 from gnovi_plot.plotting.figure import GnoviFigure
-from gnovi_plot.plotting.series import PlotSeries, PlotType
 
 
 class PlotCanvas(FigureCanvasQTAgg):
+    """Interactive multi-panel Matplotlib canvas embedded in the GUI.
+
+    Keeps the Matplotlib Axes grid in sync with `GnoviFigure.layout`, but
+    delegates the actual drawing to `plotting.backends.matplotlib_backend`
+    so the exact same code path renders on-screen and into exported files.
+    On-screen canvas pixel size never determines export resolution -- export
+    always builds its own correctly-sized Figure (see `export.figure_export`).
+    """
+
     def __init__(self, parent=None):
         figure = Figure()
         super().__init__(figure)
         self.setParent(parent)
-        self.axes = figure.add_subplot(111)
+        self._layout: tuple[int, int] | None = None
+        self.axes_list: list = []
+        self._ensure_layout((1, 1))
+
+    def _ensure_layout(self, layout: tuple[int, int]) -> None:
+        if layout == self._layout:
+            return
+        rows, cols = layout
+        self.figure.clear()
+        self.axes_list = list(self.figure.subplots(rows, cols, squeeze=False).flat)
+        self._layout = layout
+
+    @property
+    def axes(self):
+        """Backward-compatible alias for the first panel's Axes."""
+        return self.axes_list[0]
+
+    def active_axes(self, figure: GnoviFigure):
+        """The Axes for `figure`'s currently active panel."""
+        return self.axes_list[figure.active_panel_index]
 
     def render(self, figure: GnoviFigure) -> None:
-        """Fully redraw the axes from a GnoviFigure. Reading a series' data via
-        numeric_xy/numeric_column never mutates the underlying Dataset.dataframe.
-        """
-        self.axes.cla()
-
-        for series in figure.series:
-            if series.visible and not series.stale:
-                self._draw_series(series)
-
-        self.axes.set_title(figure.title)
-        self.axes.set_xlabel(figure.xlabel)
-        self.axes.set_ylabel(figure.ylabel)
-
-        if figure.xlim is not None:
-            self.axes.set_xlim(*figure.xlim)
-        if figure.ylim is not None:
-            self.axes.set_ylim(*figure.ylim)
-        if figure.xlim is None and figure.ylim is None:
-            self.axes.autoscale(enable=True, axis="both")
-        elif figure.xlim is None:
-            self.axes.autoscale(enable=True, axis="x")
-        elif figure.ylim is None:
-            self.axes.autoscale(enable=True, axis="y")
-
-        self.axes.grid(figure.grid)
-
-        if figure.legend_visible:
-            handles, _labels = self.axes.get_legend_handles_labels()
-            if handles:
-                self.axes.legend(loc=figure.legend_loc)
-        else:
-            legend = self.axes.get_legend()
-            if legend is not None:
-                legend.remove()
-
+        """Fully redraw every panel from `figure`. Reading a series' data
+        never mutates the underlying Dataset.dataframe (see
+        plotting.backends.matplotlib_backend)."""
+        self._ensure_layout(figure.layout)
+        render_figure(self.axes_list, figure)
+        self.figure.tight_layout()
         self.draw_idle()
-
-    def _draw_series(self, series: PlotSeries) -> None:
-        if series.plot_type == PlotType.LINE:
-            x, y = numeric_xy(series.dataframe, series.x_column, series.y_column)
-            self.axes.plot(
-                x,
-                y,
-                label=series.label,
-                color=series.color,
-                linewidth=series.line_width,
-                linestyle=series.line_style,
-                marker=series.marker or "",
-                markersize=series.marker_size,
-                alpha=series.alpha,
-            )
-        elif series.plot_type == PlotType.SCATTER:
-            x, y = numeric_xy(series.dataframe, series.x_column, series.y_column)
-            self.axes.scatter(
-                x,
-                y,
-                label=series.label,
-                color=series.color,
-                marker=series.marker or "o",
-                s=series.marker_size**2,
-                alpha=series.alpha,
-            )
-        elif series.plot_type == PlotType.HISTOGRAM:
-            values = numeric_column(series.dataframe, series.x_column)
-            self.axes.hist(
-                values,
-                bins=series.bins,
-                label=series.label,
-                color=series.color,
-                alpha=series.alpha,
-            )
