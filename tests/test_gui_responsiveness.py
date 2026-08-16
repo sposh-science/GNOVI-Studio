@@ -572,10 +572,11 @@ def test_collapsible_section_preserves_internal_dynamic_visibility(qapp):
 # --- Bottom panel (Data / Transformations / Results / Messages) ----------------
 
 
-def test_bottom_panel_has_the_four_expected_tabs(qapp):
+def test_bottom_panel_has_the_five_expected_tabs(qapp):
     window = MainWindow()
     assert [window.bottom_panel.tabText(i) for i in range(window.bottom_panel.count())] == [
         "Data",
+        "Graphs",
         "Transformations",
         "Results",
         "Messages",
@@ -594,7 +595,7 @@ def test_results_tab_is_an_inert_placeholder(qapp):
     """No fabricated analysis output -- just confirms the tab exists as a
     plain, non-interactive placeholder widget (no buttons/inputs)."""
     window = MainWindow()
-    results_tab = window.bottom_panel.widget(2)
+    results_tab = window.bottom_panel.widget(3)
     assert isinstance(results_tab, QLabel)
     assert results_tab.findChildren(QWidget) == []
     window.close()
@@ -1015,8 +1016,9 @@ def test_mouse_leave_clears_both_coord_label_and_reference_cursor(qapp):
 
 def test_theme_changed_accepts_a_plain_string_for_light(qapp):
     window = MainWindow()
+    window._on_theme_changed("dark")  # start from a genuine non-default so "light" below is a real change
     window._on_theme_changed("light")
-    assert window._plot_theme == PlotTheme.LIGHT
+    assert window.figure_model.plot_theme == PlotTheme.LIGHT
     assert window._settings.value("plot_theme") == "light"
     window.close()
 
@@ -1024,7 +1026,7 @@ def test_theme_changed_accepts_a_plain_string_for_light(qapp):
 def test_theme_changed_accepts_a_plain_string_for_dark(qapp):
     window = MainWindow()
     window._on_theme_changed("dark")
-    assert window._plot_theme == PlotTheme.DARK
+    assert window.figure_model.plot_theme == PlotTheme.DARK
     assert window._settings.value("plot_theme") == "dark"
     window.close()
 
@@ -1033,7 +1035,7 @@ def test_theme_light_dark_light_round_trip_via_plain_strings(qapp):
     window = MainWindow()
     for value, expected in [("dark", PlotTheme.DARK), ("light", PlotTheme.LIGHT), ("dark", PlotTheme.DARK)]:
         window._on_theme_changed(value)
-        assert window._plot_theme == expected
+        assert window.figure_model.plot_theme == expected
         assert window._settings.value("plot_theme") == expected.value
     window.close()
 
@@ -1096,13 +1098,13 @@ def test_toolbar_theme_combo_selection_does_not_raise_and_updates_state(qapp):
 
     window.toolbar_theme_combo.setCurrentIndex(dark_index)  # must not raise
 
-    assert window._plot_theme == PlotTheme.DARK
+    assert window.figure_model.plot_theme == PlotTheme.DARK
     assert window._settings.value("plot_theme") == "dark"
 
     light_index = window.toolbar_theme_combo.findText("Light")
     window.toolbar_theme_combo.setCurrentIndex(light_index)
 
-    assert window._plot_theme == PlotTheme.LIGHT
+    assert window.figure_model.plot_theme == PlotTheme.LIGHT
     window.close()
 
 
@@ -1135,7 +1137,7 @@ def test_theme_switching_while_crosshair_enabled_leaves_cursor_mode_untouched(qa
 
     window._on_theme_changed("dark")
 
-    assert window._plot_theme == PlotTheme.DARK
+    assert window.figure_model.plot_theme == PlotTheme.DARK
     assert window._cursor_mode == ReferenceCursorMode.CROSSHAIR
     assert window.plot_canvas._cursor_mode == ReferenceCursorMode.CROSSHAIR
     window.close()
@@ -1159,8 +1161,8 @@ def test_restoring_saved_settings_reconstructs_the_correct_enum_state(qapp):
 
     restored = MainWindow()
 
-    assert restored._plot_theme == PlotTheme.DARK
-    assert isinstance(restored._plot_theme, PlotTheme)
+    assert restored.figure_model.plot_theme == PlotTheme.DARK
+    assert isinstance(restored.figure_model.plot_theme, PlotTheme)
     assert restored._cursor_mode == ReferenceCursorMode.X_LINE
     assert isinstance(restored._cursor_mode, ReferenceCursorMode)
     restored.close()

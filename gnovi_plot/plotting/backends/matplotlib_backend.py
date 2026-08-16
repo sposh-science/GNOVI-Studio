@@ -11,6 +11,7 @@ from matplotlib.ticker import MultipleLocator
 from gnovi_plot.data.numeric import numeric_column, numeric_xy
 from gnovi_plot.plotting.figure import GnoviFigure, Panel
 from gnovi_plot.plotting.series import PlotSeries, PlotType
+from gnovi_plot.plotting.units import panel_box_aspect
 
 """Pure-Matplotlib rendering for a GnoviFigure -- no Qt/PySide6 dependency.
 
@@ -141,6 +142,49 @@ class MatplotlibBackend:
         render_figure(axes_list, figure)
 
 
+# "outside right"/"outside bottom" aren't real Matplotlib `loc` values --
+# used by both `_legend_kwargs` below and `fit_panel_legends_to_axes`
+# (which skips them: they're deliberately placed outside the axes, so
+# preview-only fitting must never pull them back inside).
+_LEGEND_OUTSIDE_LOCS = {"outside right", "outside bottom"}
+
+
+def _legend_kwargs(panel: Panel, figure: GnoviFigure | None, *, fontsize: float | None = None) -> dict:
+    """Build the kwargs `ax.legend(...)` is called with for `panel` -- the
+    single place this is constructed, shared by `render_panel` (used by
+    both the interactive preview and `export.figure_export`, unconditionally
+    at the configured size) and the preview-only `fit_panel_legends_to_axes`
+    below, so a fitted/shrunk preview legend is otherwise byte-identical to
+    what an unconstrained render (or export) would produce -- same loc/
+    bbox_to_anchor/ncols/frameon/title logic either way. `fontsize`
+    overrides the configured `panel.legend_fontsize`/`figure.legend_font_size`
+    when given -- used only by the preview-only fit pass, which never writes
+    either of those back.
+    """
+    resolved_fontsize = (
+        fontsize if fontsize is not None else panel.legend_fontsize or (figure.legend_font_size if figure else None)
+    )
+    kwargs = dict(
+        ncols=max(1, panel.legend_ncol),
+        frameon=panel.legend_frameon,
+        fontsize=resolved_fontsize,
+        title=panel.legend_title or None,
+    )
+    # Placed via `bbox_to_anchor` instead of a real Matplotlib `loc`,
+    # anchored to an in-bounds `loc` corner so the legend box sits just
+    # outside the axes rather than on top of the plotted data.
+    # `bbox_inches="tight"` (the default export/preview setting) and the
+    # canvas's own `tight_layout` call already account for artists like
+    # this that extend past the axes, so it isn't clipped.
+    if panel.legend_loc == "outside right":
+        kwargs.update(loc="center left", bbox_to_anchor=(1.02, 0.5))
+    elif panel.legend_loc == "outside bottom":
+        kwargs.update(loc="upper center", bbox_to_anchor=(0.5, -0.15))
+    else:
+        kwargs["loc"] = panel.legend_loc
+    return kwargs
+
+
 def render_panel(ax: Axes, panel: Panel, figure: GnoviFigure | None = None, *, dark_mode: bool = False) -> None:
     """Fully redraw a single Axes from a Panel. `figure` supplies typography
     fallbacks (used whenever a Panel-level font-size override is None) and
@@ -148,6 +192,14 @@ def render_panel(ax: Axes, panel: Panel, figure: GnoviFigure | None = None, *, d
     single-panel render.
     """
     ax.cla()
+
+    # Panel Aspect Ratio: the physical shape of this Axes' box only -- see
+    # `GnoviFigure.panel_aspect_preset`'s docstring. `set_box_aspect` (not
+    # `set_aspect("equal")`) so this never forces equal X/Y data-unit
+    # scaling; it's fully independent of xlim/ylim/autoscale below. `None`
+    # ("Auto") clears any box-aspect constraint, restoring Matplotlib's
+    # ordinary layout behavior.
+    ax.set_box_aspect(panel_box_aspect(figure.panel_aspect_preset) if figure else None)
 
     for series in panel.series:
         if series.visible and not series.stale:
@@ -251,28 +303,7 @@ def render_panel(ax: Axes, panel: Panel, figure: GnoviFigure | None = None, *, d
     if panel.legend_visible:
         handles, _labels = ax.get_legend_handles_labels()
         if handles:
-            legend_fontsize = panel.legend_fontsize or (figure.legend_font_size if figure else None)
-            legend_kwargs = dict(
-                ncols=max(1, panel.legend_ncol),
-                frameon=panel.legend_frameon,
-                fontsize=legend_fontsize,
-                title=panel.legend_title or None,
-            )
-            # "outside right"/"outside bottom" aren't real Matplotlib `loc`
-            # values -- they're placed via `bbox_to_anchor` instead, anchored
-            # to an in-bounds `loc` corner so the legend box sits just
-            # outside the axes rather than on top of the plotted data.
-            # `bbox_inches="tight"` (the default export/preview setting) and
-            # the canvas's own `tight_layout` call already account for
-            # artists like this that extend past the axes, so it isn't
-            # clipped.
-            if panel.legend_loc == "outside right":
-                legend_kwargs.update(loc="center left", bbox_to_anchor=(1.02, 0.5))
-            elif panel.legend_loc == "outside bottom":
-                legend_kwargs.update(loc="upper center", bbox_to_anchor=(0.5, -0.15))
-            else:
-                legend_kwargs["loc"] = panel.legend_loc
-            ax.legend(**legend_kwargs)
+            ax.legend(**_legend_kwargs(panel, figure))
     else:
         legend = ax.get_legend()
         if legend is not None:
@@ -315,6 +346,141 @@ def _apply_chrome(ax: Axes, dark_mode: bool) -> None:
             text.set_color(chrome["text"])
         if legend.get_title() is not None:
             legend.get_title().set_color(chrome["text"])
+
+
+# --- Preview-only legend fitting (screen only -- never export) -------------
+#
+# `export.figure_export` renders through `render_figure`/`render_panel`
+# alone and never calls anything below -- exported legends always use the
+# exact configured `Panel.legend_fontsize`/`GnoviFigure.legend_font_size`,
+# unconditionally. `gui.widgets.plot_canvas.PlotCanvas` is the only caller,
+# after every `render_figure()` call and on every resize -- see its
+# docstring. Nothing here ever writes to `Panel.legend_fontsize`/
+# `GnoviFigure.legend_font_size` (the stored, reproducible model); it only
+# mutates the already-rendered Matplotlib `Legend` artist in place.
+
+_LEGEND_FIT_MIN_FONTSIZE = 6.0  # readability floor, in points
+_LEGEND_FIT_CONVERGENCE_PT = 0.25  # binary-search stop threshold, in points
+_LEGEND_FIT_TOLERANCE_PX = 2.0  # containment slack, in display pixels
+# Tightened padding/handle spacing tried before (and kept alongside) any
+# font-size reduction -- "reduce legend padding/handle spacing if useful
+# before shrinking too aggressively".
+_LEGEND_FIT_TIGHT_SPACING = dict(
+    handlelength=1.2,
+    handletextpad=0.4,
+    labelspacing=0.3,
+    borderaxespad=0.3,
+    borderpad=0.3,
+    columnspacing=0.8,
+)
+
+
+def fit_panel_legends_to_axes(axes_list: Sequence[Axes], figure: GnoviFigure, *, dark_mode: bool = False) -> None:
+    """Preview-only post-process: for each panel whose legend overflows its
+    own Axes' bounding box, shrink it (tightened padding first, then font
+    size down to a ~6pt floor) until it fits, or leave it at the floor if it
+    still doesn't -- so a legend never spills into a neighboring panel in a
+    crowded multi-panel layout. A legend already fitting at the configured
+    size (fresh from `render_panel`, or a previously-shrunk one whose panel
+    grew back large enough) is restored/left at that exact configured size --
+    never held smaller than necessary. Skips "outside right"/"outside
+    bottom" legends, deliberately placed outside the axes. Requires
+    `axes_list` to already be attached to a live, drawable canvas.
+    """
+    if not axes_list:
+        return
+    canvas = axes_list[0].figure.canvas
+    if canvas is None:
+        return
+    canvas.draw()
+    renderer = canvas.get_renderer()
+    if renderer is None:
+        return
+
+    for ax, panel in zip(axes_list, figure.panels):
+        if not panel.legend_visible or panel.legend_loc in _LEGEND_OUTSIDE_LOCS:
+            continue
+        legend = ax.get_legend()
+        if legend is None:
+            continue
+        # A legend already shrunk by a previous fit pass (flagged below)
+        # must be re-evaluated from the *configured* size first -- otherwise
+        # a panel that grows back larger would never restore its legend to
+        # the configured size, since a smaller-than-needed legend never
+        # "overflows". A pristine legend (fresh from `render_panel`, or
+        # already restored to the configured size by a previous pass that
+        # found it fit) needs no such reset.
+        if getattr(legend, "_gnovi_legend_fit_shrunk", False):
+            _reset_panel_legend_to_configured(ax, panel, figure, dark_mode=dark_mode)
+            canvas.draw()
+            renderer = canvas.get_renderer()
+        if not _legend_overflows_axes(ax, renderer, tolerance_px=_LEGEND_FIT_TOLERANCE_PX):
+            continue
+        _shrink_panel_legend_to_fit(ax, panel, figure, canvas, dark_mode=dark_mode)
+
+
+def _legend_overflows_axes(ax: Axes, renderer, *, tolerance_px: float) -> bool:
+    legend = ax.get_legend()
+    if legend is None:
+        return False
+    ax_bbox = ax.get_window_extent(renderer=renderer)
+    legend_bbox = legend.get_window_extent(renderer=renderer)
+    return (
+        legend_bbox.x0 < ax_bbox.x0 - tolerance_px
+        or legend_bbox.x1 > ax_bbox.x1 + tolerance_px
+        or legend_bbox.y0 < ax_bbox.y0 - tolerance_px
+        or legend_bbox.y1 > ax_bbox.y1 + tolerance_px
+    )
+
+
+def _reset_panel_legend_to_configured(ax: Axes, panel: Panel, figure: GnoviFigure, *, dark_mode: bool) -> None:
+    """Recreate `ax`'s legend exactly as `render_panel` would (configured
+    font size, normal spacing, no `_gnovi_legend_fit_shrunk` flag) --
+    undoes a previous fit-pass shrink so the panel growing back larger can
+    be correctly re-evaluated from the true baseline."""
+    existing = ax.get_legend()
+    if existing is not None:
+        existing.remove()
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles, labels, **_legend_kwargs(panel, figure))
+    _apply_chrome(ax, dark_mode)
+
+
+def _shrink_panel_legend_to_fit(ax: Axes, panel: Panel, figure: GnoviFigure, canvas, *, dark_mode: bool) -> None:
+    base_fontsize = panel.legend_fontsize or (figure.legend_font_size if figure else None) or 10.0
+
+    def _apply(fontsize: float) -> None:
+        existing = ax.get_legend()
+        if existing is not None:
+            existing.remove()
+        handles, labels = ax.get_legend_handles_labels()
+        kwargs = _legend_kwargs(panel, figure, fontsize=fontsize)
+        kwargs.update(_LEGEND_FIT_TIGHT_SPACING)
+        legend = ax.legend(handles, labels, **kwargs)
+        legend._gnovi_legend_fit_shrunk = True  # see fit_panel_legends_to_axes
+        _apply_chrome(ax, dark_mode)  # re-color the recreated legend artist
+
+    def _fits(fontsize: float) -> bool:
+        _apply(fontsize)
+        canvas.draw()
+        return not _legend_overflows_axes(ax, canvas.get_renderer(), tolerance_px=_LEGEND_FIT_TOLERANCE_PX)
+
+    # Step 1: tightened spacing alone, still at the configured font size.
+    if _fits(base_fontsize):
+        return
+
+    # Step 2: binary search the largest fontsize (>= the floor) that fits,
+    # with tightened spacing throughout.
+    low, high = _LEGEND_FIT_MIN_FONTSIZE, base_fontsize
+    if not _fits(low):
+        return  # doesn't fit even at the floor -- best-effort, leave it there
+    while high - low > _LEGEND_FIT_CONVERGENCE_PT:
+        mid = (low + high) / 2
+        if _fits(mid):
+            low = mid
+        else:
+            high = mid
+    _apply(low)
 
 
 def _series_xy(series: PlotSeries):

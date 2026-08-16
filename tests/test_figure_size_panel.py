@@ -34,6 +34,25 @@ def test_1_to_1_preset_makes_width_equal_height(qapp):
     assert figure.figure_height_in == pytest.approx(5.0)
 
 
+def test_lock_check_label_is_unambiguously_figure_scoped(qapp):
+    """Distinct wording from the Layout page's "Panel Aspect Ratio" so the
+    two independent controls are never confused (see
+    `gui.widgets.figure_layout_panel`)."""
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+
+    assert panel.lock_check.text() == "Lock Figure aspect ratio"
+
+
+def test_aspect_combo_tooltip_identifies_it_as_figure_scoped(qapp):
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+
+    tooltip = panel.aspect_combo.toolTip()
+    assert "Figure Aspect Ratio" in tooltip
+    assert "complete figure" in tooltip.lower() or "page" in tooltip.lower()
+
+
 def test_auto_fit_workspace_unlocks_aspect_ratio(qapp):
     figure = GnoviFigure()
     panel = FigureSizePanel(figure)

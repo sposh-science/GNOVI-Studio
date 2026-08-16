@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.plotting.figure import GnoviFigure, Panel
 
 # Panel dataclass fields excluded from Apply/Cancel/Reset snapshots: `series`
@@ -87,6 +88,8 @@ class FigurePropertiesPanel(QWidget):
         super().__init__(parent)
         self._figure = figure
         self._updating = False
+
+        self.active_panel_label = ActivePanelLabel(figure)
 
         # --- Labels ---
         self.title_edit = QLineEdit()
@@ -234,6 +237,7 @@ class FigurePropertiesPanel(QWidget):
         self.reset_all_button = QPushButton("Reset to Defaults")
 
         layout = QVBoxLayout(self)
+        layout.addWidget(self.active_panel_label)
         layout.addWidget(labels_group)
         layout.addWidget(limits_group)
         layout.addWidget(ticks_group)
@@ -328,6 +332,12 @@ class FigurePropertiesPanel(QWidget):
     def _panel(self):
         return self._figure.active_panel
 
+    def set_figure(self, figure: GnoviFigure) -> None:
+        """Repoint this panel at a different `GnoviFigure` (e.g. after
+        Open/New Project swaps the active figure) and reload from it."""
+        self._figure = figure
+        self.refresh()
+
     def refresh(self) -> None:
         """Reload every field from `figure.active_panel`. Call this after
         switching the active panel, in addition to after construction."""
@@ -335,6 +345,7 @@ class FigurePropertiesPanel(QWidget):
 
     def _sync_from_figure(self) -> None:
         panel = self._panel
+        self.active_panel_label.refresh(self._figure)
         self._updating = True
         self.title_edit.setText(panel.title)
         self.xlabel_edit.setText(panel.xlabel)

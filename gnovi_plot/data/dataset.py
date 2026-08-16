@@ -39,6 +39,59 @@ class Dataset:
             raise ValueError("Dataset.name must not be empty")
         self.raw_dataframe = self.dataframe
 
+    def to_dict(self) -> dict:
+        """Metadata for project save -- never includes `dataframe`/
+        `raw_dataframe`; those are written as separate CSV files alongside
+        `project.json` (see `core.project_io`)."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "source_path": self.source_path,
+            "metadata": self.metadata,
+            "calculated_columns": {
+                name: info.to_dict() for name, info in self.calculated_columns.items()
+            },
+            "transformations": [t.to_dict() for t in self.transformations],
+        }
+
+    @classmethod
+    def from_project_data(
+        cls,
+        data: dict,
+        raw_dataframe: pd.DataFrame,
+        working_dataframe: pd.DataFrame,
+    ) -> "Dataset":
+        """Reconstruct a Dataset from a project save's metadata dict (see
+        `to_dict`) plus its separately-loaded raw/working CSV data.
+
+        Unlike the normal constructor -- which assumes a fresh import where
+        `raw_dataframe` and `dataframe` start identical (see
+        `__post_init__`) -- a saved project's raw and working data have
+        already diverged by however many transformations were applied
+        before it was saved, so both are supplied explicitly and
+        `raw_dataframe` is set directly rather than derived from
+        `dataframe`. `id` is taken from `data` rather than freshly
+        generated, so `PlotSeries.dataset_id` references captured before
+        save still resolve correctly after load.
+        """
+        dataset = cls(
+            id=data["id"],
+            name=data["name"],
+            dataframe=raw_dataframe,
+            source_path=data.get("source_path"),
+            metadata=dict(data.get("metadata", {})),
+        )
+        dataset.raw_dataframe = raw_dataframe
+        dataset.dataframe = working_dataframe
+        dataset.calculated_columns = {
+            name: CalculatedColumnInfo.from_dict(info)
+            for name, info in data.get("calculated_columns", {}).items()
+        }
+        dataset.transformations = [
+            Transformation.from_dict(t) for t in data.get("transformations", [])
+        ]
+        return dataset
+
     @property
     def columns(self) -> list[str]:
         return list(self.dataframe.columns)

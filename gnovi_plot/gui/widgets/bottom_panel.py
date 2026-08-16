@@ -37,17 +37,20 @@ class BottomPanel(QTabWidget):
     """Collapsible/resizable tabbed panel below the plot canvas.
 
     Tabs: Data (a table supplied by the owner, e.g. the Data Preview),
-    Transformations (a list supplied by the owner, e.g. Working Data
-    history), Results (an inert placeholder -- the reusable home for future
-    fit/peak/FFT output, deliberately empty this milestone), and Messages
-    (a live application log).
+    Graphs (the project-local Graph Library, e.g.
+    `gui.widgets.graph_library_panel.GraphLibraryPanel`), Transformations (a
+    list supplied by the owner, e.g. Working Data history), Results (an
+    inert placeholder -- the reusable home for future fit/peak/FFT output,
+    deliberately empty this milestone), and Messages (a live application
+    log).
 
-    This widget only owns the tab *container*; tab content for Data/
+    This widget only owns the tab *container*; tab content for Data/Graphs/
     Transformations is handed in by the owner via `set_data_widget`/
-    `set_transformations_widget` so this panel has no dependency on
-    DatasetPanel/DataToolsPanel internals. `QTabWidget` never
-    destroys/rebuilds a tab's content widget when switching tabs, so
-    widget identity (and state) survives tab switching and show/hide.
+    `set_graphs_widget`/`set_transformations_widget` so this panel has no
+    dependency on DatasetPanel/GraphLibraryPanel/DataToolsPanel internals.
+    `QTabWidget` never destroys/rebuilds a tab's content widget when
+    switching tabs, so widget identity (and state) survives tab switching
+    and show/hide.
     """
 
     def __init__(self, parent=None):
@@ -56,6 +59,10 @@ class BottomPanel(QTabWidget):
         self._data_tab = QWidget()
         QVBoxLayout(self._data_tab).setContentsMargins(0, 0, 0, 0)
         self.addTab(self._data_tab, "Data")
+
+        self._graphs_tab = QWidget()
+        QVBoxLayout(self._graphs_tab).setContentsMargins(0, 0, 0, 0)
+        self.addTab(self._graphs_tab, "Graphs")
 
         self._transformations_tab = QWidget()
         QVBoxLayout(self._transformations_tab).setContentsMargins(0, 0, 0, 0)
@@ -78,6 +85,11 @@ class BottomPanel(QTabWidget):
         """Place `widget` (e.g. the Data Preview table) into the Data tab.
         Reparents `widget` -- Qt moves it, it is not copied."""
         self._data_tab.layout().addWidget(widget)
+
+    def set_graphs_widget(self, widget: QWidget) -> None:
+        """Place `widget` (the Graph Library UI) into the Graphs tab.
+        Reparents `widget` -- Qt moves it, it is not copied."""
+        self._graphs_tab.layout().addWidget(widget)
 
     def set_transformations_widget(self, widget: QWidget) -> None:
         """Place `widget` (e.g. the Working Data transformation history)

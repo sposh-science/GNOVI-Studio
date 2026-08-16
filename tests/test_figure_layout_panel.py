@@ -197,3 +197,104 @@ def test_capture_and_restore_state_round_trips_layout_fields(qapp):
     panel.restore_state(snapshot)
 
     assert figure.margin_left == pytest.approx(snapshot["margin_left"])
+
+
+# --- Panel Aspect Ratio ----------------------------------------------------------
+#
+# Deliberately figure/layout-level (see FigureLayoutPanel's docstring) --
+# independent of Figure Aspect Ratio (gui.widgets.figure_size_panel) and
+# never a per-Panel Axes property (gui.widgets.figure_properties_panel).
+
+
+def test_panel_aspect_combo_lists_auto_and_every_ratio_preset(qapp):
+    figure = GnoviFigure()
+    panel = FigureLayoutPanel(figure)
+
+    items = [panel.panel_aspect_combo.itemText(i) for i in range(panel.panel_aspect_combo.count())]
+
+    assert items == ["Auto", "1:1", "4:3", "3:4", "3:2", "2:3", "16:9"]
+
+
+def test_panel_aspect_combo_defaults_to_auto(qapp):
+    figure = GnoviFigure()
+    panel = FigureLayoutPanel(figure)
+
+    assert panel.panel_aspect_combo.currentText() == "Auto"
+    assert figure.panel_aspect_preset == "Auto"
+
+
+def test_selecting_a_panel_aspect_preset_updates_the_figure(qapp):
+    figure = GnoviFigure()
+    panel = FigureLayoutPanel(figure)
+
+    panel.panel_aspect_combo.setCurrentText("1:1")
+
+    assert figure.panel_aspect_preset == "1:1"
+
+
+def test_changed_signal_emitted_on_panel_aspect_edit(qapp):
+    figure = GnoviFigure()
+    panel = FigureLayoutPanel(figure)
+    received = []
+    panel.changed.connect(lambda: received.append(True))
+
+    panel.panel_aspect_combo.setCurrentText("4:3")
+
+    assert received == [True]
+
+
+def test_panel_aspect_combo_has_a_distinct_tooltip_from_figure_aspect(qapp):
+    figure = GnoviFigure()
+    panel = FigureLayoutPanel(figure)
+
+    tooltip = panel.panel_aspect_combo.toolTip()
+    assert "Panel Aspect Ratio" in tooltip
+    assert "individual graph box" in tooltip
+    assert "Figure" not in tooltip.split(":")[0]  # not mislabeled as the figure-level control
+
+
+def test_refresh_reloads_panel_aspect_from_an_externally_mutated_figure(qapp):
+    figure = GnoviFigure()
+    panel = FigureLayoutPanel(figure)
+
+    figure.panel_aspect_preset = "16:9"
+    panel.refresh()
+
+    assert panel.panel_aspect_combo.currentText() == "16:9"
+
+
+def test_reset_to_defaults_restores_panel_aspect_to_auto(qapp):
+    figure = GnoviFigure()
+    panel = FigureLayoutPanel(figure)
+    panel.panel_aspect_combo.setCurrentText("3:2")
+
+    panel.reset_button.click()
+
+    assert figure.panel_aspect_preset == "Auto"
+    assert panel.panel_aspect_combo.currentText() == "Auto"
+
+
+def test_tight_layout_does_not_reset_panel_aspect(qapp):
+    """Tight Layout only bakes margin/spacing values -- Panel Aspect Ratio
+    is a separate, user-controlled setting it must never touch."""
+    figure = GnoviFigure()
+    panel = FigureLayoutPanel(figure)
+    panel.panel_aspect_combo.setCurrentText("1:1")
+
+    panel.tight_layout_button.click()
+
+    assert figure.panel_aspect_preset == "1:1"
+
+
+def test_capture_and_restore_state_round_trips_panel_aspect(qapp):
+    figure = GnoviFigure()
+    panel = FigureLayoutPanel(figure)
+    snapshot = panel.capture_state()
+
+    panel.panel_aspect_combo.setCurrentText("2:3")
+    assert figure.panel_aspect_preset != snapshot["panel_aspect_preset"]
+
+    panel.restore_state(snapshot)
+
+    assert figure.panel_aspect_preset == snapshot["panel_aspect_preset"]
+    assert panel.panel_aspect_combo.currentText() == snapshot["panel_aspect_preset"]

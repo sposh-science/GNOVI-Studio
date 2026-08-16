@@ -10,24 +10,17 @@ below -- it is never user-switchable. What *is* user-switchable is the
 `PlotTheme` applied to the Matplotlib preview canvas only (see
 `plotting.backends.matplotlib_backend.render_figure`'s `dark_mode` flag);
 the two are deliberately independent so a dark plot never drags the rest of
-the interface into dark mode with it, and publication export background
-stays its own explicit, separate choice (see `export.figure_export`).
+the interface into dark mode with it. `PlotTheme` itself is declarative
+`GnoviFigure` state (see `plotting.figure.PlotTheme`'s docstring for why),
+re-exported here only so existing `from gnovi_plot.gui.styles import
+PlotTheme` call sites keep working.
 """
 
 from __future__ import annotations
 
-from enum import Enum
-
 from PySide6.QtWidgets import QApplication
 
-
-class PlotTheme(str, Enum):
-    """User-selected theme for the scientific figure/canvas only -- never
-    the application chrome (see module docstring)."""
-
-    LIGHT = "light"
-    DARK = "dark"
-
+from gnovi_plot.plotting.figure import PlotTheme  # noqa: F401 -- re-exported, see module docstring
 
 _LIGHT_PALETTE = {
     "background": "#f4f5f7",
@@ -53,6 +46,15 @@ STALE_COLOR = "#e5484d"
 # gui.widgets.plot_series_panel) -- same "always-light chrome" reasoning as
 # STALE_COLOR above.
 WARNING_COLOR = "#b06000"
+
+# GUI-only active-panel badge background (see
+# gui.widgets.plot_canvas._ActivePanelBadge) -- deliberately the same
+# "accent_pressed" shade already used for pressed-button state above,
+# rather than the plain `accent` also used for list-item selection/focus,
+# so the badge reads as its own distinct, still-on-brand signal. An opaque
+# pill with white text, so it stays legible sitting over either a Light or
+# Dark Plot Theme canvas background without needing its own dark variant.
+ACTIVE_PANEL_BADGE_COLOR = "#1e4aa8"
 
 _STYLESHEET_TEMPLATE = """
 QWidget {{
@@ -145,6 +147,25 @@ QComboBox:focus, QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
 QComboBox::drop-down {{
     border: none;
     width: 18px;
+}}
+
+/* Styling `::drop-down` above suppresses the style engine's own default
+arrow glyph -- Qt then expects `::down-arrow` to supply one explicitly.
+Drawn as a plain CSS-border triangle (no icon/image resource needed) so
+every QComboBox in the app keeps an obvious, standard-looking dropdown
+chevron rather than looking like a plain text field. */
+QComboBox::down-arrow {{
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid {muted_text};
+    margin-right: 7px;
+}}
+
+QComboBox::down-arrow:disabled {{
+    border-top-color: {border};
 }}
 
 QListWidget, QTableView {{

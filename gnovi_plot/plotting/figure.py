@@ -1,9 +1,30 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+from enum import Enum
 
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.plotting.series import PlotSeries
+
+_logger = logging.getLogger("gnovi_plot")
+
+
+class PlotTheme(str, Enum):
+    """A figure's own rendering theme for the Matplotlib canvas/export --
+    declarative `GnoviFigure` state (see `GnoviFigure.plot_theme`), not an
+    application-wide preference: two different figures/projects may
+    legitimately want Light vs. Dark, and a figure must reopen looking
+    exactly as it was saved. Canonically defined here (the plotting engine)
+    rather than in `gui.styles`, which only re-exports it for existing
+    importers -- this module has no Qt dependency, so `PlotTheme` stays
+    usable from a plain script (see `export.figure_export`) without pulling
+    in PySide6. Never the application chrome's own theme (see
+    `gui.styles` module docstring)."""
+
+    LIGHT = "light"
+    DARK = "dark"
+
 
 # Matplotlib's default "tab10" cycle, reproduced as plain hex strings so this
 # module has no Matplotlib/rendering dependency of its own. Used to
@@ -210,6 +231,114 @@ class Panel:
                 newly_stale.append(series)
         return newly_stale
 
+    def to_dict(self) -> dict:
+        """Project-save representation. `series` entries store `dataset_id`
+        rather than a nested `Dataset` (see `PlotSeries.to_dict`)."""
+        return {
+            "title": self.title,
+            "xlabel": self.xlabel,
+            "ylabel": self.ylabel,
+            "xlim": list(self.xlim) if self.xlim is not None else None,
+            "ylim": list(self.ylim) if self.ylim is not None else None,
+            "xscale": self.xscale,
+            "yscale": self.yscale,
+            "invert_x": self.invert_x,
+            "invert_y": self.invert_y,
+            "grid": self.grid,
+            "grid_which": self.grid_which,
+            "legend_visible": self.legend_visible,
+            "legend_loc": self.legend_loc,
+            "legend_ncol": self.legend_ncol,
+            "legend_frameon": self.legend_frameon,
+            "legend_fontsize": self.legend_fontsize,
+            "legend_title": self.legend_title,
+            "tick_direction": self.tick_direction,
+            "minor_ticks": self.minor_ticks,
+            "major_tick_spacing_x": self.major_tick_spacing_x,
+            "major_tick_spacing_y": self.major_tick_spacing_y,
+            "minor_tick_spacing_x": self.minor_tick_spacing_x,
+            "minor_tick_spacing_y": self.minor_tick_spacing_y,
+            "major_tick_length": self.major_tick_length,
+            "major_tick_width": self.major_tick_width,
+            "minor_tick_length": self.minor_tick_length,
+            "minor_tick_width": self.minor_tick_width,
+            "tick_label_size": self.tick_label_size,
+            "axis_label_size": self.axis_label_size,
+            "title_size": self.title_size,
+            "scientific_notation_x": self.scientific_notation_x,
+            "scientific_notation_y": self.scientific_notation_y,
+            "spine_top": self.spine_top,
+            "spine_bottom": self.spine_bottom,
+            "spine_left": self.spine_left,
+            "spine_right": self.spine_right,
+            "spine_linewidth": self.spine_linewidth,
+            "panel_label": self.panel_label,
+            "next_color_index": self._next_color_index,
+            "series": [s.to_dict() for s in self.series],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, dataset_lookup: dict[str, "Dataset"]) -> "Panel":
+        """Reconstruct from `to_dict`'s output. `dataset_lookup` resolves
+        each series' `dataset_id` (see `PlotSeries.from_dict`); a series
+        whose id isn't in the lookup is silently dropped, not an error --
+        see `core.project_io.load_project` for why."""
+        xlim = data.get("xlim")
+        ylim = data.get("ylim")
+        panel = cls(
+            title=data.get("title", ""),
+            xlabel=data.get("xlabel", ""),
+            ylabel=data.get("ylabel", ""),
+            xlim=tuple(xlim) if xlim is not None else None,
+            ylim=tuple(ylim) if ylim is not None else None,
+            xscale=data.get("xscale", "linear"),
+            yscale=data.get("yscale", "linear"),
+            invert_x=data.get("invert_x", False),
+            invert_y=data.get("invert_y", False),
+            grid=data.get("grid", False),
+            grid_which=data.get("grid_which", "major"),
+            legend_visible=data.get("legend_visible", True),
+            legend_loc=data.get("legend_loc", "best"),
+            legend_ncol=data.get("legend_ncol", 1),
+            legend_frameon=data.get("legend_frameon", True),
+            legend_fontsize=data.get("legend_fontsize"),
+            legend_title=data.get("legend_title", ""),
+            tick_direction=data.get("tick_direction", "out"),
+            minor_ticks=data.get("minor_ticks", False),
+            major_tick_spacing_x=data.get("major_tick_spacing_x"),
+            major_tick_spacing_y=data.get("major_tick_spacing_y"),
+            minor_tick_spacing_x=data.get("minor_tick_spacing_x"),
+            minor_tick_spacing_y=data.get("minor_tick_spacing_y"),
+            major_tick_length=data.get("major_tick_length", 3.5),
+            major_tick_width=data.get("major_tick_width", 0.8),
+            minor_tick_length=data.get("minor_tick_length", 2.0),
+            minor_tick_width=data.get("minor_tick_width", 0.6),
+            tick_label_size=data.get("tick_label_size"),
+            axis_label_size=data.get("axis_label_size"),
+            title_size=data.get("title_size"),
+            scientific_notation_x=data.get("scientific_notation_x", False),
+            scientific_notation_y=data.get("scientific_notation_y", False),
+            spine_top=data.get("spine_top", True),
+            spine_bottom=data.get("spine_bottom", True),
+            spine_left=data.get("spine_left", True),
+            spine_right=data.get("spine_right", True),
+            spine_linewidth=data.get("spine_linewidth", 1.0),
+            panel_label=data.get("panel_label", ""),
+        )
+        for series_data in data.get("series", []):
+            series = PlotSeries.from_dict(series_data, dataset_lookup)
+            if series is not None:
+                panel.series.append(series)
+            else:
+                _logger.warning(
+                    "Dropped plot series '%s' on project load: its dataset "
+                    "(id %s) is missing from the project.",
+                    series_data.get("label", "?"),
+                    series_data.get("dataset_id", "?"),
+                )
+        panel._next_color_index = data.get("next_color_index", 0)
+        return panel
+
 
 class GnoviFigure:
     """Declarative description of a publication figure/page: one or more
@@ -230,6 +359,8 @@ class GnoviFigure:
     def __init__(
         self,
         *,
+        name: str = "Figure 1",
+        plot_theme: PlotTheme = PlotTheme.LIGHT,
         panels: list[Panel] | None = None,
         layout: tuple[int, int] = (1, 1),
         active_panel_index: int = 0,
@@ -238,6 +369,7 @@ class GnoviFigure:
         figure_height_in: float = 4.8,
         aspect_preset: str = "Auto / Fit workspace",
         lock_aspect_ratio: bool = False,
+        panel_aspect_preset: str = "Auto",
         font_family: str | None = None,
         base_font_size: float = 10.0,
         title_font_size: float = 12.0,
@@ -256,6 +388,13 @@ class GnoviFigure:
         panel_hspace: float = 0.2,
         **panel_kwargs,
     ) -> None:
+        self.name = name
+        # Declarative figure state, not an app-wide preference -- see
+        # `PlotTheme`'s docstring. `MainWindow` reads/writes this directly
+        # (via `figure_model.plot_theme`) rather than caching its own copy,
+        # so it's always correct across Open/New Project swapping which
+        # `GnoviFigure` is "current" (see `gui.main_window._sync_theme_controls`).
+        self.plot_theme = plot_theme
         self.panels: list[Panel] = panels if panels is not None else [Panel(**panel_kwargs)]
         self.layout = layout
         self.active_panel_index = active_panel_index
@@ -265,6 +404,17 @@ class GnoviFigure:
         self.figure_height_in = figure_height_in
         self.aspect_preset = aspect_preset
         self.lock_aspect_ratio = lock_aspect_ratio
+        # Panel Aspect Ratio -- the physical shape of each individual Axes
+        # box (e.g. "1:1" = square graph boxes), completely independent of
+        # `aspect_preset`/`lock_aspect_ratio` above (the OUTER figure/page
+        # shape) and never a per-Panel property: it's figure/layout-level,
+        # applying uniformly to every panel in this figure -- see
+        # `plotting.units.panel_box_aspect` and
+        # `plotting.backends.matplotlib_backend.render_panel`, which is the
+        # only place it's actually applied (via `Axes.set_box_aspect`,
+        # deliberately never `Axes.set_aspect("equal")` -- this never
+        # changes numeric X/Y data scaling).
+        self.panel_aspect_preset = panel_aspect_preset
 
         self.font_family = font_family
         self.base_font_size = base_font_size
@@ -455,3 +605,81 @@ class GnoviFigure:
                 continue
             for field_name in _PANEL_STYLE_FIELDS:
                 setattr(panel, field_name, getattr(source, field_name))
+
+    def to_dict(self) -> dict:
+        """Project-save representation; see `Panel.to_dict` for how panels
+        (and their series) are serialized within `panels`."""
+        return {
+            "name": self.name,
+            "plot_theme": self.plot_theme.value,
+            "layout": list(self.layout),
+            "active_panel_index": self.active_panel_index,
+            "panel_labels_visible": self.panel_labels_visible,
+            "figure_width_in": self.figure_width_in,
+            "figure_height_in": self.figure_height_in,
+            "aspect_preset": self.aspect_preset,
+            "lock_aspect_ratio": self.lock_aspect_ratio,
+            "panel_aspect_preset": self.panel_aspect_preset,
+            "font_family": self.font_family,
+            "base_font_size": self.base_font_size,
+            "title_font_size": self.title_font_size,
+            "axis_label_font_size": self.axis_label_font_size,
+            "tick_label_font_size": self.tick_label_font_size,
+            "legend_font_size": self.legend_font_size,
+            "grid_linestyle": self.grid_linestyle,
+            "grid_linewidth": self.grid_linewidth,
+            "grid_alpha": self.grid_alpha,
+            "grid_color": self.grid_color,
+            "margin_left": self.margin_left,
+            "margin_right": self.margin_right,
+            "margin_bottom": self.margin_bottom,
+            "margin_top": self.margin_top,
+            "panel_wspace": self.panel_wspace,
+            "panel_hspace": self.panel_hspace,
+            "panels": [p.to_dict() for p in self.panels],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, dataset_lookup: dict[str, Dataset]) -> "GnoviFigure":
+        """Reconstruct from `to_dict`'s output. An empty/missing `panels`
+        list falls back to a fresh default single Panel (`panels=None`)
+        rather than an empty `GnoviFigure.panels`, which `active_panel`
+        can't index into."""
+        panels = [Panel.from_dict(p, dataset_lookup) for p in data.get("panels", [])]
+        try:
+            plot_theme = PlotTheme(data.get("plot_theme", PlotTheme.LIGHT.value))
+        except ValueError:
+            plot_theme = PlotTheme.LIGHT
+        figure = cls(
+            name=data.get("name", "Figure 1"),
+            plot_theme=plot_theme,
+            panels=panels or None,
+            layout=tuple(data.get("layout", (1, 1))),
+            active_panel_index=data.get("active_panel_index", 0),
+            panel_labels_visible=data.get("panel_labels_visible", False),
+            figure_width_in=data.get("figure_width_in", 6.4),
+            figure_height_in=data.get("figure_height_in", 4.8),
+            aspect_preset=data.get("aspect_preset", "Auto / Fit workspace"),
+            lock_aspect_ratio=data.get("lock_aspect_ratio", False),
+            panel_aspect_preset=data.get("panel_aspect_preset", "Auto"),
+            font_family=data.get("font_family"),
+            base_font_size=data.get("base_font_size", 10.0),
+            title_font_size=data.get("title_font_size", 12.0),
+            axis_label_font_size=data.get("axis_label_font_size", 10.0),
+            tick_label_font_size=data.get("tick_label_font_size", 9.0),
+            legend_font_size=data.get("legend_font_size", 9.0),
+            grid_linestyle=data.get("grid_linestyle", "--"),
+            grid_linewidth=data.get("grid_linewidth", 0.8),
+            grid_alpha=data.get("grid_alpha", 0.6),
+            grid_color=data.get("grid_color"),
+            margin_left=data.get("margin_left", 0.125),
+            margin_right=data.get("margin_right", 0.9),
+            margin_bottom=data.get("margin_bottom", 0.11),
+            margin_top=data.get("margin_top", 0.88),
+            panel_wspace=data.get("panel_wspace", 0.2),
+            panel_hspace=data.get("panel_hspace", 0.2),
+        )
+        figure.active_panel_index = min(
+            max(figure.active_panel_index, 0), len(figure.panels) - 1
+        )
+        return figure

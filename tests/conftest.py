@@ -4,13 +4,29 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 
 @pytest.fixture(scope="session")
 def qapp():
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+@pytest.fixture(autouse=True)
+def _auto_discard_unsaved_project(monkeypatch):
+    """MainWindow.closeEvent shows a modal Save/Discard/Cancel QMessageBox
+    when the project is dirty (see gui.main_window._confirm_discard_unsaved).
+    Without this, any test that mutates project state and then calls
+    `window.close()` -- dozens do, e.g. test_gui_responsiveness.py -- would
+    hang forever offscreen waiting for a button click that never comes.
+    Auto-answer Discard by default so `close()` behaves like it did before
+    project persistence existed; a test targeting the prompt itself
+    re-patches `QMessageBox.warning` within its own body to override this."""
+    monkeypatch.setattr(
+        "gnovi_plot.gui.main_window.QMessageBox.warning",
+        lambda *args, **kwargs: QMessageBox.Discard,
+    )
 
 
 @pytest.fixture(autouse=True)

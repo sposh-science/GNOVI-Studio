@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from gnovi_plot.gui.styles import STALE_COLOR, WARNING_COLOR
+from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.plotting.backends.matplotlib_backend import is_low_contrast
 from gnovi_plot.plotting.figure import GnoviFigure, theme_color_cycle
@@ -75,6 +76,8 @@ class PlotSeriesPanel(QWidget):
         self._updating = False
         self._low_contrast_series: list[PlotSeries] = []
         self._dark_mode = False
+
+        self.active_panel_label = ActivePanelLabel(figure)
 
         self.series_list = QListWidget()
         self.remove_button = QPushButton("Remove Series")
@@ -188,6 +191,7 @@ class PlotSeriesPanel(QWidget):
         self.stack_section = CollapsibleSection("Stacked / Offset Curves", stack_group)
 
         layout = QVBoxLayout(self)
+        layout.addWidget(self.active_panel_label)
         layout.addWidget(self.list_section)
         layout.addWidget(self.props_section)
         layout.addWidget(self.stack_section)
@@ -222,7 +226,14 @@ class PlotSeriesPanel(QWidget):
     def _item_text(series: PlotSeries) -> str:
         return f"{series.label}  [stale — re-add]" if series.stale else series.label
 
+    def set_figure(self, figure: GnoviFigure) -> None:
+        """Repoint this panel at a different `GnoviFigure` (e.g. after
+        Open/New Project swaps the active figure) and reload from it."""
+        self._figure = figure
+        self.refresh()
+
     def refresh(self, select_id: str | None = None) -> None:
+        self.active_panel_label.refresh(self._figure)
         self.series_list.blockSignals(True)
         self.series_list.clear()
         target_row = -1

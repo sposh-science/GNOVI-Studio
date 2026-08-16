@@ -191,3 +191,114 @@ def test_detected_cycles_become_independent_plot_series():
     assert series_list[1].line_width == 1.5
     assert series_list[1].visible is True
     assert series_list[2].color is None
+
+
+# --- Project-save serialization -----------------------------------------------
+
+
+def test_to_dict_stores_dataset_id_not_a_nested_dataset():
+    dataset = _make_dataset()
+    series = PlotSeries.line(dataset, "Potential/V", "Current/A")
+    data = series.to_dict()
+
+    assert data["dataset_id"] == dataset.id
+    assert "dataset" not in data
+    assert "dataframe" not in data
+
+
+def test_from_dict_resolves_dataset_via_lookup():
+    dataset = _make_dataset()
+    series = PlotSeries.line(dataset, "Potential/V", "Current/A")
+    data = series.to_dict()
+
+    restored = PlotSeries.from_dict(data, {dataset.id: dataset})
+
+    assert restored is not None
+    assert restored.dataset is dataset  # same live instance, not a copy
+    assert restored.id == series.id
+    assert restored.x_column == "Potential/V"
+    assert restored.y_column == "Current/A"
+
+
+def test_from_dict_returns_none_when_dataset_id_is_missing_from_lookup():
+    dataset = _make_dataset()
+    series = PlotSeries.line(dataset, "Potential/V", "Current/A")
+    data = series.to_dict()
+
+    assert PlotSeries.from_dict(data, {}) is None
+
+
+def test_round_trip_preserves_row_range_and_visibility():
+    dataset = _make_dataset()
+    series = PlotSeries.line(dataset, "Potential/V", "Current/A", row_range=(1, 3), visible=False)
+    restored = PlotSeries.from_dict(series.to_dict(), {dataset.id: dataset})
+
+    assert restored.row_range == (1, 3)
+    assert isinstance(restored.row_range, tuple)
+    assert restored.visible is False
+
+
+def test_round_trip_preserves_row_range_none():
+    dataset = _make_dataset()
+    series = PlotSeries.line(dataset, "Potential/V", "Current/A")
+    restored = PlotSeries.from_dict(series.to_dict(), {dataset.id: dataset})
+    assert restored.row_range is None
+
+
+def test_round_trip_preserves_color_and_style_fields():
+    dataset = _make_dataset()
+    series = PlotSeries.line(
+        dataset,
+        "Potential/V",
+        "Current/A",
+        color="#abcdef",
+        color_is_manual=True,
+        line_width=3.5,
+        line_style="--",
+        marker="s",
+        marker_size=9.0,
+        marker_filled=False,
+        marker_edge_width=2.0,
+        alpha=0.75,
+        zorder=5.0,
+    )
+    restored = PlotSeries.from_dict(series.to_dict(), {dataset.id: dataset})
+
+    assert restored.color == "#abcdef"
+    assert restored.color_is_manual is True
+    assert restored.line_width == 3.5
+    assert restored.line_style == "--"
+    assert restored.marker == "s"
+    assert restored.marker_size == 9.0
+    assert restored.marker_filled is False
+    assert restored.marker_edge_width == 2.0
+    assert restored.alpha == 0.75
+    assert restored.zorder == 5.0
+
+
+def test_round_trip_preserves_stacking_offset_and_normalization():
+    dataset = _make_dataset()
+    series = PlotSeries.line(dataset, "Potential/V", "Current/A", y_offset=2.5, normalize_to_max=True)
+    restored = PlotSeries.from_dict(series.to_dict(), {dataset.id: dataset})
+
+    assert restored.y_offset == 2.5
+    assert restored.normalize_to_max is True
+
+
+def test_round_trip_preserves_histogram_mode_and_bins():
+    dataset = _make_dataset()
+    series = PlotSeries.histogram(dataset, "Current/A", bins=17, hist_mode="cumulative")
+    restored = PlotSeries.from_dict(series.to_dict(), {dataset.id: dataset})
+
+    assert restored.plot_type == PlotType.HISTOGRAM
+    assert restored.bins == 17
+    assert restored.hist_mode == "cumulative"
+    assert restored.y_column is None
+
+
+def test_round_trip_preserves_stale_flag():
+    dataset = _make_dataset()
+    series = PlotSeries.line(dataset, "Potential/V", "Current/A")
+    series.stale = True
+    restored = PlotSeries.from_dict(series.to_dict(), {dataset.id: dataset})
+    assert restored.stale is True

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from gnovi_plot.gui.styles import PlotTheme
+from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.units import ASPECT_RATIO_PRESETS, PUBLICATION_PRESETS_MM, from_inches, to_inches
 
@@ -83,8 +84,16 @@ class FigureSizePanel(QWidget):
         self._unit = "in"
         self._updating = False
 
+        self.active_panel_label = ActivePanelLabel(figure)
+
         self.aspect_combo = QComboBox()
         self.aspect_combo.addItems(list(ASPECT_RATIO_PRESETS))
+        # Distinct label/tooltip from Panel Aspect Ratio (Layout page, see
+        # `figure_layout_panel.FigureLayoutPanel`) -- this one is the OUTER
+        # complete figure/page shape, never per-panel.
+        self.aspect_combo.setToolTip(
+            "Figure Aspect Ratio: shape of the complete figure/page containing all panels."
+        )
 
         self.publication_combo = QComboBox()
         self.publication_combo.addItems([_NO_PUBLICATION_PRESET] + list(PUBLICATION_PRESETS_MM))
@@ -100,11 +109,11 @@ class FigureSizePanel(QWidget):
         self.height_spin.setRange(1.0, 5000.0)
         self.height_spin.setDecimals(2)
 
-        self.lock_check = QCheckBox("Lock aspect ratio")
+        self.lock_check = QCheckBox("Lock Figure aspect ratio")
 
         size_group = QGroupBox("Figure Size")
         size_form = QFormLayout(size_group)
-        size_form.addRow("Aspect preset", self.aspect_combo)
+        size_form.addRow("Figure Aspect Ratio", self.aspect_combo)
         size_form.addRow("Publication preset", self.publication_combo)
         size_form.addRow("Unit", self.unit_combo)
         size_form.addRow("Width", self.width_spin)
@@ -165,6 +174,7 @@ class FigureSizePanel(QWidget):
         self.reset_button = QPushButton("Reset to Defaults")
 
         layout = QVBoxLayout(self)
+        layout.addWidget(self.active_panel_label)
         layout.addWidget(size_group)
         layout.addWidget(panels_group)
         layout.addWidget(theme_group)
@@ -200,6 +210,7 @@ class FigureSizePanel(QWidget):
         return spin
 
     def _sync_from_figure(self) -> None:
+        self.active_panel_label.refresh(self._figure)
         self._updating = True
         self.aspect_combo.setCurrentText(self._figure.aspect_preset)
         self.publication_combo.setCurrentIndex(0)
@@ -223,6 +234,12 @@ class FigureSizePanel(QWidget):
         self.tick_font_spin.setValue(self._figure.tick_label_font_size)
         self.legend_font_spin.setValue(self._figure.legend_font_size)
         self._updating = False
+
+    def set_figure(self, figure: GnoviFigure) -> None:
+        """Repoint this panel at a different `GnoviFigure` (e.g. after
+        Open/New Project swaps the active figure) and reload from it."""
+        self._figure = figure
+        self.refresh()
 
     def refresh(self) -> None:
         """Reload every field from the live `GnoviFigure` -- call this after
@@ -329,6 +346,7 @@ class FigureSizePanel(QWidget):
         _text, (rows, cols) = LAYOUT_PRESETS[index]
         self._figure.set_layout(rows, cols)
         self._refresh_panel_options()
+        self.active_panel_label.refresh(self._figure)
         self.changed.emit()
         self.panel_switched.emit()
 
@@ -336,6 +354,7 @@ class FigureSizePanel(QWidget):
         if self._updating or index < 0:
             return
         self._figure.set_active_panel(index)
+        self.active_panel_label.refresh(self._figure)
         self.panel_switched.emit()
 
     def _apply_panel_labels(self, checked: bool) -> None:

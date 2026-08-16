@@ -4,6 +4,7 @@ import copy
 
 from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.plotting.figure import GnoviFigure
+from gnovi_plot.plotting.graph import dataset_identity_memo
 
 # Bound on how many undo steps are kept -- snapshots are cheap (see
 # `snapshot_figure`) but unbounded growth over a long session is still
@@ -81,5 +82,4 @@ def snapshot_figure(figure: GnoviFigure, dataset_manager: DatasetManager) -> Gno
     Dataset -- exactly like the figure being snapshotted, undo/redo never
     diverges a series from the dataset's current working data.
     """
-    memo = {id(dataset): dataset for dataset in dataset_manager.datasets}
-    return copy.deepcopy(figure, memo)
+    return copy.deepcopy(figure, dataset_identity_memo(dataset_manager))

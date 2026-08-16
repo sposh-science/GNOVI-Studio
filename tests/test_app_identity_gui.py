@@ -8,7 +8,7 @@ from gnovi_plot.gui.styles import PlotTheme, build_stylesheet
 
 def test_window_title_is_the_product_name(qapp):
     window = MainWindow()
-    assert window.windowTitle() == APP_NAME
+    assert window.windowTitle() == f"Untitled Project — {APP_NAME}"
     window.close()
 
 
@@ -40,7 +40,7 @@ def test_selecting_dark_plot_theme_updates_state_and_settings(qapp):
 
     window._on_theme_changed(PlotTheme.DARK)
 
-    assert window._plot_theme == PlotTheme.DARK
+    assert window.figure_model.plot_theme == PlotTheme.DARK
     assert window._settings.value("plot_theme") == "dark"
     window.close()
 
@@ -69,14 +69,25 @@ def test_selecting_dark_plot_theme_recolors_the_canvas_only(qapp):
     window.close()
 
 
-def test_dark_plot_theme_does_not_default_export_to_a_dark_background(qapp):
-    """Export Figure keeps its own explicit, independent background choice
-    (unchecked "Dark background" by default) regardless of the currently
-    selected Plot Theme -- see export.figure_export / ExportFigureDialog."""
+def test_export_dialog_background_defaults_to_as_shown_matching_the_live_figure(qapp):
+    """Export Figure is WYSIWYG: it saves the live on-screen Figure, which
+    already reflects the figure's current Plot Theme (declarative
+    `GnoviFigure` state, see `plotting.figure.PlotTheme`) via
+    `MainWindow._rerender`'s `dark_mode` -- so "As shown" (the Background
+    combo's default) alone reproduces the figure's current appearance,
+    with no separate theme-tracking checkbox needed. Opening the dialog
+    never mutates the figure's own theme."""
     window = MainWindow()
     window._on_theme_changed(PlotTheme.DARK)
 
-    dialog = ExportFigureDialog(window.figure_model, window)
+    dark_dialog = ExportFigureDialog(window.figure_model, window.plot_canvas, window)
+    assert dark_dialog.background_combo.currentText() == "As shown"
+    assert window.figure_model.plot_theme == PlotTheme.DARK  # opening the dialog never mutates it
+    assert window.plot_canvas.figure.get_facecolor() != (1.0, 1.0, 1.0, 1.0)
 
-    assert dialog.dark_background_check.isChecked() is False
+    window._on_theme_changed(PlotTheme.LIGHT)
+    light_dialog = ExportFigureDialog(window.figure_model, window.plot_canvas, window)
+    assert light_dialog.background_combo.currentText() == "As shown"
+    assert window.plot_canvas.figure.get_facecolor() == (1.0, 1.0, 1.0, 1.0)
+
     window.close()

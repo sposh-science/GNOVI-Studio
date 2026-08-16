@@ -4,17 +4,29 @@ from enum import Enum
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel
 
-from gnovi_plot.plotting.backends.matplotlib_backend import apply_figure_layout, render_figure
+from gnovi_plot.gui.styles import ACTIVE_PANEL_BADGE_COLOR
+from gnovi_plot.plotting.backends.matplotlib_backend import (
+    apply_figure_layout,
+    fit_panel_legends_to_axes,
+    render_figure,
+)
 from gnovi_plot.plotting.figure import GnoviFigure
 
-# Interactive-only chrome -- deliberately never part of
-# `matplotlib_backend.render_figure`/`render_panel` (the shared on-screen +
-# export drawing code), so neither the active-panel highlight nor the
-# reference cursor ever appears in an exported file.
-_ACTIVE_PANEL_COLOR = "#2f6fed"
-_ACTIVE_PANEL_LINEWIDTH = 2.2
+# Interactive-only chrome, kept out of scientific output two different
+# ways: the active-panel badge is a separate Qt widget never added to the
+# Matplotlib Figure at all (see `_ActivePanelBadge`), so it structurally
+# cannot appear in any export. The reference cursor below, in contrast, IS
+# drawn as real Matplotlib `Line2D` artists directly on the live Figure
+# (see `update_reference_cursor`) -- since that same live Figure is now
+# GNOVI Export Figure's own WYSIWYG source (see the class docstring), any
+# caller saving it must explicitly call `clear_reference_cursor()` first
+# (see `gui.dialogs.export_figure_dialog.ExportFigureDialog
+# ._hide_gui_only_overlays` and `gui.main_window._CursorSafeNavigationToolbar`).
 _CURSOR_COLOR = "#8a8f99"
+_ACTIVE_PANEL_BADGE_MARGIN_PX = 6
 
 
 class ReferenceCursorMode(str, Enum):
@@ -28,14 +40,43 @@ class ReferenceCursorMode(str, Enum):
     CROSSHAIR = "crosshair"
 
 
+class _ActivePanelBadge(QLabel):
+    """GUI-only "which panel is active" indicator -- a plain Qt child
+    widget floating above the canvas, entirely separate from the
+    Matplotlib Figure/Axes. Never a spine/border highlight: scientific
+    axes styling (spine color/width, exactly as the user configured it in
+    Axes settings) is never touched to indicate selection. Since this is
+    a Qt widget drawn by Qt's own compositor on top of the canvas -- not a
+    Matplotlib artist -- it structurally cannot appear in `ax.figure`'s own
+    rendering, and therefore never appears in Matplotlib's toolbar "Save",
+    nor in any PNG/TIFF/SVG/PDF export (those all render a fresh, separate
+    `Figure` -- see `export.figure_export` -- that this widget was never
+    part of to begin with)."""
+
+    def __init__(self, parent) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setStyleSheet(
+            f"background-color: {ACTIVE_PANEL_BADGE_COLOR}; color: white; "
+            "font-weight: 600; font-size: 8pt; padding: 2px 7px; border-radius: 8px;"
+        )
+        self.hide()
+
+
 class PlotCanvas(FigureCanvasQTAgg):
     """Interactive multi-panel Matplotlib canvas embedded in the GUI.
 
     Keeps the Matplotlib Axes grid in sync with `GnoviFigure.layout`, but
     delegates the actual drawing to `plotting.backends.matplotlib_backend`
     so the exact same code path renders on-screen and into exported files.
-    On-screen canvas pixel size never determines export resolution -- export
-    always builds its own correctly-sized Figure (see `export.figure_export`).
+    `self.figure` -- this canvas's own live Matplotlib Figure -- is also
+    the WYSIWYG export source: `gui.dialogs.export_figure_dialog` saves it
+    directly via `export.figure_export.export_live_figure` for "Complete
+    Figure"/"Active Panel" export, exactly like the Matplotlib navigation
+    toolbar's own "Save" button does, rather than reconstructing a second
+    Figure. (`export.figure_export.export_figure` still builds its own
+    fresh, correctly-sized Figure for headless/scripted use -- a
+    `GnoviFigure` model with no live canvas involved at all.)
 
     When `GnoviFigure.lock_aspect_ratio` is set, the canvas stays fully
     responsive to workspace resizing but letterboxes/pillarboxes the actual
@@ -43,6 +84,25 @@ class PlotCanvas(FigureCanvasQTAgg):
     `figure_height_in` aspect ratio is always what's previewed, rather than
     stretching to fill whatever shape the splitter happens to be -- see
     `_letterbox_rect`.
+
+    After every render (and on every resize), also runs
+    `matplotlib_backend.fit_panel_legends_to_axes` -- a preview-only pass
+    that shrinks a panel's on-screen legend (padding, then font size, down
+    to a readability floor) if it would otherwise overflow into a
+    neighboring panel, WITHOUT touching the configured
+    `Panel.legend_fontsize`/`GnoviFigure.legend_font_size`. Since GNOVI's
+    own Export Figure now saves this exact live Figure, an exported legend
+    reflects whatever's genuinely on screen at export time (true WYSIWYG,
+    matching the Matplotlib toolbar's own Save) -- the headless
+    `export.figure_export.export_figure` path (no live canvas) never
+    shrinks anything, always using the exact configured size.
+
+    Which panel is active is shown by `_ActivePanelBadge`, a plain Qt
+    overlay widget positioned over the active Axes -- never a spine/border
+    color change on the Axes themselves (scientific axes styling and GUI
+    selection state stay completely separate). Being a Qt widget, not a
+    Matplotlib artist, it structurally can't appear in Matplotlib's
+    toolbar "Save" or any export.
     """
 
     def __init__(self, parent=None):
@@ -52,8 +112,10 @@ class PlotCanvas(FigureCanvasQTAgg):
         self._layout: tuple[int, int] | None = None
         self.axes_list: list = []
         self._last_figure: GnoviFigure | None = None
+        self._last_dark_mode: bool = False
         self._cursor_mode: ReferenceCursorMode = ReferenceCursorMode.OFF
         self._cursor_artists: list = []
+        self._active_panel_badge = _ActivePanelBadge(self)
         self._ensure_layout((1, 1))
 
     def _ensure_layout(self, layout: tuple[int, int]) -> None:
@@ -94,19 +156,26 @@ class PlotCanvas(FigureCanvasQTAgg):
         # our stale references too (without calling .remove() on them: cla()
         # already did, and doing so again raises).
         self._cursor_artists = []
-        if len(self.axes_list) > 1:
-            self._highlight_active_panel(figure.active_panel_index)
         self._last_figure = figure
+        self._last_dark_mode = dark_mode
         self._apply_layout(figure)
+        self.draw()  # synchronous: fit_panel_legends_to_axes/badge positioning need real extents
+        fit_panel_legends_to_axes(self.axes_list, figure, dark_mode=dark_mode)
+        self._update_active_panel_badge(figure)
         self.draw_idle()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        # Keep an aspect-locked preview correctly letterboxed as the
-        # workspace resizes (splitter drags, window resize) without waiting
-        # for the next content change -- cheap (no re-render of series data).
+        # Keep an aspect-locked preview correctly letterboxed, any panel's
+        # on-screen legend correctly fitted, and the active-panel badge
+        # correctly positioned, as the workspace resizes (splitter drags,
+        # drawer collapse/expand, window resize) -- without waiting for the
+        # next content change.
         if self._last_figure is not None:
             self._apply_layout(self._last_figure)
+            self.draw()
+            fit_panel_legends_to_axes(self.axes_list, self._last_figure, dark_mode=self._last_dark_mode)
+            self._update_active_panel_badge(self._last_figure)
             self.draw_idle()
 
     def _apply_layout(self, figure: GnoviFigure) -> None:
@@ -141,17 +210,53 @@ class PlotCanvas(FigureCanvasQTAgg):
         bottom = (1.0 - content_h_frac) / 2
         return (left, bottom, left + content_w_frac, bottom + content_h_frac)
 
-    def _highlight_active_panel(self, active_index: int) -> None:
-        """A subtle accent-colored border around whichever panel is active,
-        so "click a panel to make it active" (see MainWindow._on_canvas_click)
-        has visible feedback in a multi-panel layout. Single-panel layouts
-        skip this entirely -- there's nothing to distinguish."""
-        if not 0 <= active_index < len(self.axes_list):
+    def _update_active_panel_badge(self, figure: GnoviFigure) -> None:
+        """Move/relabel the GUI-only active-panel badge (see
+        `_ActivePanelBadge`) to sit just OUTSIDE the active panel's Axes,
+        above its top-right corner -- so "click a panel to make it active"
+        (see `MainWindow._on_canvas_click`) has visible feedback without
+        ever occupying scientific plotting space or touching the Axes/
+        spines themselves. Shown for every layout, including a single panel
+        (1x1), per the badge's own purpose: "which panel is active" stays
+        meaningful even with just one. Recomputed from the active Axes'
+        actual current on-screen position on every call, so it tracks any
+        cause of that position changing (resize, drawer/bottom-panel
+        resize, layout change, Figure/Panel Aspect Ratio change, margin/
+        spacing change) automatically -- see `render()`/`resizeEvent()`,
+        the only two callers.
+        """
+        index = figure.active_panel_index
+        if not 0 <= index < len(self.axes_list):
+            self._active_panel_badge.hide()
             return
-        for spine in self.axes_list[active_index].spines.values():
-            if spine.get_visible():
-                spine.set_edgecolor(_ACTIVE_PANEL_COLOR)
-                spine.set_linewidth(max(spine.get_linewidth(), _ACTIVE_PANEL_LINEWIDTH))
+        ax = self.axes_list[index]
+        renderer = self.get_renderer()
+        if renderer is None:
+            self._active_panel_badge.hide()
+            return
+        ax_bbox = ax.get_window_extent(renderer=renderer)
+
+        self._active_panel_badge.setText(f"P{index + 1} · ACTIVE")
+        self._active_panel_badge.adjustSize()
+        badge_w = self._active_panel_badge.width()
+        badge_h = self._active_panel_badge.height()
+
+        # Matplotlib's window extent is bottom-left-origin (y grows
+        # upward); Qt widget coordinates are top-left-origin (y grows
+        # downward). Right-aligned with the panel's own right edge, resting
+        # just above its top edge.
+        x = int(ax_bbox.x1) - badge_w
+        y = int(self.height() - ax_bbox.y1) - badge_h - _ACTIVE_PANEL_BADGE_MARGIN_PX
+        # Clamped to stay fully within the canvas widget -- this is a
+        # GUI-only overlay, so it must never be allowed to reshuffle panel
+        # geometry (margins/spacing) just to make room for itself; if a
+        # panel sits flush against the figure's own edge, the badge simply
+        # sits as close as it can rather than pushing anything.
+        x = max(0, min(x, self.width() - badge_w))
+        y = max(0, y)
+        self._active_panel_badge.move(x, y)
+        self._active_panel_badge.raise_()
+        self._active_panel_badge.show()
 
     # --- Reference cursor (Off / X line / Y line / Crosshair) --------------
 

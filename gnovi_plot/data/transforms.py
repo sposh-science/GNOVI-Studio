@@ -14,6 +14,23 @@ class CalculatedColumnInfo:
     source_columns: list[str]
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "formula": self.formula,
+            "source_columns": list(self.source_columns),
+            "created_at": self.created_at.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CalculatedColumnInfo":
+        return cls(
+            name=data["name"],
+            formula=data["formula"],
+            source_columns=list(data["source_columns"]),
+            created_at=datetime.fromisoformat(data["created_at"]),
+        )
+
 
 @dataclass(frozen=True)
 class Transformation:
@@ -31,6 +48,23 @@ class Transformation:
     description: str
     detail: dict
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": self.kind,
+            "description": self.description,
+            "detail": self.detail,
+            "timestamp": self.timestamp.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Transformation":
+        return cls(
+            kind=data["kind"],
+            description=data["description"],
+            detail=data["detail"],
+            timestamp=datetime.fromisoformat(data["timestamp"]),
+        )
 
 
 def describe_row_positions(positions: list[int]) -> str:

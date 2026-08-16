@@ -108,6 +108,74 @@ class PlotSeries:
         start, end = self.row_range
         return self.dataset.dataframe.iloc[start:end]
 
+    def to_dict(self) -> dict:
+        """Project-save representation: stores `dataset_id` rather than a
+        nested `Dataset` (or its DataFrame) -- the caller resolves it back
+        to a shared live `Dataset` on load via `from_dict`'s
+        `dataset_lookup` (see `core.project_io`)."""
+        return {
+            "dataset_id": self.dataset.id,
+            "plot_type": self.plot_type.value,
+            "label": self.label,
+            "x_column": self.x_column,
+            "y_column": self.y_column,
+            "row_range": list(self.row_range) if self.row_range is not None else None,
+            "visible": self.visible,
+            "color": self.color,
+            "color_is_manual": self.color_is_manual,
+            "line_width": self.line_width,
+            "line_style": self.line_style,
+            "marker": self.marker,
+            "marker_size": self.marker_size,
+            "marker_filled": self.marker_filled,
+            "marker_edge_width": self.marker_edge_width,
+            "alpha": self.alpha,
+            "zorder": self.zorder,
+            "bins": self.bins,
+            "hist_mode": self.hist_mode,
+            "y_offset": self.y_offset,
+            "normalize_to_max": self.normalize_to_max,
+            "id": self.id,
+            "stale": self.stale,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, dataset_lookup: dict[str, Dataset]) -> "PlotSeries | None":
+        """Reconstruct from `to_dict`'s output, resolving `dataset_id`
+        against `dataset_lookup`. Returns None -- rather than raising -- if
+        `dataset_id` isn't in `dataset_lookup`, so one stale reference in an
+        otherwise-valid project doesn't block loading the rest (the caller
+        is expected to log/report skipped series; see `core.project_io`)."""
+        dataset = dataset_lookup.get(data["dataset_id"])
+        if dataset is None:
+            return None
+        row_range = data.get("row_range")
+        return cls(
+            dataset=dataset,
+            plot_type=PlotType(data["plot_type"]),
+            label=data["label"],
+            x_column=data["x_column"],
+            y_column=data.get("y_column"),
+            row_range=tuple(row_range) if row_range is not None else None,
+            visible=data.get("visible", True),
+            color=data.get("color"),
+            color_is_manual=data.get("color_is_manual", False),
+            line_width=data.get("line_width", 1.5),
+            line_style=data.get("line_style", "-"),
+            marker=data.get("marker", ""),
+            marker_size=data.get("marker_size", 6.0),
+            marker_filled=data.get("marker_filled", True),
+            marker_edge_width=data.get("marker_edge_width", 1.0),
+            alpha=data.get("alpha", 1.0),
+            zorder=data.get("zorder", 2.0),
+            bins=data.get("bins", "auto"),
+            hist_mode=data.get("hist_mode", "frequency"),
+            y_offset=data.get("y_offset", 0.0),
+            normalize_to_max=data.get("normalize_to_max", False),
+            id=data["id"],
+            stale=data.get("stale", False),
+        )
+
     @classmethod
     def line(
         cls,

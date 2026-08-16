@@ -52,6 +52,34 @@ def test_letterbox_rect_letterboxes_when_canvas_is_taller_than_target(qapp):
     assert (top - bottom) == pytest.approx(0.5, abs=0.01)
 
 
+def test_letterbox_rect_matches_a_4_3_target_in_a_wider_canvas(qapp):
+    figure = GnoviFigure(figure_width_in=8.0, figure_height_in=6.0, lock_aspect_ratio=True)  # 4:3
+    canvas = PlotCanvas()
+    canvas.resize(1000, 500)  # 2:1, wider than 4:3
+
+    left, bottom, right, top = canvas._letterbox_rect(figure)
+    content_w_px = (right - left) * canvas.width()
+    content_h_px = (top - bottom) * canvas.height()
+
+    assert bottom == pytest.approx(0.0)
+    assert top == pytest.approx(1.0)
+    assert content_w_px / content_h_px == pytest.approx(8.0 / 6.0, rel=1e-3)
+
+
+def test_letterbox_rect_matches_a_16_9_target_in_a_taller_canvas(qapp):
+    figure = GnoviFigure(figure_width_in=16.0, figure_height_in=9.0, lock_aspect_ratio=True)
+    canvas = PlotCanvas()
+    canvas.resize(600, 900)  # 2:3, taller than 16:9
+
+    left, bottom, right, top = canvas._letterbox_rect(figure)
+    content_w_px = (right - left) * canvas.width()
+    content_h_px = (top - bottom) * canvas.height()
+
+    assert left == pytest.approx(0.0)
+    assert right == pytest.approx(1.0)
+    assert content_w_px / content_h_px == pytest.approx(16.0 / 9.0, rel=1e-3)
+
+
 def test_letterbox_rect_is_full_bleed_for_nonpositive_figure_size(qapp):
     figure = GnoviFigure(figure_width_in=0.0, figure_height_in=4.0, lock_aspect_ratio=True)
     canvas = PlotCanvas()
@@ -79,10 +107,17 @@ def test_resize_event_is_a_no_op_before_the_first_render(qapp):
     canvas.resize(500, 400)  # must not raise even though nothing was rendered yet
 
 
-# --- Active-panel highlight (click-to-activate visual feedback) ----------------
+# --- Active-panel badge (click-to-activate visual feedback) --------------------
+#
+# A plain Qt overlay widget (`_ActivePanelBadge`), never a spine/border
+# color change on the Axes -- see `tests/test_active_panel_badge.py` for
+# the full GUI-driven coverage (positioning, moving between panels,
+# absence from Matplotlib Save/export). These stay here only as a smoke
+# check that rendering with any panel count never raises and never mutates
+# spine styling.
 
 
-def test_single_panel_layout_has_no_highlight_applied(qapp):
+def test_single_panel_layout_renders_without_raising(qapp):
     figure = GnoviFigure()
     figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
     canvas = PlotCanvas()
@@ -92,7 +127,7 @@ def test_single_panel_layout_has_no_highlight_applied(qapp):
     assert len(canvas.axes_list) == 1
 
 
-def test_active_panel_gets_a_distinctly_colored_thicker_spine_in_multi_panel_layout(qapp):
+def test_activating_a_panel_never_changes_spine_color_or_width(qapp):
     figure = GnoviFigure()
     figure.set_layout(1, 2)
     figure.set_active_panel(1)
@@ -102,8 +137,11 @@ def test_active_panel_gets_a_distinctly_colored_thicker_spine_in_multi_panel_lay
 
     active_spine = canvas.axes_list[1].spines["top"]
     inactive_spine = canvas.axes_list[0].spines["top"]
-    assert active_spine.get_edgecolor() != inactive_spine.get_edgecolor()
-    assert active_spine.get_linewidth() > inactive_spine.get_linewidth()
+    # Scientific axes styling stays completely separate from GUI selection
+    # state -- both panels' spines look identical (default black, default
+    # width) regardless of which one is active.
+    assert active_spine.get_edgecolor() == inactive_spine.get_edgecolor()
+    assert active_spine.get_linewidth() == inactive_spine.get_linewidth()
 
 
 def test_panel_index_for_axes_resolves_click_targets(qapp):

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from PySide6.QtCore import QRect, QSettings, Qt
 from PySide6.QtGui import QActionGroup, QGuiApplication, QKeySequence
@@ -19,11 +21,13 @@ from PySide6.QtWidgets import (
 
 from gnovi_plot.analysis.segments import InvalidRowRangeError, contiguous_row_range
 from gnovi_plot.core.app_info import APP_NAME, about_text
-from gnovi_plot.data.dataset_manager import DatasetManager
+from gnovi_plot.core.project import Project
+from gnovi_plot.core.project_io import ProjectIOError, load_project, save_project
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
 from gnovi_plot.gui.dialogs.export_figure_dialog import ExportFigureDialog
 from gnovi_plot.gui.styles import PlotTheme, apply_app_theme
 from gnovi_plot.gui.undo_manager import UndoManager, snapshot_figure
+from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.bottom_panel import BottomPanel
 from gnovi_plot.gui.widgets.data_tools_panel import DataToolsPanel
 from gnovi_plot.gui.widgets.dataframe_table_model import DataFrameTableModel
@@ -31,6 +35,7 @@ from gnovi_plot.gui.widgets.dataset_panel import DatasetPanel
 from gnovi_plot.gui.widgets.figure_layout_panel import FigureLayoutPanel
 from gnovi_plot.gui.widgets.figure_properties_panel import FigurePropertiesPanel
 from gnovi_plot.gui.widgets.figure_size_panel import LAYOUT_PRESETS, FigureSizePanel
+from gnovi_plot.gui.widgets.graph_library_panel import GraphLibraryPanel
 from gnovi_plot.gui.widgets.plot_canvas import PlotCanvas, ReferenceCursorMode
 from gnovi_plot.gui.widgets.plot_series_panel import PlotSeriesPanel
 from gnovi_plot.gui.widgets.tool_drawer import ToolDrawer
@@ -100,6 +105,23 @@ def _wrap_scrollable(content) -> QScrollArea:
     return scroll
 
 
+class _CursorSafeNavigationToolbar(NavigationToolbar2QT):
+    """The Matplotlib navigation toolbar's own "Save" button calls
+    `self.canvas.figure.savefig(...)` directly on the live Figure --
+    correct for GNOVI's WYSIWYG export goal (see `ExportFigureDialog`'s own
+    docstring), but the reference cursor is a real Matplotlib artist on
+    that same Figure (see `PlotCanvas.update_reference_cursor` -- unlike
+    the active-panel badge, a separate Qt widget never added to the
+    Figure), so saving it as-is would otherwise export whatever crosshair/
+    reference line happens to be showing. Cleared immediately before
+    Matplotlib's own save dialog opens; it simply reappears on the next
+    mouse move over the canvas."""
+
+    def save_figure(self, *args):
+        self.canvas.clear_reference_cursor()
+        super().save_figure(*args)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -115,18 +137,35 @@ class MainWindow(QMainWindow):
         # (see gui.styles module docstring) -- only the plot canvas below is
         # user-switchable.
         apply_app_theme(QApplication.instance())
+        # Plot Theme is declarative `GnoviFigure` state now (see
+        # `plotting.figure.PlotTheme`), not a cached MainWindow attribute --
+        # every read goes through `self.figure_model.plot_theme` so it's
+        # always correct for whichever figure is currently active,
+        # including after Open/New Project swaps it. QSettings only seeds
+        # the *default* theme for a brand-new figure/project (see
+        # `_new_project`), never overrides a loaded project's own saved
+        # theme.
         try:
-            self._plot_theme = PlotTheme(self._settings.value("plot_theme", PlotTheme.LIGHT.value))
+            self._default_new_figure_theme = PlotTheme(
+                self._settings.value("plot_theme", PlotTheme.LIGHT.value)
+            )
         except ValueError:
-            self._plot_theme = PlotTheme.LIGHT
+            self._default_new_figure_theme = PlotTheme.LIGHT
 
         screen = QGuiApplication.primaryScreen()
         available = screen.availableGeometry() if screen is not None else _FALLBACK_AVAILABLE_GEOMETRY
         geometry = compute_initial_geometry(available)
         self.setGeometry(geometry)
 
-        self.dataset_manager = DatasetManager()
-        self.figure_model = GnoviFigure()
+        # `self._project` is the source of truth for everything persisted
+        # (see core.project.Project / core.project_io); `dataset_manager`/
+        # `figure_model` stay as MainWindow's own attribute names (used
+        # throughout this file) but are just references into it, reassigned
+        # together by `_load_project_into_window` on New/Open Project.
+        self._project = self._new_project()
+        self.dataset_manager = self._project.dataset_manager
+        self.figure_model = self._project.active_figure
+        self._dirty = False
 
         # Undo/Redo (figure/panels/series/styling only -- see
         # gui.undo_manager for why dataset mutations are deliberately out
@@ -149,7 +188,7 @@ class MainWindow(QMainWindow):
         # content as its text width changes -- exactly the instability
         # ruled out below. The status bar's own fixed-width `coord_label`
         # (added further down) replaces it at a stable location instead.
-        nav_toolbar = NavigationToolbar2QT(self.plot_canvas, self, coordinates=False)
+        nav_toolbar = _CursorSafeNavigationToolbar(self.plot_canvas, self, coordinates=False)
         self.addToolBar(nav_toolbar)
         # Forces the Matplotlib toolbar and the custom "Main" toolbar (built
         # in _create_toolbar) onto separate rows unconditionally, so neither
@@ -179,6 +218,16 @@ class MainWindow(QMainWindow):
         self.figure_size_panel = FigureSizePanel(self.figure_model)
         self.figure_layout_panel = FigureLayoutPanel(self.figure_model)
         self.data_tools_panel = DataToolsPanel(self.preview_table)
+        # `get_figure`/`get_dataset_manager` are re-invoked on every Graph
+        # Library action rather than captured once, so this panel always
+        # acts on the *current* project even after Open/New Project swaps
+        # `self.figure_model`/`self.dataset_manager` -- see
+        # `GraphLibraryPanel`'s docstring.
+        self.graph_library_panel = GraphLibraryPanel(
+            self._project.graph_library,
+            lambda: self.figure_model,
+            lambda: self.dataset_manager,
+        )
 
         # LEFT: compact DSO-style vertical tool strip (Data / Plot / Series /
         # Figure / Layout / Axes) plus a single-page drawer next to it --
@@ -205,8 +254,15 @@ class MainWindow(QMainWindow):
         data_page_layout.addWidget(self.dataset_panel.dataset_section)
         data_page_layout.addStretch(1)
 
+        # DatasetPanel itself stays figure-agnostic (dataset/plot-column
+        # concerns only, see its own docstring) -- the Plot page's "Active
+        # panel" context line is composed here instead, since MainWindow is
+        # what already knows about both `figure_model` and `dataset_panel`.
+        self.plot_page_active_panel_label = ActivePanelLabel(self.figure_model)
+
         plot_page = QWidget()
         plot_page_layout = QVBoxLayout(plot_page)
+        plot_page_layout.addWidget(self.plot_page_active_panel_label)
         plot_page_layout.addWidget(self.dataset_panel.plot_section)
         plot_page_layout.addStretch(1)
 
@@ -288,6 +344,7 @@ class MainWindow(QMainWindow):
         # deliberately inert (Results) beyond that this milestone.
         self.bottom_panel = BottomPanel()
         self.bottom_panel.set_data_widget(self.preview_table)
+        self.bottom_panel.set_graphs_widget(self.graph_library_panel)
         self.bottom_panel.set_transformations_widget(self.data_tools_panel.history_group)
         self._bottom_panel_sizes: list[int] | None = None
 
@@ -353,6 +410,9 @@ class MainWindow(QMainWindow):
         self.dataset_panel.add_to_plot_requested.connect(self._on_add_to_plot)
         self.dataset_panel.clear_plot_requested.connect(self._on_clear_plot)
         self.dataset_panel.axis_preset_requested.connect(self._on_axis_preset_requested)
+        self.dataset_panel.datasets_changed.connect(self._on_datasets_changed)
+        self.graph_library_panel.graph_library_changed.connect(self._on_graph_library_changed)
+        self.graph_library_panel.graph_loaded_into_panel.connect(self._on_graph_loaded_into_panel)
         self.series_panel.changed.connect(self._on_figure_content_changed)
         self.properties_panel.changed.connect(self._on_figure_content_changed)
         self.figure_size_panel.changed.connect(self._on_figure_content_changed)
@@ -365,11 +425,25 @@ class MainWindow(QMainWindow):
 
         self._create_menu()
         self._create_toolbar()
+        self._sync_window_title()
 
     # --- Menus -----------------------------------------------------------
 
     def _create_menu(self):
         file_menu = self.menuBar().addMenu("&File")
+        self.new_project_action = file_menu.addAction("New Project")
+        self.new_project_action.setShortcut(QKeySequence.New)
+        self.new_project_action.triggered.connect(self._on_new_project)
+        self.open_project_action = file_menu.addAction("Open Project…")
+        self.open_project_action.setShortcut(QKeySequence.Open)
+        self.open_project_action.triggered.connect(self._on_open_project)
+        self.save_project_action = file_menu.addAction("Save Project")
+        self.save_project_action.setShortcut(QKeySequence.Save)
+        self.save_project_action.triggered.connect(self._on_save_project)
+        self.save_project_as_action = file_menu.addAction("Save Project As…")
+        self.save_project_as_action.setShortcut(QKeySequence.SaveAs)
+        self.save_project_as_action.triggered.connect(self._on_save_project_as)
+        file_menu.addSeparator()
         exit_action = file_menu.addAction("Exit")
         exit_action.triggered.connect(self.close)
 
@@ -460,7 +534,7 @@ class MainWindow(QMainWindow):
         for mode, label in _PLOT_THEME_MENU_LABELS:
             action = theme_menu.addAction(label)
             action.setCheckable(True)
-            action.setChecked(mode == self._plot_theme)
+            action.setChecked(mode == self.figure_model.plot_theme)
             theme_group.addAction(action)
             action.triggered.connect(lambda _checked=False, m=mode: self._on_theme_changed(m))
             self._theme_actions[mode] = action
@@ -579,7 +653,7 @@ class MainWindow(QMainWindow):
 
     def _on_toolbar_theme_changed(self, index: int) -> None:
         mode = self.toolbar_theme_combo.itemData(index)
-        if mode is None or mode == self._plot_theme:
+        if mode is None or mode == self.figure_model.plot_theme:
             return
         self._on_theme_changed(mode)
 
@@ -676,9 +750,12 @@ class MainWindow(QMainWindow):
         self.main_splitter.setSizes(sizes)
 
     def _on_theme_changed(self, mode: PlotTheme | str) -> None:
-        """Change the Plot Theme -- only the Matplotlib canvas re-renders in
-        the new theme (see `_rerender`); the application chrome is never
-        touched (see `gui.styles` module docstring).
+        """Change the active figure's Plot Theme -- declarative
+        `GnoviFigure` state (see `plotting.figure.PlotTheme`), so this is a
+        figure-content edit like any other: undoable, marks the project
+        dirty, and persists in the saved `.gnovi` file. Only the Matplotlib
+        canvas re-renders differently (see `_rerender`); the application
+        chrome is never touched (see `gui.styles` module docstring).
 
         `mode` is normalized to `PlotTheme` here rather than assumed to
         already be one: `QComboBox.itemData()` round-trips a str-subclassed
@@ -687,28 +764,40 @@ class MainWindow(QMainWindow):
         `_on_toolbar_theme_changed` below passes a bare string on every
         toolbar selection. The View menu's `QAction` closures pass a real
         `PlotTheme` (no QVariant round-trip involved), so this also covers
-        that path as a no-op."""
+        that path as a no-op. Guarded against a no-op change (both paths
+        already check before calling this, but an exclusive `QActionGroup`
+        can still re-fire `triggered` for the already-checked action) --
+        otherwise re-selecting the current theme would push a spurious undo
+        checkpoint and mark a clean project dirty for nothing.
+        """
         if not isinstance(mode, PlotTheme):
             mode = PlotTheme(mode)
-        self._plot_theme = mode
+        if mode == self.figure_model.plot_theme:
+            return
+        self.figure_model.plot_theme = mode
+        # Last-used theme becomes the default for the *next* new
+        # figure/project (see `_new_project`) -- never overrides a loaded
+        # project's own saved theme.
         self._settings.setValue("plot_theme", mode.value)
         self._sync_theme_controls()
-        self._rerender()
+        self._on_figure_content_changed()
 
     def _sync_theme_controls(self) -> None:
         """Keep the View > Plot Theme menu and the toolbar Plot Theme combo
-        showing the same selection, regardless of which one the user just
-        changed."""
+        showing the active figure's current theme, regardless of whether it
+        just changed via the menu/toolbar or a different figure became
+        active (Open/New Project, `_load_project_into_window`)."""
+        current = self.figure_model.plot_theme
         for mode, action in self._theme_actions.items():
             action.blockSignals(True)
-            action.setChecked(mode == self._plot_theme)
+            action.setChecked(mode == current)
             action.blockSignals(False)
 
         self.toolbar_theme_combo.blockSignals(True)
-        self.toolbar_theme_combo.setCurrentIndex(self.toolbar_theme_combo.findData(self._plot_theme))
+        self.toolbar_theme_combo.setCurrentIndex(self.toolbar_theme_combo.findData(current))
         self.toolbar_theme_combo.blockSignals(False)
 
-        self.figure_size_panel.set_current_theme(self._plot_theme)
+        self.figure_size_panel.set_current_theme(current)
 
     def _on_cursor_mode_changed(self, mode: ReferenceCursorMode | str) -> None:
         """Normalized the same way and for the same reason as
@@ -774,6 +863,7 @@ class MainWindow(QMainWindow):
         self.data_tools_panel.set_dataset(dataset)
 
     def _on_transformation_applied(self, dataset, row_set_changed: bool) -> None:
+        self._set_dirty(True)
         self.preview_model.set_dataframe(dataset.dataframe)
         self.dataset_panel.refresh_columns()
         if row_set_changed:
@@ -837,7 +927,7 @@ class MainWindow(QMainWindow):
         self._on_add_to_plot([series])
 
     def _on_add_to_plot(self, series_list):
-        dark_mode = self._plot_theme == PlotTheme.DARK
+        dark_mode = self.figure_model.plot_theme == PlotTheme.DARK
         last_id = None
         for series in series_list:
             self.figure_model.add_series(series, dark_mode=dark_mode)
@@ -860,15 +950,17 @@ class MainWindow(QMainWindow):
     def _on_panel_switched(self):
         self.series_panel.refresh()
         self.properties_panel.refresh()
+        self.figure_layout_panel.refresh()
+        self.plot_page_active_panel_label.refresh(self.figure_model)
         self._sync_toolbar_panel_controls()
         self._rerender()
 
     def _on_export_figure(self):
-        dialog = ExportFigureDialog(self.figure_model, self)
+        dialog = ExportFigureDialog(self.figure_model, self.plot_canvas, self)
         dialog.exec()
 
     def _rerender(self):
-        dark_mode = self._plot_theme == PlotTheme.DARK
+        dark_mode = self.figure_model.plot_theme == PlotTheme.DARK
         self.plot_canvas.render(self.figure_model, dark_mode=dark_mode)
         active_axes = self.plot_canvas.active_axes(self.figure_model)
         self.properties_panel.sync_axes_limits(active_axes.get_xlim(), active_axes.get_ylim())
@@ -883,6 +975,7 @@ class MainWindow(QMainWindow):
         navigation (switching the active panel, toggling the Plot Theme)
         must NOT call this, or it would show up as a spurious undo step."""
         self._commit_undo_checkpoint()
+        self._set_dirty(True)
         self._rerender()
 
     def _commit_undo_checkpoint(self) -> None:
@@ -918,6 +1011,7 @@ class MainWindow(QMainWindow):
         exact GnoviFigure instance from construction, so swapping it out
         would leave them silently pointing at stale state."""
         live = self.figure_model
+        live.plot_theme = snapshot.plot_theme
         live.panels = snapshot.panels
         live.layout = snapshot.layout
         live.active_panel_index = min(snapshot.active_panel_index, len(live.panels) - 1)
@@ -926,6 +1020,7 @@ class MainWindow(QMainWindow):
         live.figure_height_in = snapshot.figure_height_in
         live.aspect_preset = snapshot.aspect_preset
         live.lock_aspect_ratio = snapshot.lock_aspect_ratio
+        live.panel_aspect_preset = snapshot.panel_aspect_preset
         live.font_family = snapshot.font_family
         live.base_font_size = snapshot.base_font_size
         live.title_font_size = snapshot.title_font_size
@@ -947,10 +1042,159 @@ class MainWindow(QMainWindow):
         self.properties_panel.refresh()
         self.figure_size_panel.refresh()
         self.figure_layout_panel.refresh()
+        self.plot_page_active_panel_label.refresh(self.figure_model)
         self._sync_toolbar_panel_controls()
+        self._sync_theme_controls()
         self._sync_undo_redo_actions()
+        self._set_dirty(True)
         self._rerender()
 
     def _sync_undo_redo_actions(self) -> None:
         self.undo_action.setEnabled(self._undo_manager.can_undo)
         self.redo_action.setEnabled(self._undo_manager.can_redo)
+
+    # --- Project persistence (New/Open/Save, dirty-state) -------------------
+
+    def _on_datasets_changed(self) -> None:
+        """Dataset import/remove is a project-content change but isn't
+        routed through `_on_figure_content_changed` (it doesn't touch the
+        figure) or `_on_transformation_applied` (it isn't a Working Data
+        transformation on an existing Dataset) -- so it needs its own dirty
+        hook, fed by `DatasetPanel.datasets_changed`."""
+        self._set_dirty(True)
+
+    def _on_graph_library_changed(self) -> None:
+        """Save/Rename/Duplicate/Delete Graph -- only the Graph Library's
+        contents changed, not the figure, so no undo checkpoint/re-render is
+        needed, just marking the project dirty."""
+        self._set_dirty(True)
+
+    def _on_graph_loaded_into_panel(self) -> None:
+        """Load Selected Graph into Active Panel replaced the active
+        panel's series/styling -- handled exactly like any other
+        figure-content edit (undo checkpoint, dirty, re-render, and the
+        Series/Properties panels must reload since the active panel's
+        content changed under them)."""
+        self.series_panel.refresh()
+        self.properties_panel.refresh()
+        self.plot_page_active_panel_label.refresh(self.figure_model)
+        self._on_figure_content_changed()
+
+    def _set_dirty(self, dirty: bool) -> None:
+        self._dirty = dirty
+        self._sync_window_title()
+
+    def _sync_window_title(self) -> None:
+        marker = "*" if self._dirty else ""
+        self.setWindowTitle(f"{self._project.name}{marker} — {APP_NAME}")
+
+    def _confirm_discard_unsaved(self) -> bool:
+        """True if it's safe to proceed (discard/replace the current
+        project) -- either it's not dirty, or the user chose Save/Discard.
+        Shared by New Project, Open Project, and `closeEvent`."""
+        if not self._dirty:
+            return True
+        response = QMessageBox.warning(
+            self,
+            APP_NAME,
+            f"'{self._project.name}' has unsaved changes. Save before continuing?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
+        )
+        if response == QMessageBox.Cancel:
+            return False
+        if response == QMessageBox.Save:
+            return self._on_save_project()
+        return True
+
+    def _new_project(self) -> Project:
+        """A fresh, empty `Project` -- like `Project.new()`, except its
+        default figure's Plot Theme is seeded from QSettings' last-used
+        value (see `__init__`) rather than always `PlotTheme.LIGHT`. Used
+        for the app's initial project and "New Project"; never for Open
+        Project, whose loaded figure's own saved theme always governs."""
+        project = Project.new()
+        project.active_figure.plot_theme = self._default_new_figure_theme
+        return project
+
+    def _on_new_project(self) -> None:
+        if not self._confirm_discard_unsaved():
+            return
+        self._load_project_into_window(self._new_project())
+
+    def _on_open_project(self) -> None:
+        if not self._confirm_discard_unsaved():
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Open Project", "", "Gnovi Project (*.gnovi)")
+        if not path:
+            return
+        try:
+            project = load_project(path)
+        except ProjectIOError as exc:
+            QMessageBox.critical(self, "Open Project", str(exc))
+            return
+        self._load_project_into_window(project)
+
+    def _on_save_project(self) -> bool:
+        """Returns True on success (including a user-cancelled Save As,
+        which is itself not a failure) so `_confirm_discard_unsaved` can use
+        the result to decide whether it's safe to proceed."""
+        if self._project.path is None:
+            return self._on_save_project_as()
+        return self._save_project_to(self._project.path)
+
+    def _on_save_project_as(self) -> bool:
+        default_name = f"{self._project.name}.gnovi"
+        path, _ = QFileDialog.getSaveFileName(self, "Save Project As", default_name, "Gnovi Project (*.gnovi)")
+        if not path:
+            return True
+        if not path.lower().endswith(".gnovi"):
+            path += ".gnovi"
+        return self._save_project_to(path)
+
+    def _save_project_to(self, path) -> bool:
+        try:
+            save_project(self._project, path)
+        except OSError as exc:
+            QMessageBox.critical(self, "Save Project", str(exc))
+            return False
+        self._project.name = Path(path).stem
+        self._set_dirty(False)
+        return True
+
+    def _load_project_into_window(self, project: Project) -> None:
+        """The single path New Project and Open Project both funnel
+        through: repoint every widget that caches the dataset manager/
+        active figure (see each widget's `set_manager`/`set_figure`), reset
+        Undo/Redo to a fresh stack (loading a project must not let the
+        previous project's undo history restore its content -- decision:
+        Undo/Redo is scoped to the FIGURE, not the project on disk), and
+        reset the dirty flag."""
+        self._project = project
+        self.dataset_manager = project.dataset_manager
+        self.figure_model = project.active_figure
+
+        self.dataset_panel.set_manager(self.dataset_manager)
+        self.series_panel.set_figure(self.figure_model)
+        self.properties_panel.set_figure(self.figure_model)
+        self.figure_size_panel.set_figure(self.figure_model)
+        self.figure_layout_panel.set_figure(self.figure_model)
+        self.graph_library_panel.set_library(project.graph_library)
+        self.plot_page_active_panel_label.refresh(self.figure_model)
+
+        self._undo_manager = UndoManager()
+        self._pending_undo_snapshot = snapshot_figure(self.figure_model, self.dataset_manager)
+        self._sync_undo_redo_actions()
+
+        self.preview_model.set_dataframe(None)
+        self.data_tools_panel.set_dataset(None)
+        self._sync_toolbar_panel_controls()
+        self._sync_theme_controls()  # the newly-active figure may have a different Plot Theme
+        self._rerender()
+        self._set_dirty(False)
+
+    def closeEvent(self, event) -> None:
+        if self._confirm_discard_unsaved():
+            event.accept()
+        else:
+            event.ignore()

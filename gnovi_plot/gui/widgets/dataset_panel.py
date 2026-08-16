@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -75,6 +76,21 @@ _PLOT_PRESET_OPTIONS = [
 # full XRD analysis (Scherrer, peak fitting, etc.) is a later milestone.
 _XRD_AXIS_PRESET = {"xlabel": "2θ (°)", "ylabel": "Intensity (a.u.)"}
 
+# Shown as the Plot page's dataset combo's sole entry when the
+# DatasetManager is empty -- see `_sync_dataset_combo`.
+_NO_DATASET_PLACEHOLDER_TEXT = "(no dataset)"
+# Long imported filenames/dataset names shouldn't stretch the compact
+# drawer -- elide the combo item text itself (character-based, not
+# width-based, so it stays deterministic across platforms/fonts) and always
+# carry the full name in the tooltip.
+_DATASET_COMBO_NAME_MAX_CHARS = 40
+
+
+def _elide_dataset_name(name: str) -> str:
+    if len(name) > _DATASET_COMBO_NAME_MAX_CHARS:
+        return name[: _DATASET_COMBO_NAME_MAX_CHARS - 1].rstrip() + "…"
+    return name
+
 
 class DatasetPanel(QWidget):
     """Left-side panel: dataset list/import/remove plus plot-type and column
@@ -84,6 +100,7 @@ class DatasetPanel(QWidget):
     add_to_plot_requested = Signal(list)  # list[PlotSeries]
     clear_plot_requested = Signal()
     axis_preset_requested = Signal(dict)  # {"xlabel": ..., "ylabel": ...}
+    datasets_changed = Signal()  # emitted after import/remove -- a content, not selection, change
 
     def __init__(self, dataset_manager: DatasetManager, preview_table: QTableView, parent=None):
         super().__init__(parent)
@@ -95,6 +112,17 @@ class DatasetPanel(QWidget):
         self.import_button = QPushButton("Import Data")
         self.import_button.setProperty("primary", True)
         self.remove_button = QPushButton("Remove Dataset")
+
+        # Directly selectable from the Plot page (not just a read-only echo
+        # of the Data page): lists every Dataset in `_manager`, kept
+        # bidirectionally synchronized with `dataset_list`'s selection below
+        # so there is exactly one "current dataset" state, never a second,
+        # independent one -- see `_sync_dataset_combo`/`_on_dataset_combo_changed`.
+        self.dataset_combo_label = QLabel("Dataset")
+        dataset_combo_font = QFont(self.dataset_combo_label.font())
+        dataset_combo_font.setBold(True)
+        self.dataset_combo_label.setFont(dataset_combo_font)
+        self.active_dataset_combo = QComboBox()
 
         self.plot_preset_combo = QComboBox()
         for text, preset in _PLOT_PRESET_OPTIONS:
@@ -146,6 +174,8 @@ class DatasetPanel(QWidget):
 
         plot_group = QGroupBox("Add to Plot")
         plot_layout = QVBoxLayout(plot_group)
+        plot_layout.addWidget(self.dataset_combo_label)
+        plot_layout.addWidget(self.active_dataset_combo)
         plot_layout.addWidget(QLabel("Plot preset"))
         plot_layout.addWidget(self.plot_preset_combo)
         plot_layout.addWidget(QLabel("Plot type"))
@@ -186,6 +216,7 @@ class DatasetPanel(QWidget):
         self.import_button.clicked.connect(self._on_import_clicked)
         self.remove_button.clicked.connect(self._on_remove_clicked)
         self.dataset_list.currentItemChanged.connect(self._on_selection_changed)
+        self.active_dataset_combo.currentIndexChanged.connect(self._on_dataset_combo_changed)
         self.plot_preset_combo.currentIndexChanged.connect(self._on_preset_changed)
         self.plot_type_combo.currentIndexChanged.connect(self._on_plot_type_changed)
         self.plot_mode_combo.currentIndexChanged.connect(self._update_cycle_preview)
@@ -201,6 +232,7 @@ class DatasetPanel(QWidget):
 
         self._on_plot_type_changed()
         self._reset_manual_cycles()
+        self._sync_dataset_combo(self._current_dataset())
 
     def _on_import_clicked(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Import Data", "", _FILE_FILTER)
@@ -229,12 +261,21 @@ class DatasetPanel(QWidget):
         )
         self._manager.add(dataset)
         self._refresh_list(select_id=dataset.id)
+        self.datasets_changed.emit()
 
     def _on_remove_clicked(self) -> None:
         dataset = self._current_dataset()
         if dataset is None:
             return
         self._manager.remove(dataset.id)
+        self._refresh_list()
+        self.datasets_changed.emit()
+
+    def set_manager(self, dataset_manager: DatasetManager) -> None:
+        """Repoint this panel at a different `DatasetManager` (e.g. after
+        Open/New Project swaps the active project) and reload its list."""
+        self._manager = dataset_manager
+        self._manual_ranges = None
         self._refresh_list()
 
     def _refresh_list(self, select_id: str | None = None) -> None:
@@ -290,8 +331,57 @@ class DatasetPanel(QWidget):
         dataset = self._current_dataset()
         self._populate_columns(dataset)
         self._reset_manual_cycles()
+        self._sync_dataset_combo(dataset)
         self.dataset_selected.emit(dataset)
         self._update_cycle_preview()
+
+    def _sync_dataset_combo(self, dataset: Dataset | None) -> None:
+        """Rebuild the Plot page's `active_dataset_combo` from
+        `self._manager.datasets` and select `dataset` -- called on every
+        `_on_selection_changed` (selection change, dataset removal,
+        Open/New Project via `set_manager`), so `dataset_list`'s current
+        selection stays the single source of truth for "the current
+        dataset"; this combo is purely a second, kept-in-sync VIEW onto it
+        (see `_on_dataset_combo_changed` for the reverse direction: combo ->
+        list). Always includes a "(no dataset)" placeholder when nothing is
+        currently selected -- the sole entry when `_manager` is empty."""
+        self.active_dataset_combo.blockSignals(True)
+        self.active_dataset_combo.clear()
+        if dataset is None:
+            self.active_dataset_combo.addItem(_NO_DATASET_PLACEHOLDER_TEXT, None)
+        for ds in self._manager.datasets:
+            self.active_dataset_combo.addItem(_elide_dataset_name(ds.name), ds.id)
+            self.active_dataset_combo.setItemData(
+                self.active_dataset_combo.count() - 1, ds.name, Qt.ToolTipRole
+            )
+        if dataset is not None:
+            self.active_dataset_combo.setCurrentIndex(
+                max(self.active_dataset_combo.findData(dataset.id), 0)
+            )
+            self.active_dataset_combo.setToolTip(dataset.name)
+        else:
+            self.active_dataset_combo.setCurrentIndex(0)
+            self.active_dataset_combo.setToolTip("")
+        self.active_dataset_combo.blockSignals(False)
+
+    def _on_dataset_combo_changed(self, index: int) -> None:
+        """The reverse direction of `_sync_dataset_combo`: picking a dataset
+        directly from the Plot page combo drives `dataset_list`'s selection
+        (the Data page), which -- via its own `currentItemChanged` ->
+        `_on_selection_changed` -- is what actually updates X/Y columns,
+        cycle detection, and everything else keyed off "the current
+        dataset". Never mutates `_manager` or holds a selection of its own."""
+        if index < 0:
+            return
+        dataset_id = self.active_dataset_combo.itemData(index)
+        if dataset_id is None:
+            self.dataset_list.setCurrentRow(-1)
+            return
+        for i in range(self.dataset_list.count()):
+            item = self.dataset_list.item(i)
+            if item.data(Qt.UserRole) == dataset_id:
+                self.dataset_list.setCurrentItem(item)
+                return
 
     def refresh_columns(self) -> None:
         """Re-populate the X/Y column selectors for the currently selected

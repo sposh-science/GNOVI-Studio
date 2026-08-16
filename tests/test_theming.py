@@ -18,6 +18,20 @@ def test_build_stylesheet_covers_the_theme_relevant_widget_classes():
         assert selector in qss
 
 
+def test_stylesheet_supplies_an_explicit_down_arrow_for_every_combo_box():
+    """`QComboBox::drop-down` is customized (border/width) above this rule --
+    doing so suppresses the style engine's own default arrow glyph, so
+    `::down-arrow` must be supplied explicitly or every QComboBox in the app
+    renders as a plain field with no visible dropdown indicator (see
+    tests/test_combobox_dropdown_arrow.py for the rendered-pixel check)."""
+    qss = build_stylesheet()
+    assert "QComboBox::down-arrow" in qss
+    # A real glyph (the CSS-border-triangle technique), not just `image: none`
+    # with nothing to replace it.
+    down_arrow_rule = qss.split("QComboBox::down-arrow")[1].split("}")[0]
+    assert "border-top" in down_arrow_rule
+
+
 def test_apply_app_theme_sets_the_fixed_light_application_stylesheet(qapp: QApplication):
     apply_app_theme(qapp)
 
