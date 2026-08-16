@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable
 
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QColor
@@ -21,12 +22,16 @@ from PySide6.QtWidgets import (
 
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.plotting.figure import GnoviFigure, Panel
+from gnovi_plot.plotting.graph_library import GraphLibrary
 
 # Panel dataclass fields excluded from Apply/Cancel/Reset snapshots: `series`
 # and `_next_color_index` are content, not display settings (Cancel/Reset
-# here must never drop plotted series), and `panel_label` is auto-managed by
-# GnoviFigure, never user-edited.
-_PANEL_SNAPSHOT_EXCLUDED_FIELDS = {"series", "_next_color_index", "panel_label"}
+# here must never drop plotted series), `panel_label` is auto-managed by
+# GnoviFigure, never user-edited, and `source_graph_id` is Graph Library
+# provenance (see `Panel.source_graph_id`), never a display setting either --
+# Cancel/Reset here must never make a working copy forget which saved Graph
+# it originated from.
+_PANEL_SNAPSHOT_EXCLUDED_FIELDS = {"series", "_next_color_index", "panel_label", "source_graph_id"}
 
 _LEGEND_LOCATIONS = [
     "best",
@@ -84,12 +89,17 @@ class FigurePropertiesPanel(QWidget):
 
     changed = Signal()
 
-    def __init__(self, figure: GnoviFigure, parent=None):
+    def __init__(
+        self,
+        figure: GnoviFigure,
+        get_graph_library: Callable[[], GraphLibrary] | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self._figure = figure
         self._updating = False
 
-        self.active_panel_label = ActivePanelLabel(figure)
+        self.active_panel_label = ActivePanelLabel(figure, get_graph_library)
 
         # --- Labels ---
         self.title_edit = QLineEdit()

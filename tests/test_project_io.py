@@ -457,6 +457,7 @@ def _build_representative_project():
 def test_representative_project_round_trip(tmp_path):
     project, ds1, ds2, graphs_by_name = _build_representative_project()
     figure = project.figures[0]
+    expected_source_graph_ids = [graphs_by_name[f"Graph {n}"].id for n in (2, 5, 7, 10)]
 
     out_path = save_project(project, tmp_path / "big.gnovi")
 
@@ -528,6 +529,17 @@ def test_representative_project_round_trip(tmp_path):
 
     assert "g7" in {s.label for s in loaded_figure.panels[2].series}
     assert "g10" in {s.label for s in loaded_figure.panels[3].series}
+
+    # --- Graph identity/provenance context survives the round trip ---------
+    # Each panel's `source_graph_id` (see `Panel.source_graph_id`) must
+    # still resolve to its correct origin Graph after reload, so
+    # `ActivePanelLabel`/`GraphLibraryPanel.sync_active_panel_state` show
+    # the right "Graph: ... (working copy)" text and Update Saved Graph
+    # enablement without any further wiring.
+    assert [p.source_graph_id for p in loaded_figure.panels] == expected_source_graph_ids
+    for panel, graph_id in zip(loaded_figure.panels, expected_source_graph_ids):
+        assert loaded.graph_library.get(panel.source_graph_id) is not None
+        assert panel.source_graph_id == graph_id
 
     # --- shared Dataset reference behavior: every series across every
     # panel/graph that references ds1 points at the exact same reloaded

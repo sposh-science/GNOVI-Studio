@@ -212,11 +212,18 @@ class MainWindow(QMainWindow):
         self.preview_table.setEditTriggers(QTableView.NoEditTriggers)
         self.preview_table.setAlternatingRowColors(True)
 
+        # `lambda: self._project.graph_library` -- re-invoked on every
+        # ActivePanelLabel.refresh() -- rather than a fixed reference, so
+        # every page's "Graph: ..." line always resolves against the
+        # *current* project's Graph Library even after Open/New Project
+        # repoints `self._project` (mirrors `graph_library_panel`'s own
+        # `get_figure`/`get_dataset_manager` callables below).
+        get_graph_library = lambda: self._project.graph_library  # noqa: E731
         self.dataset_panel = DatasetPanel(self.dataset_manager, self.preview_table)
-        self.series_panel = PlotSeriesPanel(self.figure_model)
-        self.properties_panel = FigurePropertiesPanel(self.figure_model)
-        self.figure_size_panel = FigureSizePanel(self.figure_model)
-        self.figure_layout_panel = FigureLayoutPanel(self.figure_model)
+        self.series_panel = PlotSeriesPanel(self.figure_model, get_graph_library=get_graph_library)
+        self.properties_panel = FigurePropertiesPanel(self.figure_model, get_graph_library=get_graph_library)
+        self.figure_size_panel = FigureSizePanel(self.figure_model, get_graph_library=get_graph_library)
+        self.figure_layout_panel = FigureLayoutPanel(self.figure_model, get_graph_library=get_graph_library)
         self.data_tools_panel = DataToolsPanel(self.preview_table)
         # `get_figure`/`get_dataset_manager` are re-invoked on every Graph
         # Library action rather than captured once, so this panel always
@@ -258,7 +265,7 @@ class MainWindow(QMainWindow):
         # concerns only, see its own docstring) -- the Plot page's "Active
         # panel" context line is composed here instead, since MainWindow is
         # what already knows about both `figure_model` and `dataset_panel`.
-        self.plot_page_active_panel_label = ActivePanelLabel(self.figure_model)
+        self.plot_page_active_panel_label = ActivePanelLabel(self.figure_model, get_graph_library)
 
         plot_page = QWidget()
         plot_page_layout = QVBoxLayout(plot_page)
@@ -951,9 +958,24 @@ class MainWindow(QMainWindow):
         self.series_panel.refresh()
         self.properties_panel.refresh()
         self.figure_layout_panel.refresh()
-        self.plot_page_active_panel_label.refresh(self.figure_model)
+        self._refresh_active_panel_context()
         self._sync_toolbar_panel_controls()
         self._rerender()
+
+    def _refresh_active_panel_context(self) -> None:
+        """Refresh every page's "Active panel / Graph / Data" context line
+        (see `gui.widgets.active_panel_label.ActivePanelLabel`) plus the
+        Graph Library's Update Saved Graph enabled state -- call whenever
+        the active panel's identity, its origin Graph, or its plotted
+        series/datasets may have changed (panel switch, any figure-content
+        edit, graph saved/loaded/renamed/duplicated/deleted/updated, undo/
+        redo, project load)."""
+        self.plot_page_active_panel_label.refresh(self.figure_model)
+        self.series_panel.active_panel_label.refresh(self.figure_model)
+        self.figure_size_panel.active_panel_label.refresh(self.figure_model)
+        self.figure_layout_panel.active_panel_label.refresh(self.figure_model)
+        self.properties_panel.active_panel_label.refresh(self.figure_model)
+        self.graph_library_panel.sync_active_panel_state()
 
     def _on_export_figure(self):
         dialog = ExportFigureDialog(self.figure_model, self.plot_canvas, self)
@@ -977,6 +999,7 @@ class MainWindow(QMainWindow):
         self._commit_undo_checkpoint()
         self._set_dirty(True)
         self._rerender()
+        self._refresh_active_panel_context()
 
     def _commit_undo_checkpoint(self) -> None:
         """Push the snapshot captured just before this change (i.e. the
@@ -1042,7 +1065,7 @@ class MainWindow(QMainWindow):
         self.properties_panel.refresh()
         self.figure_size_panel.refresh()
         self.figure_layout_panel.refresh()
-        self.plot_page_active_panel_label.refresh(self.figure_model)
+        self._refresh_active_panel_context()
         self._sync_toolbar_panel_controls()
         self._sync_theme_controls()
         self._sync_undo_redo_actions()
@@ -1064,10 +1087,14 @@ class MainWindow(QMainWindow):
         self._set_dirty(True)
 
     def _on_graph_library_changed(self) -> None:
-        """Save/Rename/Duplicate/Delete Graph -- only the Graph Library's
-        contents changed, not the figure, so no undo checkpoint/re-render is
-        needed, just marking the project dirty."""
+        """Save/Rename/Duplicate/Delete/Update Saved Graph -- only the
+        Graph Library's contents changed, not the figure, so no undo
+        checkpoint/re-render is needed, just marking the project dirty and
+        refreshing the "Graph: ..." context line (Save/Update/Rename/Delete
+        can all change what it should show for the active panel) and the
+        Update Saved Graph button state."""
         self._set_dirty(True)
+        self._refresh_active_panel_context()
 
     def _on_graph_loaded_into_panel(self) -> None:
         """Load Selected Graph into Active Panel replaced the active
@@ -1077,7 +1104,6 @@ class MainWindow(QMainWindow):
         content changed under them)."""
         self.series_panel.refresh()
         self.properties_panel.refresh()
-        self.plot_page_active_panel_label.refresh(self.figure_model)
         self._on_figure_content_changed()
 
     def _set_dirty(self, dirty: bool) -> None:
@@ -1136,18 +1162,22 @@ class MainWindow(QMainWindow):
         self._load_project_into_window(project)
 
     def _on_save_project(self) -> bool:
-        """Returns True on success (including a user-cancelled Save As,
-        which is itself not a failure) so `_confirm_discard_unsaved` can use
-        the result to decide whether it's safe to proceed."""
+        """Returns True only on an actual successful save -- `False` for a
+        cancelled or failed Save As -- so `_confirm_discard_unsaved` never
+        treats "the user didn't actually save" as safe to proceed with a
+        destructive action (Close/New Project/Open Project)."""
         if self._project.path is None:
             return self._on_save_project_as()
         return self._save_project_to(self._project.path)
 
     def _on_save_project_as(self) -> bool:
+        """Returns False (not saved) if the user cancels the file picker --
+        see `_on_save_project`'s docstring for why this must never be
+        treated as success."""
         default_name = f"{self._project.name}.gnovi"
         path, _ = QFileDialog.getSaveFileName(self, "Save Project As", default_name, "Gnovi Project (*.gnovi)")
         if not path:
-            return True
+            return False
         if not path.lower().endswith(".gnovi"):
             path += ".gnovi"
         return self._save_project_to(path)
@@ -1180,7 +1210,7 @@ class MainWindow(QMainWindow):
         self.figure_size_panel.set_figure(self.figure_model)
         self.figure_layout_panel.set_figure(self.figure_model)
         self.graph_library_panel.set_library(project.graph_library)
-        self.plot_page_active_panel_label.refresh(self.figure_model)
+        self._refresh_active_panel_context()
 
         self._undo_manager = UndoManager()
         self._pending_undo_snapshot = snapshot_figure(self.figure_model, self.dataset_manager)

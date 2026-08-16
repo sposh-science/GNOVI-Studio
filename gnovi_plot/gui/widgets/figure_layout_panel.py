@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QComboBox,
@@ -15,6 +17,7 @@ from PySide6.QtWidgets import (
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.plotting.backends.matplotlib_backend import compute_tight_layout
 from gnovi_plot.plotting.figure import GnoviFigure
+from gnovi_plot.plotting.graph_library import GraphLibrary
 from gnovi_plot.plotting.units import PANEL_ASPECT_RATIO_PRESETS
 
 # Minimum gap enforced between opposing margins (left < right, bottom < top)
@@ -66,12 +69,17 @@ class FigureLayoutPanel(QWidget):
 
     changed = Signal()
 
-    def __init__(self, figure: GnoviFigure, parent=None):
+    def __init__(
+        self,
+        figure: GnoviFigure,
+        get_graph_library: Callable[[], GraphLibrary] | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self._figure = figure
         self._updating = False
 
-        self.active_panel_label = ActivePanelLabel(figure)
+        self.active_panel_label = ActivePanelLabel(figure, get_graph_library)
 
         self.left_spin = self._make_margin_spin()
         self.right_spin = self._make_margin_spin()

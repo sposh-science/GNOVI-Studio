@@ -69,25 +69,49 @@ class GraphLibrary:
         display setting) into the library as a new `Graph`, per "Save
         Current Panel as Graph". The stored `Panel` shares the project's
         live `Dataset` objects but is otherwise fully independent of the
-        live figure -- later edits to the active panel never affect it."""
+        live figure -- later edits to the active panel never affect it.
+
+        Also stamps the live active panel's `source_graph_id` with the new
+        `Graph.id`, so it now displays as that Graph's working copy (see
+        `Panel.source_graph_id`) rather than "Unsaved graph"."""
         graph = Graph(
             name=name,
             panel=clone_panel_with_shared_datasets(figure.active_panel, dataset_manager),
         )
         self.add(graph)
+        figure.active_panel.source_graph_id = graph.id
         return graph
 
     def load_graph_into_panel(self, graph_id: str, figure: GnoviFigure, dataset_manager) -> bool:
         """Replace `figure`'s active panel with an INDEPENDENT EDITABLE COPY
         of the stored graph's panel, per "Load Graph into Active Panel".
         Editing the now-active panel afterward never mutates the stored
-        `Graph` -- it's a fresh deep copy, not a shared reference. Returns
+        `Graph` -- it's a fresh deep copy, not a shared reference. The new
+        active panel's `source_graph_id` is (re-)stamped with `graph_id`
+        regardless of whatever the stored snapshot happened to carry, so it
+        always correctly identifies the Graph it was just loaded from (see
+        `Panel.source_graph_id`). Returns False (no-op) if `graph_id` isn't
+        in the library."""
+        graph = self._graphs.get(graph_id)
+        if graph is None:
+            return False
+        loaded_panel = clone_panel_with_shared_datasets(graph.panel, dataset_manager)
+        loaded_panel.source_graph_id = graph.id
+        figure.panels[figure.active_panel_index] = loaded_panel
+        figure._renumber_panel_labels()
+        return True
+
+    def update_graph_from_panel(self, graph_id: str, figure: GnoviFigure, dataset_manager) -> bool:
+        """Replace the stored Graph's panel snapshot with the current
+        active panel's state, per "Update Saved Graph" -- the only
+        operation that ever lets a working copy's edits reach the Graph
+        Library; `save_panel_as_graph`/`load_graph_into_panel` otherwise
+        always keep the two independent (see their docstrings). Keeps the
+        Graph's `id`/`name`; only `panel` and `modified_at` change. Returns
         False (no-op) if `graph_id` isn't in the library."""
         graph = self._graphs.get(graph_id)
         if graph is None:
             return False
-        figure.panels[figure.active_panel_index] = clone_panel_with_shared_datasets(
-            graph.panel, dataset_manager
-        )
-        figure._renumber_panel_labels()
+        graph.panel = clone_panel_with_shared_datasets(figure.active_panel, dataset_manager)
+        graph.modified_at = datetime.now(timezone.utc)
         return True

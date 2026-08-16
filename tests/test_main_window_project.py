@@ -254,13 +254,19 @@ def test_dataset_selector_resyncs_after_project_reopen(qapp, monkeypatch, tmp_pa
 # --- Active panel context label, through MainWindow -----------------------------
 
 
+def _no_context(panel_number: int) -> str:
+    """The 3-line context text for a fresh, empty, never-saved panel --
+    see `ActivePanelLabel.refresh`."""
+    return f"Active panel: Panel {panel_number}\nGraph: Unsaved graph\nData: No data"
+
+
 def test_active_panel_labels_start_at_panel_1_on_every_page(qapp):
     window = _make_window(qapp)
-    assert window.plot_page_active_panel_label.text() == "Active panel: Panel 1"
-    assert window.series_panel.active_panel_label.text() == "Active panel: Panel 1"
-    assert window.figure_size_panel.active_panel_label.text() == "Active panel: Panel 1"
-    assert window.figure_layout_panel.active_panel_label.text() == "Active panel: Panel 1"
-    assert window.properties_panel.active_panel_label.text() == "Active panel: Panel 1"
+    assert window.plot_page_active_panel_label.text() == _no_context(1)
+    assert window.series_panel.active_panel_label.text() == _no_context(1)
+    assert window.figure_size_panel.active_panel_label.text() == _no_context(1)
+    assert window.figure_layout_panel.active_panel_label.text() == _no_context(1)
+    assert window.properties_panel.active_panel_label.text() == _no_context(1)
     window.close()
 
 
@@ -274,11 +280,11 @@ def test_active_panel_labels_update_after_clicking_a_different_panel(qapp):
     window._on_canvas_click(event)
 
     assert window.figure_model.active_panel_index == 1
-    assert window.plot_page_active_panel_label.text() == "Active panel: Panel 2"
-    assert window.series_panel.active_panel_label.text() == "Active panel: Panel 2"
-    assert window.figure_size_panel.active_panel_label.text() == "Active panel: Panel 2"
-    assert window.figure_layout_panel.active_panel_label.text() == "Active panel: Panel 2"
-    assert window.properties_panel.active_panel_label.text() == "Active panel: Panel 2"
+    assert window.plot_page_active_panel_label.text() == _no_context(2)
+    assert window.series_panel.active_panel_label.text() == _no_context(2)
+    assert window.figure_size_panel.active_panel_label.text() == _no_context(2)
+    assert window.figure_layout_panel.active_panel_label.text() == _no_context(2)
+    assert window.properties_panel.active_panel_label.text() == _no_context(2)
     window.close()
 
 
@@ -289,8 +295,8 @@ def test_active_panel_labels_update_after_the_toolbar_selector_changes(qapp):
     window.toolbar_panel_combo.setCurrentIndex(2)
 
     assert window.figure_model.active_panel_index == 2
-    assert window.plot_page_active_panel_label.text() == "Active panel: Panel 3"
-    assert window.figure_size_panel.active_panel_label.text() == "Active panel: Panel 3"
+    assert window.plot_page_active_panel_label.text() == _no_context(3)
+    assert window.figure_size_panel.active_panel_label.text() == _no_context(3)
     window.close()
 
 
@@ -306,9 +312,9 @@ def test_active_panel_labels_update_after_a_layout_change_clamps_the_index(qapp)
     window.figure_size_panel.layout_combo.setCurrentIndex(0)  # "1 x 1"
 
     assert window.figure_model.active_panel_index == 0
-    assert window.plot_page_active_panel_label.text() == "Active panel: Panel 1"
-    assert window.series_panel.active_panel_label.text() == "Active panel: Panel 1"
-    assert window.figure_layout_panel.active_panel_label.text() == "Active panel: Panel 1"
+    assert window.plot_page_active_panel_label.text() == _no_context(1)
+    assert window.series_panel.active_panel_label.text() == _no_context(1)
+    assert window.figure_layout_panel.active_panel_label.text() == _no_context(1)
     window.close()
 
 
@@ -321,17 +327,17 @@ def test_active_panel_labels_update_after_project_load(qapp, monkeypatch, tmp_pa
     window.save_project_as_action.trigger()
 
     window.new_project_action.trigger()
-    assert window.plot_page_active_panel_label.text() == "Active panel: Panel 1"
+    assert window.plot_page_active_panel_label.text() == _no_context(1)
 
     monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(out_path), "")))
     window.open_project_action.trigger()
 
     assert window.figure_model.active_panel_index == 2
-    assert window.plot_page_active_panel_label.text() == "Active panel: Panel 3"
-    assert window.series_panel.active_panel_label.text() == "Active panel: Panel 3"
-    assert window.figure_size_panel.active_panel_label.text() == "Active panel: Panel 3"
-    assert window.figure_layout_panel.active_panel_label.text() == "Active panel: Panel 3"
-    assert window.properties_panel.active_panel_label.text() == "Active panel: Panel 3"
+    assert window.plot_page_active_panel_label.text() == _no_context(3)
+    assert window.series_panel.active_panel_label.text() == _no_context(3)
+    assert window.figure_size_panel.active_panel_label.text() == _no_context(3)
+    assert window.figure_layout_panel.active_panel_label.text() == _no_context(3)
+    assert window.properties_panel.active_panel_label.text() == _no_context(3)
     window.close()
 
 
@@ -339,11 +345,11 @@ def test_active_panel_label_updates_after_new_project(qapp):
     window = _dirty_window(qapp)
     window.figure_size_panel.layout_combo.setCurrentIndex(1)  # "1 x 2"
     window.toolbar_panel_combo.setCurrentIndex(1)
-    assert window.plot_page_active_panel_label.text() == "Active panel: Panel 2"
+    assert window.plot_page_active_panel_label.text() == _no_context(2)  # Panel 2 is a fresh blank panel
 
     window.new_project_action.trigger()
 
-    assert window.plot_page_active_panel_label.text() == "Active panel: Panel 1"
+    assert window.plot_page_active_panel_label.text() == _no_context(1)
     window.close()
 
 
@@ -356,13 +362,121 @@ def test_active_panel_label_updates_when_a_saved_graph_is_loaded_into_another_pa
     window.graph_library_panel.save_button.click()
 
     window.figure_size_panel.layout_combo.setCurrentIndex(1)  # "1 x 2"
-    window.toolbar_panel_combo.setCurrentIndex(1)  # Panel 2
-    assert window.plot_page_active_panel_label.text() == "Active panel: Panel 2"
+    window.toolbar_panel_combo.setCurrentIndex(1)  # Panel 2 -- fresh, blank
+    assert window.plot_page_active_panel_label.text() == _no_context(2)
 
     window.graph_library_panel.graph_list.setCurrentRow(0)
     window.graph_library_panel.load_button.click()
 
-    assert window.plot_page_active_panel_label.text() == "Active panel: Panel 2"  # unchanged, still correct
+    assert window.plot_page_active_panel_label.text() == (
+        "Active panel: Panel 2\nGraph: G1 (working copy)\nData: d"
+    )
+    window.close()
+
+
+# --- Graph/Data context and Update Saved Graph, through MainWindow -------------
+
+
+def test_saving_active_panel_as_graph_marks_it_a_working_copy(qapp, monkeypatch):
+    window = _make_window(qapp)
+    dataset = _make_dataset("Ferricyanide SR-0.05")
+    window.dataset_manager.add(dataset)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y")])
+    monkeypatch.setattr(
+        QInputDialog, "getText", staticmethod(lambda *a, **k: ("Ferricyanide 50 mV/s", True))
+    )
+
+    window.graph_library_panel.save_button.click()
+
+    assert window.plot_page_active_panel_label.text() == (
+        "Active panel: Panel 1\n"
+        "Graph: Ferricyanide 50 mV/s (working copy)\n"
+        "Data: Ferricyanide SR-0.05"
+    )
+    window.close()
+
+
+def test_multiple_dataset_provenance_shows_a_count_with_a_tooltip(qapp):
+    window = _make_window(qapp)
+    d1 = _make_dataset("Ferricyanide SR-0.05")
+    d2 = _make_dataset("Ascorbic Acid")
+    window.dataset_manager.add(d1)
+    window.dataset_manager.add(d2)
+    window._on_add_to_plot(
+        [PlotSeries.line(d1, "x", "y"), PlotSeries.line(d2, "x", "y")]
+    )
+
+    assert window.plot_page_active_panel_label.text() == (
+        "Active panel: Panel 1\nGraph: Unsaved graph\nData: 2 datasets"
+    )
+    assert window.plot_page_active_panel_label.toolTip() == "Ferricyanide SR-0.05\nAscorbic Acid"
+    window.close()
+
+
+def test_update_saved_graph_button_disabled_until_panel_has_an_origin(qapp, monkeypatch):
+    window = _make_window(qapp)
+    dataset = _make_dataset()
+    window.dataset_manager.add(dataset)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y")])
+    assert window.graph_library_panel.update_button.isEnabled() is False
+
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("G1", True)))
+    window.graph_library_panel.save_button.click()
+
+    assert window.graph_library_panel.update_button.isEnabled() is True
+    window.close()
+
+
+def test_update_saved_graph_replaces_the_stored_snapshot_after_confirmation(qapp, monkeypatch):
+    window = _make_window(qapp)
+    dataset = _make_dataset()
+    window.dataset_manager.add(dataset)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y")])
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("G1", True)))
+    window.graph_library_panel.save_button.click()
+    graph_id = window._project.graph_library.graphs[0].id
+
+    window._on_clear_plot()
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y", label="Updated")])
+    window._set_dirty(False)
+
+    def _update_button(self):
+        for button in self.buttons():
+            if button.text() == "Update":
+                return button
+        raise AssertionError("Update button not found")
+
+    monkeypatch.setattr(QMessageBox, "clickedButton", _update_button)
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: None)
+
+    window.graph_library_panel.update_button.click()
+
+    stored = window._project.graph_library.get(graph_id)
+    assert len(stored.panel.series) == 1
+    assert stored.panel.series[0].label == "Updated"
+    assert window._dirty is True  # Update Saved Graph marks the project dirty
+    window.close()
+
+
+def test_update_saved_graph_cancel_leaves_the_stored_snapshot_untouched(qapp, monkeypatch):
+    window = _make_window(qapp)
+    dataset = _make_dataset()
+    window.dataset_manager.add(dataset)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y", label="Original")])
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("G1", True)))
+    window.graph_library_panel.save_button.click()
+    graph_id = window._project.graph_library.graphs[0].id
+
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y", label="Extra")])
+
+    monkeypatch.setattr(QMessageBox, "clickedButton", lambda self: None)
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: None)
+
+    window.graph_library_panel.update_button.click()
+
+    stored = window._project.graph_library.get(graph_id)
+    assert len(stored.panel.series) == 1
+    assert stored.panel.series[0].label == "Original"
     window.close()
 
 
@@ -613,4 +727,56 @@ def test_open_project_prompts_and_cancel_leaves_project_untouched(qapp, monkeypa
 
     assert window._project is original_project
     assert file_dialog_calls == []  # never even got to the file picker
+    window.close()
+
+
+# --- A cancelled/failed Save must never let a destructive action proceed -------
+
+
+def test_close_event_save_then_cancelled_save_as_does_not_close(qapp, monkeypatch):
+    """The project has never been saved (no path yet), so choosing Save
+    falls through to Save As -- if the user then cancels that file picker,
+    nothing was actually saved, so closing must still be blocked (see
+    `_on_save_project_as`'s docstring)."""
+    window = _dirty_window(qapp)
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Save))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("", "")))
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert not event.isAccepted()
+    assert window._project.path is None
+    assert window._dirty is True
+    window._set_dirty(False)
+    window.close()
+
+
+def test_new_project_save_then_cancelled_save_as_leaves_project_untouched(qapp, monkeypatch):
+    window = _dirty_window(qapp)
+    original_project = window._project
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Save))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("", "")))
+
+    window.new_project_action.trigger()
+
+    assert window._project is original_project
+    assert window._dirty is True
+    window.close()
+
+
+def test_open_project_save_then_cancelled_save_as_leaves_project_untouched(qapp, monkeypatch):
+    window = _dirty_window(qapp)
+    original_project = window._project
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Save))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("", "")))
+    open_dialog_calls = []
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: open_dialog_calls.append(True))
+    )
+
+    window.open_project_action.trigger()
+
+    assert window._project is original_project
+    assert open_dialog_calls == []  # never even got to the file picker
     window.close()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
 from gnovi_plot.gui.styles import PlotTheme
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.plotting.figure import GnoviFigure
+from gnovi_plot.plotting.graph_library import GraphLibrary
 from gnovi_plot.plotting.units import ASPECT_RATIO_PRESETS, PUBLICATION_PRESETS_MM, from_inches, to_inches
 
 _UNITS = ["mm", "cm", "in"]
@@ -78,13 +81,18 @@ class FigureSizePanel(QWidget):
     panel_switched = Signal()
     theme_change_requested = Signal(object)  # PlotTheme (see `_on_theme_combo_changed`)
 
-    def __init__(self, figure: GnoviFigure, parent=None):
+    def __init__(
+        self,
+        figure: GnoviFigure,
+        get_graph_library: Callable[[], GraphLibrary] | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self._figure = figure
         self._unit = "in"
         self._updating = False
 
-        self.active_panel_label = ActivePanelLabel(figure)
+        self.active_panel_label = ActivePanelLabel(figure, get_graph_library)
 
         self.aspect_combo = QComboBox()
         self.aspect_combo.addItems(list(ASPECT_RATIO_PRESETS))

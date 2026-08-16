@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -25,6 +27,7 @@ from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.plotting.backends.matplotlib_backend import is_low_contrast
 from gnovi_plot.plotting.figure import GnoviFigure, theme_color_cycle
+from gnovi_plot.plotting.graph_library import GraphLibrary
 from gnovi_plot.plotting.series import PlotSeries, PlotType
 from gnovi_plot.plotting.stacking import auto_stack_offsets, reset_offsets
 
@@ -70,14 +73,19 @@ class PlotSeriesPanel(QWidget):
 
     changed = Signal()
 
-    def __init__(self, figure: GnoviFigure, parent=None):
+    def __init__(
+        self,
+        figure: GnoviFigure,
+        get_graph_library: Callable[[], GraphLibrary] | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self._figure = figure
         self._updating = False
         self._low_contrast_series: list[PlotSeries] = []
         self._dark_mode = False
 
-        self.active_panel_label = ActivePanelLabel(figure)
+        self.active_panel_label = ActivePanelLabel(figure, get_graph_library)
 
         self.series_list = QListWidget()
         self.remove_button = QPushButton("Remove Series")

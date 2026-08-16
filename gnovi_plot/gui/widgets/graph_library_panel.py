@@ -24,7 +24,7 @@ _NO_SELECTION_MESSAGE = "Select a graph first."
 class GraphLibraryPanel(QWidget):
     """Graphs tab: the project-local Graph Library list plus Save Current
     Panel as Graph / Load Selected Graph into Active Panel / Rename /
-    Duplicate / Delete. No thumbnails (v0.9).
+    Duplicate / Delete / Update Saved Graph. No thumbnails (v0.9).
 
     `get_figure`/`get_dataset_manager` are callables -- re-invoked on every
     action -- rather than fixed references, so this panel always acts on
@@ -34,10 +34,21 @@ class GraphLibraryPanel(QWidget):
 
     Two signals distinguish what changed, since they need different
     handling by the owner: `graph_library_changed` (Save/Rename/Duplicate/
-    Delete -- only the library's contents changed, no re-render needed) vs.
-    `graph_loaded_into_panel` (Load -- the active panel's series/styling
-    changed, needs the same handling as any other figure-content edit:
-    re-render, refresh the Series/Properties panels, an undo checkpoint).
+    Delete/Update -- only the library's contents changed, no re-render
+    needed) vs. `graph_loaded_into_panel` (Load -- the active panel's
+    series/styling changed, needs the same handling as any other
+    figure-content edit: re-render, refresh the Series/Properties panels,
+    an undo checkpoint).
+
+    Update Saved Graph is deliberately tied to the ACTIVE PANEL's own
+    origin (`Panel.source_graph_id`), not to whichever row happens to be
+    selected in `graph_list` -- it only ever replaces the Graph the active
+    panel was actually saved as/loaded from, requiring confirmation first.
+    Call `sync_active_panel_state()` whenever the active panel, its origin,
+    or the library's contents may have changed (panel switch, graph saved/
+    loaded/renamed/deleted, undo/redo, project load) so its enabled state
+    and label stay correct -- it is never inferred from `graph_list`
+    selection changes alone, since selecting a row must not affect it.
     """
 
     graph_library_changed = Signal()
@@ -60,6 +71,11 @@ class GraphLibraryPanel(QWidget):
         self.save_button = QPushButton("Save Current Panel as Graph")
         self.save_button.setProperty("primary", True)
         self.load_button = QPushButton("Load Selected Graph into Active Panel")
+        self.update_button = QPushButton("Update Saved Graph")
+        self.update_button.setToolTip(
+            "Replace the saved Graph the active panel was saved as/loaded from with its "
+            "current state. Only enabled when the active panel has such an origin."
+        )
         self.rename_button = QPushButton("Rename Graph")
         self.duplicate_button = QPushButton("Duplicate Graph")
         self.delete_button = QPushButton("Delete Graph")
@@ -68,6 +84,7 @@ class GraphLibraryPanel(QWidget):
         layout.addWidget(self.graph_list)
         layout.addWidget(self.save_button)
         layout.addWidget(self.load_button)
+        layout.addWidget(self.update_button)
         button_row = QHBoxLayout()
         button_row.addWidget(self.rename_button)
         button_row.addWidget(self.duplicate_button)
@@ -76,17 +93,20 @@ class GraphLibraryPanel(QWidget):
 
         self.save_button.clicked.connect(self._on_save_clicked)
         self.load_button.clicked.connect(self._on_load_clicked)
+        self.update_button.clicked.connect(self._on_update_clicked)
         self.rename_button.clicked.connect(self._on_rename_clicked)
         self.duplicate_button.clicked.connect(self._on_duplicate_clicked)
         self.delete_button.clicked.connect(self._on_delete_clicked)
 
         self._refresh_list()
+        self.sync_active_panel_state()
 
     def set_library(self, graph_library: GraphLibrary) -> None:
         """Repoint this panel at a different project's `GraphLibrary` (e.g.
         after Open/New Project) and reload its list."""
         self._library = graph_library
         self._refresh_list()
+        self.sync_active_panel_state()
 
     def _refresh_list(self, select_id: str | None = None) -> None:
         self.graph_list.blockSignals(True)
@@ -117,6 +137,7 @@ class GraphLibraryPanel(QWidget):
             return
         graph = self._library.save_panel_as_graph(self._get_figure(), name, self._get_dataset_manager())
         self._refresh_list(select_id=graph.id)
+        self.sync_active_panel_state()
         self.graph_library_changed.emit()
 
     def _on_load_clicked(self) -> None:
@@ -128,7 +149,44 @@ class GraphLibraryPanel(QWidget):
             graph_id, self._get_figure(), self._get_dataset_manager()
         )
         if loaded:
+            self.sync_active_panel_state()
             self.graph_loaded_into_panel.emit()
+
+    # --- Update Saved Graph ---------------------------------------------------
+
+    def _origin_graph(self):
+        """The Graph Library entry the ACTIVE PANEL was saved as/loaded
+        from (see `Panel.source_graph_id`), or None if it has never been
+        saved/loaded, or its origin Graph has since been deleted."""
+        panel = self._get_figure().active_panel
+        if panel.source_graph_id is None:
+            return None
+        return self._library.get(panel.source_graph_id)
+
+    def sync_active_panel_state(self) -> None:
+        """Refresh Update Saved Graph's enabled state from the active
+        panel's current origin -- see this class's docstring for when to
+        call this."""
+        self.update_button.setEnabled(self._origin_graph() is not None)
+
+    def _on_update_clicked(self) -> None:
+        graph = self._origin_graph()
+        if graph is None:
+            return
+        figure = self._get_figure()
+        panel_number = figure.active_panel_index + 1
+        box = QMessageBox(self)
+        box.setWindowTitle("Update Saved Graph")
+        box.setText(f'Update saved graph "{graph.name}" with the current Panel {panel_number} state?')
+        update_action = box.addButton("Update", QMessageBox.AcceptRole)
+        box.addButton("Cancel", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not update_action:
+            return
+        updated = self._library.update_graph_from_panel(graph.id, figure, self._get_dataset_manager())
+        if updated:
+            self._refresh_list(select_id=graph.id)
+            self.graph_library_changed.emit()
 
     def _on_rename_clicked(self) -> None:
         graph_id = self._current_graph_id()
@@ -161,4 +219,5 @@ class GraphLibraryPanel(QWidget):
             return
         self._library.remove(graph_id)
         self._refresh_list()
+        self.sync_active_panel_state()
         self.graph_library_changed.emit()

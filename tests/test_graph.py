@@ -384,3 +384,128 @@ def test_empty_graph_library_round_trips_to_an_empty_list():
     assert library.to_dict() == []
     restored = GraphLibrary.from_dict([], {})
     assert len(restored.graphs) == 0
+
+
+# --- Panel.source_graph_id: working-copy origin tracking -----------------------
+
+
+def test_a_fresh_panel_has_no_source_graph_id():
+    assert GnoviFigure().active_panel.source_graph_id is None
+
+
+def test_save_panel_as_graph_stamps_the_active_panel_with_the_new_graph_id():
+    dataset = _make_dataset()
+    manager = _manager_with(dataset)
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(dataset, "x", "y"))
+    library = GraphLibrary()
+
+    graph = library.save_panel_as_graph(figure, "G1", manager)
+
+    assert figure.active_panel.source_graph_id == graph.id
+
+
+def test_load_graph_into_panel_stamps_the_new_active_panel_with_the_graph_id():
+    dataset = _make_dataset()
+    manager = _manager_with(dataset)
+    source_figure = GnoviFigure()
+    library = GraphLibrary()
+    graph = library.save_panel_as_graph(source_figure, "G1", manager)
+
+    target_figure = GnoviFigure()
+    library.load_graph_into_panel(graph.id, target_figure, manager)
+
+    assert target_figure.active_panel.source_graph_id == graph.id
+
+
+def test_source_graph_id_persists_through_further_edits():
+    """The working copy keeps identifying its origin Graph regardless of
+    further edits -- only Load Graph (a different origin) ever changes it
+    again; see `Panel.source_graph_id`'s docstring."""
+    dataset = _make_dataset()
+    manager = _manager_with(dataset)
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(dataset, "x", "y"))
+    library = GraphLibrary()
+    graph = library.save_panel_as_graph(figure, "G1", manager)
+
+    figure.active_panel.title = "Edited"
+    figure.active_panel.clear_series()
+    figure.add_series(PlotSeries.line(dataset, "x", "y"))
+
+    assert figure.active_panel.source_graph_id == graph.id
+
+
+def test_source_graph_id_round_trips_through_to_dict_from_dict():
+    dataset = _make_dataset()
+    manager = _manager_with(dataset)
+    figure = GnoviFigure()
+    library = GraphLibrary()
+    graph = library.save_panel_as_graph(figure, "G1", manager)
+
+    restored_panel = type(figure.active_panel).from_dict(
+        figure.active_panel.to_dict(), {dataset.id: dataset}
+    )
+
+    assert restored_panel.source_graph_id == graph.id
+
+
+# --- GraphLibrary: Update Saved Graph -------------------------------------------
+
+
+def test_update_graph_from_panel_replaces_the_stored_snapshot():
+    dataset = _make_dataset()
+    manager = _manager_with(dataset)
+    figure = GnoviFigure()
+    figure.active_panel.title = "Original"
+    figure.add_series(PlotSeries.line(dataset, "x", "y", color="#111111"))
+    library = GraphLibrary()
+    graph = library.save_panel_as_graph(figure, "G1", manager)
+
+    figure.active_panel.title = "Updated"
+    figure.active_panel.series[0].color = "#222222"
+    figure.add_series(PlotSeries.line(dataset, "x", "y"))
+
+    updated = library.update_graph_from_panel(graph.id, figure, manager)
+
+    assert updated is True
+    assert library.get(graph.id).panel.title == "Updated"
+    assert library.get(graph.id).panel.series[0].color == "#222222"
+    assert len(library.get(graph.id).panel.series) == 2
+    # Same identity -- Update Saved Graph replaces content, not the Graph itself.
+    assert library.get(graph.id).id == graph.id
+    assert library.get(graph.id).name == "G1"
+
+
+def test_update_graph_from_panel_bumps_modified_at():
+    dataset = _make_dataset()
+    manager = _manager_with(dataset)
+    figure = GnoviFigure()
+    library = GraphLibrary()
+    graph = library.save_panel_as_graph(figure, "G1", manager)
+    original_modified_at = graph.modified_at
+
+    library.update_graph_from_panel(graph.id, figure, manager)
+
+    assert graph.modified_at >= original_modified_at
+
+
+def test_update_graph_from_panel_keeps_the_update_independent_of_further_panel_edits():
+    dataset = _make_dataset()
+    manager = _manager_with(dataset)
+    figure = GnoviFigure()
+    library = GraphLibrary()
+    graph = library.save_panel_as_graph(figure, "G1", manager)
+    figure.active_panel.title = "At Update Time"
+    library.update_graph_from_panel(graph.id, figure, manager)
+
+    figure.active_panel.title = "Edited After Update"
+
+    assert library.get(graph.id).panel.title == "At Update Time"
+
+
+def test_update_graph_from_panel_returns_false_for_unknown_graph_id():
+    manager = DatasetManager()
+    figure = GnoviFigure()
+
+    assert GraphLibrary().update_graph_from_panel("nope", figure, manager) is False

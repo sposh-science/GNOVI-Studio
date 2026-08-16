@@ -227,6 +227,85 @@ def test_delete_button_with_no_selection_shows_a_message_and_does_not_raise(qapp
 # --- Repointing at a different project ----------------------------------------
 
 
+# --- Update Saved Graph ---------------------------------------------------------
+
+
+def test_update_button_disabled_until_the_active_panel_has_an_origin(qapp, monkeypatch):
+    panel, figure, manager, dataset, library = _make_panel()
+    assert panel.update_button.isEnabled() is False
+
+    _stub_get_text(monkeypatch, "G1")
+    panel.save_button.click()
+
+    assert panel.update_button.isEnabled() is True
+
+
+def test_update_button_disabled_after_its_origin_graph_is_deleted(qapp, monkeypatch):
+    panel, figure, manager, dataset, library = _make_panel()
+    _stub_get_text(monkeypatch, "G1")
+    panel.save_button.click()
+    panel.graph_list.setCurrentRow(0)
+    assert panel.update_button.isEnabled() is True
+
+    panel.delete_button.click()
+
+    assert panel.update_button.isEnabled() is False
+
+
+def _stub_update_confirmation(monkeypatch, accept: bool):
+    def _clicked_button(self):
+        for button in self.buttons():
+            if (button.text() == "Update") == accept:
+                return button
+        return None
+
+    monkeypatch.setattr(QMessageBox, "clickedButton", _clicked_button)
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: None)
+
+
+def test_update_button_replaces_the_stored_graph_with_the_current_panel_state(qapp, monkeypatch):
+    panel, figure, manager, dataset, library = _make_panel()
+    _stub_get_text(monkeypatch, "G1")
+    panel.save_button.click()
+    graph_id = library.graphs[0].id
+    figure.active_panel.title = "Updated Title"
+    figure.add_series(PlotSeries.line(dataset, "x", "y", label="second"))
+    _stub_update_confirmation(monkeypatch, accept=True)
+
+    panel.update_button.click()
+
+    updated = library.get(graph_id)
+    assert updated.id == graph_id  # same Graph, content replaced
+    assert updated.panel.title == "Updated Title"
+    assert len(updated.panel.series) == 2
+
+
+def test_update_button_emits_graph_library_changed(qapp, monkeypatch):
+    panel, figure, manager, dataset, library = _make_panel()
+    _stub_get_text(monkeypatch, "G1")
+    panel.save_button.click()
+    _stub_update_confirmation(monkeypatch, accept=True)
+    received = []
+    panel.graph_library_changed.connect(lambda: received.append(True))
+
+    panel.update_button.click()
+
+    assert received == [True]
+
+
+def test_update_button_cancel_leaves_the_stored_graph_untouched(qapp, monkeypatch):
+    panel, figure, manager, dataset, library = _make_panel()
+    _stub_get_text(monkeypatch, "G1")
+    panel.save_button.click()
+    graph_id = library.graphs[0].id
+    figure.active_panel.title = "Should Not Be Saved"
+    _stub_update_confirmation(monkeypatch, accept=False)
+
+    panel.update_button.click()
+
+    assert library.get(graph_id).panel.title == ""
+
+
 def test_set_library_repoints_and_reloads_the_list(qapp, monkeypatch):
     panel, figure, manager, dataset, library = _make_panel()
     _stub_get_text(monkeypatch, "Old Project Graph")

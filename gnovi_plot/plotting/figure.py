@@ -176,6 +176,20 @@ class Panel:
     # drawn when GnoviFigure.panel_labels_visible is True.
     panel_label: str = ""
 
+    # The Graph Library entry (by `Graph.id`) this WORKING panel was most
+    # recently saved as or loaded from -- None means "never saved" (a fresh
+    # panel, or one whose origin Graph has since been deleted). Purely
+    # provenance/display state for `gui.widgets.active_panel_label`'s
+    # "Graph: <name> (working copy)" vs. "Graph: Unsaved graph" line and
+    # `gui.widgets.graph_library_panel`'s "Update Saved Graph" enablement --
+    # never implies the stored Graph is kept in sync automatically (see
+    # `plotting.graph_library.GraphLibrary.save_panel_as_graph`/
+    # `load_graph_into_panel`/`update_graph_from_panel`, the only three
+    # places this ever changes). Persists across edits and across .gnovi
+    # save/reopen so a working copy keeps identifying its origin until the
+    # user explicitly loads a different Graph.
+    source_graph_id: str | None = None
+
     series: list[PlotSeries] = field(default_factory=list)
     _next_color_index: int = field(default=0, repr=False)
 
@@ -273,6 +287,7 @@ class Panel:
             "spine_right": self.spine_right,
             "spine_linewidth": self.spine_linewidth,
             "panel_label": self.panel_label,
+            "source_graph_id": self.source_graph_id,
             "next_color_index": self._next_color_index,
             "series": [s.to_dict() for s in self.series],
         }
@@ -324,6 +339,7 @@ class Panel:
             spine_right=data.get("spine_right", True),
             spine_linewidth=data.get("spine_linewidth", 1.0),
             panel_label=data.get("panel_label", ""),
+            source_graph_id=data.get("source_graph_id"),
         )
         for series_data in data.get("series", []):
             series = PlotSeries.from_dict(series_data, dataset_lookup)
