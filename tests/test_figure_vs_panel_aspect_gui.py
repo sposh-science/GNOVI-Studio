@@ -297,7 +297,7 @@ def test_panel_aspect_change_is_undoable(qapp):
     window = MainWindow()
     assert window.figure_model.panel_aspect_preset == "Auto"
 
-    window.figure_layout_panel.panel_aspect_combo.setCurrentText("1:1")
+    window.figure_size_panel.panel_aspect_combo.setCurrentText("1:1")
 
     assert window.figure_model.panel_aspect_preset == "1:1"
     assert window.undo_action.isEnabled() is True
@@ -305,19 +305,19 @@ def test_panel_aspect_change_is_undoable(qapp):
     window._on_undo()
 
     assert window.figure_model.panel_aspect_preset == "Auto"
-    assert window.figure_layout_panel.panel_aspect_combo.currentText() == "Auto"
+    assert window.figure_size_panel.panel_aspect_combo.currentText() == "Auto"
 
 
 def test_panel_aspect_change_is_redoable(qapp):
     window = MainWindow()
-    window.figure_layout_panel.panel_aspect_combo.setCurrentText("4:3")
+    window.figure_size_panel.panel_aspect_combo.setCurrentText("4:3")
     window._on_undo()
     assert window.figure_model.panel_aspect_preset == "Auto"
 
     window._on_redo()
 
     assert window.figure_model.panel_aspect_preset == "4:3"
-    assert window.figure_layout_panel.panel_aspect_combo.currentText() == "4:3"
+    assert window.figure_size_panel.panel_aspect_combo.currentText() == "4:3"
 
 
 # --- Headless render smoke tests ------------------------------------------------------

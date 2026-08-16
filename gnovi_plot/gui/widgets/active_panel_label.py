@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QLabel
 
 from gnovi_plot.plotting.figure import GnoviFigure
@@ -44,6 +43,16 @@ class ActivePanelLabel(QLabel):
     refresh path (panel switch, layout change, series edit, graph saved/
     loaded/updated/renamed/deleted, project load/new, undo/redo) -- it
     holds no state of its own beyond the `get_graph_library` callable.
+
+    Deliberately normal font weight, never bold: this is current-context/
+    status information (which panel/graph/dataset is active), not a
+    heading, so it's marked instead by a restrained, non-bold accent color
+    -- the `contextRow` dynamic property opts this label into
+    `gui.styles`'s `QLabel[contextRow="true"]` rule (see that module's
+    docstring for the "no bold for current state" rule this follows
+    throughout the chrome, e.g. `gui.widgets.dataset_panel`'s active-
+    dataset combo). Plain text (`.text()`)/tooltip content is unaffected by
+    this -- only presentation.
     """
 
     def __init__(
@@ -54,9 +63,7 @@ class ActivePanelLabel(QLabel):
     ) -> None:
         super().__init__(parent)
         self._get_graph_library = get_graph_library
-        font = QFont(self.font())
-        font.setBold(True)
-        self.setFont(font)
+        self.setProperty("contextRow", True)
         self.refresh(figure)
 
     def refresh(self, figure: GnoviFigure) -> None:

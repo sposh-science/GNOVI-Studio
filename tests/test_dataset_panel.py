@@ -167,3 +167,15 @@ def test_long_dataset_name_is_elided_in_the_combo_but_full_in_the_tooltip(qapp):
     assert panel.active_dataset_combo.currentText().endswith("…")
     assert panel.active_dataset_combo.toolTip() == long_name
     panel.close()
+
+
+def test_dataset_combo_label_is_not_forced_bold(qapp):
+    """The "Dataset" field caption above the Plot page's selector must not
+    rely on bold to look "active" -- selection itself is conveyed by the
+    combo's own state, not by shouting at the label (see gui.styles'
+    "no bold for current state" rule)."""
+    dataset = _make_dataset()
+    panel, _manager = _make_panel(dataset)
+
+    assert panel.dataset_combo_label.font().bold() is False
+    panel.close()

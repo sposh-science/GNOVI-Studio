@@ -29,6 +29,30 @@ def _manager_with(*datasets):
     return manager
 
 
+# --- Visual polish: non-bold, restrained-accent context styling -----------------
+#
+# Current-context/status information (which panel/graph/dataset is active)
+# is deliberately never bold -- see `gui.styles` module docstring's
+# "no bold for current state" rule. Marked instead by the `contextRow`
+# dynamic property, which opts a label into `gui.styles`'s
+# `QLabel[contextRow="true"]` restrained-accent-color rule.
+
+
+def test_label_is_not_forced_bold(qapp):
+    label = ActivePanelLabel(GnoviFigure(), lambda: GraphLibrary())
+    assert label.font().bold() is False
+
+
+def test_label_opts_into_the_context_row_style_property(qapp):
+    label = ActivePanelLabel(GnoviFigure(), lambda: GraphLibrary())
+    assert label.property("contextRow") is True
+
+
+def test_context_row_property_is_set_even_without_a_graph_library(qapp):
+    label = ActivePanelLabel(GnoviFigure(), None)
+    assert label.property("contextRow") is True
+
+
 # --- Graph line: unsaved vs. working copy ---------------------------------------
 
 

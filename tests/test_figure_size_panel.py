@@ -1,4 +1,5 @@
 import pytest
+from PySide6.QtWidgets import QLabel
 
 from gnovi_plot.gui.styles import PlotTheme
 from gnovi_plot.gui.widgets.figure_size_panel import FigureSizePanel
@@ -35,9 +36,8 @@ def test_1_to_1_preset_makes_width_equal_height(qapp):
 
 
 def test_lock_check_label_is_unambiguously_figure_scoped(qapp):
-    """Distinct wording from the Layout page's "Panel Aspect Ratio" so the
-    two independent controls are never confused (see
-    `gui.widgets.figure_layout_panel`)."""
+    """Distinct wording from this same page's "Panel Aspect Ratio" so the
+    two independent controls are never confused."""
     figure = GnoviFigure()
     panel = FigureSizePanel(figure)
 
@@ -61,6 +61,109 @@ def test_auto_fit_workspace_unlocks_aspect_ratio(qapp):
 
     panel.aspect_combo.setCurrentText("Auto / Fit workspace")
     assert figure.lock_aspect_ratio is False
+
+
+# --- Panel Aspect Ratio -----------------------------------------------------
+#
+# Lives right next to Figure Aspect Ratio (moved here from the Layout page,
+# see `gui.widgets.figure_size_panel.FigureSizePanel`'s docstring) --
+# independent of Figure Aspect Ratio and never a per-Panel Axes property
+# (gui.widgets.figure_properties_panel).
+
+
+def test_panel_aspect_combo_lists_auto_and_every_ratio_preset(qapp):
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+
+    items = [panel.panel_aspect_combo.itemText(i) for i in range(panel.panel_aspect_combo.count())]
+
+    assert items == ["Auto", "1:1", "4:3", "3:4", "3:2", "2:3", "16:9"]
+
+
+def test_panel_aspect_combo_defaults_to_auto(qapp):
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+
+    assert panel.panel_aspect_combo.currentText() == "Auto"
+    assert figure.panel_aspect_preset == "Auto"
+
+
+def test_selecting_a_panel_aspect_preset_updates_the_figure(qapp):
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+
+    panel.panel_aspect_combo.setCurrentText("1:1")
+
+    assert figure.panel_aspect_preset == "1:1"
+
+
+def test_changed_signal_emitted_on_panel_aspect_edit(qapp):
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+    received = []
+    panel.changed.connect(lambda: received.append(True))
+
+    panel.panel_aspect_combo.setCurrentText("4:3")
+
+    assert received == [True]
+
+
+def test_panel_aspect_combo_has_a_distinct_tooltip_from_figure_aspect(qapp):
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+
+    tooltip = panel.panel_aspect_combo.toolTip()
+    assert "Panel Aspect Ratio" in tooltip
+    assert "individual graph box" in tooltip
+    assert "Figure" not in tooltip.split(":")[0]  # not mislabeled as the figure-level control
+
+
+def test_aspect_ratio_labels_are_never_ambiguously_just_aspect(qapp):
+    """The two controls must never be labeled ambiguously as just
+    "Aspect" -- see task requirement to always say "Figure Aspect Ratio" /
+    "Panel Aspect Ratio" explicitly."""
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+
+    label_texts = {label.text() for label in panel.findChildren(QLabel)}
+    assert "Figure Aspect Ratio" in label_texts
+    assert "Panel Aspect Ratio" in label_texts
+    assert "Aspect" not in label_texts  # never a bare, ambiguous label
+
+
+def test_refresh_reloads_panel_aspect_from_an_externally_mutated_figure(qapp):
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+
+    figure.panel_aspect_preset = "16:9"
+    panel.refresh()
+
+    assert panel.panel_aspect_combo.currentText() == "16:9"
+
+
+def test_reset_to_defaults_restores_panel_aspect_to_auto(qapp):
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+    panel.panel_aspect_combo.setCurrentText("3:2")
+
+    panel.reset_button.click()
+
+    assert figure.panel_aspect_preset == "Auto"
+    assert panel.panel_aspect_combo.currentText() == "Auto"
+
+
+def test_capture_and_restore_state_round_trips_panel_aspect(qapp):
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+    snapshot = panel.capture_state()
+
+    panel.panel_aspect_combo.setCurrentText("2:3")
+    assert figure.panel_aspect_preset != snapshot["panel_aspect_preset"]
+
+    panel.restore_state(snapshot)
+
+    assert figure.panel_aspect_preset == snapshot["panel_aspect_preset"]
+    assert panel.panel_aspect_combo.currentText() == snapshot["panel_aspect_preset"]
 
 
 def test_unit_conversion_mm_matches_stored_inches(qapp):

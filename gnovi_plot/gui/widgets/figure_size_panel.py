@@ -19,7 +19,13 @@ from gnovi_plot.gui.styles import PlotTheme
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.graph_library import GraphLibrary
-from gnovi_plot.plotting.units import ASPECT_RATIO_PRESETS, PUBLICATION_PRESETS_MM, from_inches, to_inches
+from gnovi_plot.plotting.units import (
+    ASPECT_RATIO_PRESETS,
+    PANEL_ASPECT_RATIO_PRESETS,
+    PUBLICATION_PRESETS_MM,
+    from_inches,
+    to_inches,
+)
 
 _UNITS = ["mm", "cm", "in"]
 
@@ -37,6 +43,7 @@ _FIGURE_SCALAR_FIELDS = [
     "figure_height_in",
     "aspect_preset",
     "lock_aspect_ratio",
+    "panel_aspect_preset",
     "font_family",
     "base_font_size",
     "title_font_size",
@@ -71,6 +78,22 @@ class FigureSizePanel(QWidget):
     interactive canvas widget; the on-screen canvas keeps behaving
     responsively regardless of the configured export size.
 
+    Figure Aspect Ratio and Panel Aspect Ratio live next to each other here
+    since they're closely related from the user's perspective (the shape of
+    the whole page vs. the shape of each individual graph box) even though
+    they're independent settings underneath: Figure Aspect Ratio
+    (`aspect_combo`, `GnoviFigure.aspect_preset`/`lock_aspect_ratio`) is the
+    OUTER complete figure/page shape; Panel Aspect Ratio
+    (`panel_aspect_combo`, `GnoviFigure.panel_aspect_preset`) is each
+    individual panel's Axes box shape, applied uniformly to every panel via
+    `Axes.set_box_aspect` (see `plotting.backends.matplotlib_backend
+    .render_panel`) -- never a per-Panel property (see `gui.widgets
+    .figure_properties_panel`, which stays untouched by this) and never a
+    change to numeric X/Y data-unit scaling. Panel Aspect Ratio's own
+    controls used to live on the Layout page (see
+    `gui.widgets.figure_layout_panel`, which now only holds margins/inter-
+    panel spacing) -- relocated here, behavior otherwise unchanged.
+
     `changed` is emitted after any mutation that should trigger a re-render.
     `panel_switched` is emitted after the active panel or the panel layout
     changes, so the owner can reload panel-scoped widgets (series list,
@@ -96,11 +119,19 @@ class FigureSizePanel(QWidget):
 
         self.aspect_combo = QComboBox()
         self.aspect_combo.addItems(list(ASPECT_RATIO_PRESETS))
-        # Distinct label/tooltip from Panel Aspect Ratio (Layout page, see
-        # `figure_layout_panel.FigureLayoutPanel`) -- this one is the OUTER
-        # complete figure/page shape, never per-panel.
+        # Distinct label/tooltip from Panel Aspect Ratio just below -- this
+        # one is the OUTER complete figure/page shape, never per-panel.
         self.aspect_combo.setToolTip(
-            "Figure Aspect Ratio: shape of the complete figure/page containing all panels."
+            "Figure Aspect Ratio: shape of the complete figure containing all panels."
+        )
+
+        self.panel_aspect_combo = QComboBox()
+        self.panel_aspect_combo.addItems(list(PANEL_ASPECT_RATIO_PRESETS))
+        # Distinct label/tooltip from Figure Aspect Ratio just above -- this
+        # one is each individual graph box's shape only.
+        self.panel_aspect_combo.setToolTip(
+            "Panel Aspect Ratio: shape of each individual graph box. "
+            "Does not change numerical X/Y scaling."
         )
 
         self.publication_combo = QComboBox()
@@ -122,6 +153,7 @@ class FigureSizePanel(QWidget):
         size_group = QGroupBox("Figure Size")
         size_form = QFormLayout(size_group)
         size_form.addRow("Figure Aspect Ratio", self.aspect_combo)
+        size_form.addRow("Panel Aspect Ratio", self.panel_aspect_combo)
         size_form.addRow("Publication preset", self.publication_combo)
         size_form.addRow("Unit", self.unit_combo)
         size_form.addRow("Width", self.width_spin)
@@ -191,6 +223,7 @@ class FigureSizePanel(QWidget):
         layout.addStretch(1)
 
         self.aspect_combo.currentTextChanged.connect(self._apply_aspect_preset)
+        self.panel_aspect_combo.currentTextChanged.connect(self._apply_panel_aspect)
         self.publication_combo.currentTextChanged.connect(self._apply_publication_preset)
         self.unit_combo.currentTextChanged.connect(self._on_unit_changed)
         self.width_spin.valueChanged.connect(self._on_width_changed)
@@ -221,6 +254,7 @@ class FigureSizePanel(QWidget):
         self.active_panel_label.refresh(self._figure)
         self._updating = True
         self.aspect_combo.setCurrentText(self._figure.aspect_preset)
+        self.panel_aspect_combo.setCurrentText(self._figure.panel_aspect_preset)
         self.publication_combo.setCurrentIndex(0)
         self.unit_combo.setCurrentText(self._unit)
         self.width_spin.setValue(from_inches(self._figure.figure_width_in, self._unit))
@@ -277,6 +311,12 @@ class FigureSizePanel(QWidget):
         self.lock_check.setChecked(self._figure.lock_aspect_ratio)
         self.height_spin.setValue(from_inches(self._figure.figure_height_in, self._unit))
         self._updating = False
+        self.changed.emit()
+
+    def _apply_panel_aspect(self, text: str) -> None:
+        if self._updating or not text:
+            return
+        self._figure.panel_aspect_preset = text
         self.changed.emit()
 
     def _apply_publication_preset(self, text: str) -> None:

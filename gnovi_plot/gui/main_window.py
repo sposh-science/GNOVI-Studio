@@ -39,6 +39,7 @@ from gnovi_plot.gui.widgets.graph_library_panel import GraphLibraryPanel
 from gnovi_plot.gui.widgets.plot_canvas import PlotCanvas, ReferenceCursorMode
 from gnovi_plot.gui.widgets.plot_series_panel import PlotSeriesPanel
 from gnovi_plot.gui.widgets.tool_drawer import ToolDrawer
+from gnovi_plot.gui.widgets.workbench_header import WorkbenchHeader
 from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.series import PlotSeries
 
@@ -183,6 +184,7 @@ class MainWindow(QMainWindow):
             self._cursor_mode = ReferenceCursorMode.OFF
 
         self.plot_canvas = PlotCanvas(self)
+        self.workbench_header = WorkbenchHeader(self.figure_model)
         # coordinates=False: Matplotlib's built-in toolbar coordinate label
         # uses an Expanding size policy that reflows neighboring toolbar
         # content as its text width changes -- exactly the instability
@@ -360,8 +362,22 @@ class MainWindow(QMainWindow):
         # height and is fully drag-resizable/hideable without affecting the
         # figure's own configured size (on-screen canvas size never drives
         # export resolution; see plotting.backends / export.figure_export).
+        # `workbench_header` is a slim application-chrome strip docked
+        # directly above `plot_canvas` -- wrapped together in
+        # `workbench_container` purely for layout purposes; `self.plot_canvas`
+        # itself is untouched (still the exact widget added to the splitter
+        # in earlier milestones, just now inside one extra container), so
+        # every existing `window.plot_canvas.*` call site keeps working
+        # unchanged. See `gui.widgets.workbench_header.WorkbenchHeader`.
+        workbench_container = QWidget()
+        workbench_layout = QVBoxLayout(workbench_container)
+        workbench_layout.setContentsMargins(0, 0, 0, 0)
+        workbench_layout.setSpacing(0)
+        workbench_layout.addWidget(self.workbench_header)
+        workbench_layout.addWidget(self.plot_canvas, 1)
+
         self.center_splitter = QSplitter(Qt.Vertical)
-        self.center_splitter.addWidget(self.plot_canvas)
+        self.center_splitter.addWidget(workbench_container)
         self.center_splitter.addWidget(self.bottom_panel)
         self.center_splitter.setStretchFactor(0, 7)
         self.center_splitter.setStretchFactor(1, 3)
@@ -964,17 +980,20 @@ class MainWindow(QMainWindow):
 
     def _refresh_active_panel_context(self) -> None:
         """Refresh every page's "Active panel / Graph / Data" context line
-        (see `gui.widgets.active_panel_label.ActivePanelLabel`) plus the
-        Graph Library's Update Saved Graph enabled state -- call whenever
-        the active panel's identity, its origin Graph, or its plotted
-        series/datasets may have changed (panel switch, any figure-content
-        edit, graph saved/loaded/renamed/duplicated/deleted/updated, undo/
-        redo, project load)."""
+        (see `gui.widgets.active_panel_label.ActivePanelLabel`), the
+        Workbench header's panel-layout readout (see
+        `gui.widgets.workbench_header.WorkbenchHeader`), plus the Graph
+        Library's Update Saved Graph enabled state -- call whenever the
+        active panel's identity, its origin Graph, its plotted series/
+        datasets, or the panel layout may have changed (panel switch, any
+        figure-content edit, graph saved/loaded/renamed/duplicated/deleted/
+        updated, undo/redo, project load)."""
         self.plot_page_active_panel_label.refresh(self.figure_model)
         self.series_panel.active_panel_label.refresh(self.figure_model)
         self.figure_size_panel.active_panel_label.refresh(self.figure_model)
         self.figure_layout_panel.active_panel_label.refresh(self.figure_model)
         self.properties_panel.active_panel_label.refresh(self.figure_model)
+        self.workbench_header.refresh(self.figure_model)
         self.graph_library_panel.sync_active_panel_state()
 
     def _on_export_figure(self):

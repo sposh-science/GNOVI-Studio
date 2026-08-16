@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -119,9 +118,6 @@ class DatasetPanel(QWidget):
         # so there is exactly one "current dataset" state, never a second,
         # independent one -- see `_sync_dataset_combo`/`_on_dataset_combo_changed`.
         self.dataset_combo_label = QLabel("Dataset")
-        dataset_combo_font = QFont(self.dataset_combo_label.font())
-        dataset_combo_font.setBold(True)
-        self.dataset_combo_label.setFont(dataset_combo_font)
         self.active_dataset_combo = QComboBox()
 
         self.plot_preset_combo = QComboBox()
