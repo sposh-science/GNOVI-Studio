@@ -202,13 +202,19 @@ class FigurePropertiesPanel(QWidget):
         ticks_group = QGroupBox("Ticks")
         ticks_form = QFormLayout(ticks_group)
         ticks_form.addRow("Direction", self.tick_direction_combo)
-        ticks_form.addRow("Major spacing X (0 = auto)", self.major_spacing_x_spin)
-        ticks_form.addRow("Major spacing Y (0 = auto)", self.major_spacing_y_spin)
+        # "(0 = auto)" dropped from these four labels -- redundant with
+        # `_make_spacing_spin`'s own `setSpecialValueText("Auto")` below,
+        # which already shows "Auto" directly in the field itself at 0; the
+        # longest label in the left drawer, driving its default width more
+        # than any single field ever did (see gui.main_window's
+        # `_side_drawer_min_width`).
+        ticks_form.addRow("Major spacing X", self.major_spacing_x_spin)
+        ticks_form.addRow("Major spacing Y", self.major_spacing_y_spin)
         ticks_form.addRow("Major length", self.major_tick_length_spin)
         ticks_form.addRow("Major width", self.major_tick_width_spin)
         ticks_form.addRow(self.minor_ticks_check)
-        ticks_form.addRow("Minor spacing X (0 = auto)", self.minor_spacing_x_spin)
-        ticks_form.addRow("Minor spacing Y (0 = auto)", self.minor_spacing_y_spin)
+        ticks_form.addRow("Minor spacing X", self.minor_spacing_x_spin)
+        ticks_form.addRow("Minor spacing Y", self.minor_spacing_y_spin)
         ticks_form.addRow("Minor length", self.minor_tick_length_spin)
         ticks_form.addRow("Minor width", self.minor_tick_width_spin)
         ticks_form.addRow(self.sci_notation_x_check)
@@ -313,6 +319,17 @@ class FigurePropertiesPanel(QWidget):
         spin.setRange(-_LIMIT_RANGE, _LIMIT_RANGE)
         spin.setDecimals(6)
         spin.setEnabled(False)
+        # Qt's own automatic minimumSizeHint scales with the *widest value
+        # the configured range could show* (see the QSpinBox/QDoubleSpinBox
+        # max-width comment in gui.styles) -- for `±_LIMIT_RANGE` (1e12) at
+        # 6 decimals that is a ~20-character string, even though real axis
+        # limits are almost always short. Two of these sit side by side in
+        # one row (X/Y min+max), so this one field's inflated natural
+        # minimum alone was the single largest driver of the whole left
+        # drawer's default width. A typed value far past this width still
+        # scrolls within the field normally; this only overrides the
+        # unrealistic auto-sized floor, not what the field can hold.
+        spin.setMinimumWidth(80)
         return spin
 
     @staticmethod

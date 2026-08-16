@@ -35,11 +35,15 @@ def _select_rows(table, start, end_inclusive):
 
 
 def test_keep_and_exclude_buttons_have_explicit_working_data_labels(qapp):
+    """Shortened from "...in/from Working Data" (see gui.widgets
+    .data_tools_panel's own comment) to fit the right drawer's compact
+    width without clipping -- the enclosing "Working Data Actions" group
+    and the drawer's "Working" header already establish that context."""
     dataset = _make_dataset()
     panel, _table = _make_panel_with_dataset(dataset)
 
-    assert panel.keep_button.text() == "Keep Selected Rows in Working Data"
-    assert panel.exclude_button.text() == "Exclude Selected Rows from Working Data"
+    assert panel.keep_button.text() == "Keep Selected Rows"
+    assert panel.exclude_button.text() == "Exclude Selected Rows"
 
 
 # --- Confirmation dialog -------------------------------------------------------

@@ -1,6 +1,7 @@
 import math
 from pathlib import Path
 
+from matplotlib.backends import backend_qt
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from PySide6.QtCore import QPointF, QRect, QRectF, QSettings, Qt
 from PySide6.QtGui import (
@@ -63,19 +64,8 @@ from gnovi_plot.plotting.series import PlotSeries
 # moves over the plot -- nothing else in the toolbar/status bar shifts.
 _COORD_LABEL_SAMPLE_TEXT = "x = -0000.0000, y = -0000.0000"
 
-_UNDO_REDO_ICON_SIZE = 20
+_UNDO_REDO_ICON_SIZE = 24
 _UNDO_REDO_ICON_COLOR = "#20242b"  # matches styles._LIGHT_PALETTE["text"]; see _make_undo_redo_icon
-
-
-def _arc_point(rect: QRectF, angle_deg: float) -> QPointF:
-    """The point on `rect`'s ellipse at `angle_deg`, using Qt's own
-    `QPainterPath` arc convention (0 deg = 3 o'clock, positive = counter-
-    clockwise on screen) -- sampled via Qt itself rather than hand-derived
-    trig, so `_make_undo_redo_icon`'s arrowhead orientation is correct
-    regardless of that convention's exact sign."""
-    path = QPainterPath()
-    path.arcMoveTo(rect, angle_deg)
-    return path.currentPosition()
 
 
 def _arrowhead_polygon(tip: QPointF, direction: QPointF, size: float) -> QPolygonF:
@@ -90,41 +80,73 @@ def _arrowhead_polygon(tip: QPointF, direction: QPointF, size: float) -> QPolygo
 
 
 def _make_undo_redo_icon(direction: str) -> QIcon:
-    """A small curved-arrow glyph (undo: counter-clockwise, gap top-right;
-    redo: its mirror, gap top-left) drawn in-process via QPainter --
-    consistent with the app's existing icon system (see
-    `gui.widgets.tool_drawer._make_icon`, the same hand-drawn-glyph
-    technique), never dependent on an OS/desktop icon theme being present
-    (`QIcon.fromTheme` would silently return a null icon on many Windows/
-    macOS/minimal-Linux setups)."""
+    """A "reply-arrow" hook glyph -- a short vertical stub, one smooth
+    quarter-circle turn, then a long horizontal shaft ending in a bold
+    arrowhead -- drawn in-process via QPainter, consistent with the app's
+    existing icon system (see `gui.widgets.tool_drawer._make_icon`, the
+    same hand-drawn-glyph technique), never dependent on an OS/desktop icon
+    theme being present (`QIcon.fromTheme` would silently return a null
+    icon on many Windows/macOS/minimal-Linux setups).
+
+    Deliberately NOT a segment of one constant-radius circle (an earlier
+    build was, at various spans) -- a full arc's silhouette reads as
+    "circular motion" (Refresh/Reload) regardless of how much of the circle
+    is missing, especially once anti-aliased down to toolbar size. Here the
+    horizontal shaft -- most of the glyph's length -- is a straight line, so
+    the shape reads as a directional arrow first; the quarter-circle turn
+    is only a small connecting flourish, not the dominant silhouette.
+
+    Redo is undo's exact mirror image: every x-coordinate is reflected
+    about the icon's vertical center (`size - x`), and the quarter-turn's
+    sweep direction is reversed to match (`180, -90` instead of `0, 90`) --
+    reflection flips handedness, so simply relabeling coordinates without
+    also flipping the sweep would draw the turn on the wrong side."""
     size = _UNDO_REDO_ICON_SIZE
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     pen = QPen(QColor(_UNDO_REDO_ICON_COLOR))
-    pen.setWidthF(1.8)
+    pen.setWidthF(size * 0.11)
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
 
-    rect = QRectF(3, 3, size - 6, size - 6)
-    # Redo is undo's mirror: same span, start angle reflected about the
-    # vertical axis (90 - start), so the gap moves from top-right to
-    # top-left and the arrowhead flips from pointing left to pointing right.
-    start_angle, span_angle = (0, 270) if direction == "undo" else (90, 270)
+    mirror = direction == "redo"
+    margin = size * 0.12
+    radius = size * 0.22
+    stub_length = size * 0.16
+    shaft_y = size * 0.33
+    undo_stub_x = size - margin - 2  # undo's stub sits near the right edge
+    undo_arc_center_x = undo_stub_x - radius
+    arc_center_y = shaft_y + radius
+
+    def mirror_x(x: float) -> float:
+        return size - x if mirror else x
+
+    arc_center_x = mirror_x(undo_arc_center_x)
+    # Undo's arc entry (tangent vertical, where the stub attaches) is the
+    # circle's east point; mirroring flips it to the west point instead.
+    arc_entry_x = arc_center_x - radius if mirror else arc_center_x + radius
+    stub_bottom = QPointF(mirror_x(undo_stub_x), arc_center_y + stub_length)
+    stub_top = QPointF(arc_entry_x, arc_center_y)
+    shaft_tip = QPointF(mirror_x(margin), shaft_y)  # arc exit -> shaft -> arrowhead tip
 
     path = QPainterPath()
-    path.arcMoveTo(rect, start_angle)
-    path.arcTo(rect, start_angle, span_angle)
+    path.moveTo(stub_bottom)
+    path.lineTo(stub_top)
+    arc_rect = QRectF(arc_center_x - radius, arc_center_y - radius, 2 * radius, 2 * radius)
+    if not mirror:
+        path.arcTo(arc_rect, 0, 90)  # east -> north, tangent vertical -> horizontal
+    else:
+        path.arcTo(arc_rect, 180, -90)  # mirrored: west -> north, opposite sweep direction
+    path.lineTo(shaft_tip)
     painter.setPen(pen)
     painter.strokePath(path, pen)
 
-    end_point = _arc_point(rect, start_angle + span_angle)
-    near_end_point = _arc_point(rect, start_angle + span_angle - 6)
-    direction_vec = QPointF(end_point.x() - near_end_point.x(), end_point.y() - near_end_point.y())
+    arrow_direction = QPointF(1, 0) if mirror else QPointF(-1, 0)  # shaft always ends pointing horizontally
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor(_UNDO_REDO_ICON_COLOR))
-    painter.drawPolygon(_arrowhead_polygon(end_point, direction_vec, 6.0))
+    painter.drawPolygon(_arrowhead_polygon(shaft_tip, arrow_direction, size * 0.22))
 
     painter.end()
     return QIcon(pixmap)
@@ -156,12 +178,94 @@ _STARTUP_SCREEN_FRACTION = 0.92
 
 _FALLBACK_AVAILABLE_GEOMETRY = QRect(0, 0, 1280, 800)
 
-# Extra width reserved beyond a left-drawer page's own minimumSizeHint when
-# computing the drawer's default expanded width: the vertical scrollbar (see
-# QScrollBar:vertical width in gui.styles) plus a small comfortable margin so
-# controls never sit flush against it.
-_LEFT_DRAWER_SCROLLBAR_RESERVE = 12
-_LEFT_DRAWER_CONTENT_MARGIN = 12
+# Extra width reserved beyond a side drawer's widest page's own
+# minimumSizeHint when computing that drawer's default expanded width: the
+# vertical scrollbar (see QScrollBar:vertical width in gui.styles) plus a
+# small comfortable margin so controls never sit flush against it. Shared by
+# both the left (tool_drawer) and right (working_drawer) side -- see
+# `_side_drawer_min_width`.
+_DRAWER_SCROLLBAR_RESERVE = 12
+_DRAWER_CONTENT_MARGIN = 12
+
+# Default expanded width for each side drawer, as a fraction of the window's
+# own width -- only a floor/starting point, never a hard size: each drawer's
+# actual minimum is raised to whatever its widest page's content genuinely
+# needs (see `_side_drawer_min_width`), and the user can always drag the
+# splitter wider afterward. Deliberately different per side: the right
+# Working Data drawer holds far less content than the left Data/Plot/
+# Series/Figure/Layout/Axes drawer, so it needs a smaller share by default.
+_LEFT_DRAWER_WIDTH_FRACTION = 0.19
+_RIGHT_DRAWER_WIDTH_FRACTION = 0.16
+
+# The narrowest the center Workbench is ever allowed to shrink to in
+# `compute_drawer_widths`, even on a screen too small to also fit both
+# drawers at their preferred widths -- letting it shrink further toward 0
+# doesn't just look cramped, it makes Matplotlib's own coordinate
+# transforms singular against a literally-zero-size canvas. Deliberately
+# NOT enforced via a hard `QWidget.setMinimumSize` on the window itself:
+# `MainWindow` must never demand a size larger than the actual screen (see
+# `compute_initial_geometry`/`test_main_window_startup_geometry_never_
+# exceeds_screen`), which a real small-screen user could violate -- so this
+# is instead a soft priority `compute_drawer_widths` applies to whatever
+# total width it's actually given, shrinking the two side drawers (below
+# their own comfortable widths, though never asked to go below the hard
+# content floor a caller passed in) rather than the center.
+_MIN_WORKBENCH_WIDTH = 360
+
+
+def _side_drawer_min_width(drawer, content_widgets) -> int:
+    """The narrowest `drawer` (a `ToolDrawer`) can go without clipping any
+    of `content_widgets` (the un-wrapped widgets placed into its pages,
+    before `_wrap_scrollable`) -- their own `minimumSizeHint`, which no
+    scroll area can shrink below without cutting content off, plus the
+    strip and a small reserve for the scrollbar/margin. Used to raise each
+    side drawer's screen-fraction default up to a real floor when
+    necessary; see the two `_*_DRAWER_WIDTH_FRACTION` constants above."""
+    widest_content = max(widget.minimumSizeHint().width() for widget in content_widgets)
+    return drawer.strip_width + widest_content + _DRAWER_SCROLLBAR_RESERVE + _DRAWER_CONTENT_MARGIN
+
+
+def compute_drawer_widths(total_width: int, left_min_width: int, right_min_width: int) -> tuple[int, int, int]:
+    """Return `(left_width, center_width, right_width)` for the main
+    horizontal splitter, given the window's total content width and each
+    side drawer's own real floor (`_side_drawer_min_width`).
+
+    A pure function (like `compute_initial_geometry` above) so it can be
+    exercised directly at specific window widths in tests, independent of
+    whatever screen size the test's own Qt platform plugin happens to
+    report. Used both at construction and, via `MainWindow.resizeEvent`/
+    `_reflow_side_drawers`, on every subsequent resize -- `QSplitter`'s own
+    default behavior (proportionally rescaling whatever sizes were last
+    set) has no notion of either drawer's real content floor, so relying on
+    it alone across a resize can shrink an expanded drawer below what its
+    page actually needs and clip it."""
+    left_width = max(int(total_width * _LEFT_DRAWER_WIDTH_FRACTION), left_min_width)
+    right_width = max(int(total_width * _RIGHT_DRAWER_WIDTH_FRACTION), right_min_width)
+    center_width = total_width - left_width - right_width
+
+    # On any realistic screen (see the responsive test matrix in
+    # gui.main_window's own docstring references) both drawer floors and a
+    # comfortable center easily coexist -- this only engages on a screen too
+    # small to fit everything at once. The center Workbench is prioritized
+    # over each drawer's full *comfortable* width, but never shrunk below
+    # either drawer's own hard content floor (`left_min_width`/
+    # `right_min_width`, already the size each `max(...)` above guaranteed
+    # at minimum) -- letting the center shrink toward 0 instead doesn't
+    # just look cramped, it makes Matplotlib's own coordinate transforms
+    # singular against a literally-zero-size canvas; but shrinking a
+    # drawer below its floor to buy that room would just trade one broken
+    # region for another (a clipped drawer).
+    if center_width < _MIN_WORKBENCH_WIDTH:
+        deficit = _MIN_WORKBENCH_WIDTH - center_width
+        side_slack = (left_width - left_min_width) + (right_width - right_min_width)
+        if side_slack > 0:
+            left_slack = left_width - left_min_width
+            right_slack = right_width - right_min_width
+            left_width -= round(deficit * left_slack / side_slack)
+            right_width -= round(deficit * right_slack / side_slack)
+        center_width = max(total_width - left_width - right_width, 0)
+
+    return left_width, center_width, right_width
 
 
 def compute_initial_geometry(available: QRect, fraction: float = _STARTUP_SCREEN_FRACTION) -> QRect:
@@ -202,6 +306,47 @@ class _CursorSafeNavigationToolbar(NavigationToolbar2QT):
     def save_figure(self, *args):
         self.canvas.clear_reference_cursor()
         super().save_figure(*args)
+
+
+def _patch_mpl_icon_engine_dark_mode_detection() -> None:
+    """Matplotlib's own `NavigationToolbar2QT` (Home/Back/Forward/Pan/Zoom/
+    Configure Subplots/Save) recolors its icons white-on-transparent for
+    "dark mode" via a private `_IconEngine._is_dark_mode()` that reads
+    `self.toolbar.palette().color(self.toolbar.backgroundRole())` at *paint
+    time* (see `matplotlib.backends.backend_qt._IconEngine`) -- lazily, on
+    every repaint, not once at construction.
+
+    Once `gui.styles.apply_app_theme` puts ANY stylesheet on the
+    QApplication, Qt's `QStyleSheetStyle` takes over palette resolution for
+    every widget it hasn't explicitly styled (this toolbar included, since
+    GNOVI deliberately never styles it -- see `_create_toolbar`'s own note
+    on why), and that resolution measured black (`value() == 0`) for this
+    toolbar's Button role even though it visibly paints light -- confirmed
+    by direct comparison against the exact same toolbar constructed without
+    `apply_app_theme` applied (color `#fcfcfc`, correctly detected as
+    light). Explicitly re-`setPalette`-ing the toolbar does not stick either
+    -- Qt re-derives the palette from the stylesheet cascade on every
+    show()/polish. `_is_dark_mode()` misreading that as dark mode is what
+    produced icons the user reported as "washed out": nearly-white
+    strokes recolored for a dark background, over GNOVI's actual light
+    background.
+
+    GNOVI's application chrome is architecturally always light -- never a
+    user-switchable app-wide dark mode (see `gui.styles` module docstring)
+    -- so unconditionally returning `False` here is not a workaround, it is
+    asserting a real, permanent invariant of this application, immune to
+    whatever caused the palette misdetection above. Applied once at import
+    time (this module only ever runs one `NavigationToolbar2QT` instance
+    per `MainWindow`, but this is a class-level patch on Matplotlib's own
+    private class, so it must not be re-applied per-instance); a
+    `hasattr` guard makes it a no-op rather than a hard failure if a future
+    Matplotlib version renames/removes this private class."""
+    icon_engine_cls = getattr(backend_qt, "_IconEngine", None)
+    if icon_engine_cls is not None and hasattr(icon_engine_cls, "_is_dark_mode"):
+        icon_engine_cls._is_dark_mode = lambda self: False
+
+
+_patch_mpl_icon_engine_dark_mode_detection()
 
 
 class MainWindow(QMainWindow):
@@ -374,7 +519,7 @@ class MainWindow(QMainWindow):
         # Every widget that becomes a left-drawer page's content, kept so the
         # default expanded width (below) can be sized off their real
         # minimumSizeHint rather than a screen-fraction guess -- see
-        # `_LEFT_DRAWER_SCROLLBAR_RESERVE`/`_LEFT_DRAWER_CONTENT_MARGIN`.
+        # `_side_drawer_min_width`.
         left_drawer_content_widgets = [
             data_page,
             plot_page,
@@ -480,6 +625,18 @@ class MainWindow(QMainWindow):
         self.center_splitter.addWidget(self.bottom_panel)
         self.center_splitter.setStretchFactor(0, 7)
         self.center_splitter.setStretchFactor(1, 3)
+        # A hard absolute floor -- unlike the two side drawers (which
+        # collapse to their strip width by design, see `ToolDrawer`/
+        # `_set_side_drawer_collapsed`), the Workbench has no collapsed
+        # state to reconcile this with, so `QSplitter` can enforce it
+        # unconditionally: on a screen too small for `compute_drawer_widths`
+        # to give the Workbench its full `_MIN_WORKBENCH_WIDTH` without
+        # shrinking a drawer below its own content floor (see that
+        # function's own comment), this is the last-resort backstop that
+        # keeps the plot canvas above a literal zero width, which Matplotlib
+        # cannot render into (a singular coordinate transform), not just an
+        # uncomfortably narrow one.
+        self.center_splitter.setMinimumWidth(50)
 
         main_splitter = QSplitter(Qt.Horizontal)
         main_splitter.addWidget(self.tool_drawer)
@@ -488,24 +645,28 @@ class MainWindow(QMainWindow):
         main_splitter.setStretchFactor(0, 0)
         main_splitter.setStretchFactor(1, 1)
         main_splitter.setStretchFactor(2, 0)
-        # The 24%-of-screen default is only a floor -- on narrower screens it
-        # can land under what the widest left-drawer page (content margins,
-        # spin-box arrows, checkbox labels, the vertical scrollbar) actually
-        # needs, clipping controls at the drawer's right edge. Raise it to
-        # that real minimum when necessary; large screens are unaffected
-        # since the fraction already clears it there.
-        left_drawer_min_content_width = max(
-            widget.minimumSizeHint().width() for widget in left_drawer_content_widgets
+        # Each fraction-of-window default below is only a floor -- on
+        # narrower windows it can land under what that drawer's widest page
+        # (content margins, spin-box arrows, checkbox/button labels, the
+        # vertical scrollbar) actually needs, clipping controls at the
+        # drawer's right edge (or, on the right drawer, its action buttons'
+        # text). Raise it to that real minimum when necessary; wide windows
+        # are unaffected since the fraction already clears it there. The
+        # right drawer previously had no such floor at all -- just the flat
+        # fraction -- which is what let "Exclude Selected Rows from Working
+        # Data"/"Keep Selected Rows in Working Data" clip; those labels are
+        # shorter now too (see `gui.widgets.data_tools_panel`), so this
+        # floor only has to cover their shorter natural width, not the
+        # drawer becoming uncomfortably wide to fit the old, longer ones.
+        # Stored (not just a local) so `resizeEvent` below can reuse them on
+        # every resize without re-walking every left-drawer page's
+        # `minimumSizeHint()` each time -- neither ever changes after
+        # construction (drawer pages are fixed; see `ToolDrawer.add_page`).
+        self._left_drawer_min_width = _side_drawer_min_width(self.tool_drawer, left_drawer_content_widgets)
+        self._right_drawer_min_width = _side_drawer_min_width(self.working_drawer, [self.data_tools_panel])
+        left_width, center_width, right_width = compute_drawer_widths(
+            geometry.width(), self._left_drawer_min_width, self._right_drawer_min_width
         )
-        left_drawer_min_width = (
-            self.tool_drawer.strip_width
-            + left_drawer_min_content_width
-            + _LEFT_DRAWER_SCROLLBAR_RESERVE
-            + _LEFT_DRAWER_CONTENT_MARGIN
-        )
-        left_width = max(int(geometry.width() * 0.24), left_drawer_min_width)
-        right_width = int(geometry.width() * 0.21)
-        center_width = max(geometry.width() - left_width - right_width, 0)
         main_splitter.setSizes([left_width, center_width, right_width])
         self.main_splitter = main_splitter
 
@@ -768,6 +929,13 @@ class MainWindow(QMainWindow):
 
     def _create_toolbar(self) -> None:
         toolbar = QToolBar("Main", self)
+        # Scopes the raised/tactile QToolButton chrome (see gui.styles) to
+        # this toolbar only, via `QToolBar#MainToolBar QToolButton` --
+        # deliberately NOT the bare `QToolButton` selector, which would also
+        # repaint the Matplotlib navigation toolbar's own buttons (added
+        # separately, see `__init__`'s `nav_toolbar`) and previously made
+        # their icons unreadable against the new opaque background.
+        toolbar.setObjectName("MainToolBar")
         self.addToolBar(toolbar)
 
         # Undo/Redo: the SAME `self.undo_action`/`self.redo_action` QAction
@@ -921,6 +1089,44 @@ class MainWindow(QMainWindow):
 
     def _on_toggle_working_data(self, visible: bool) -> None:
         self.working_drawer.setVisible(visible)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._reflow_side_drawers()
+
+    def _reflow_side_drawers(self) -> None:
+        """Re-derive fresh left/center/right splitter widths for the
+        window's *current* content width on every resize -- not just once
+        at construction (see `compute_drawer_widths`'s own docstring for
+        why `QSplitter`'s default behavior, proportionally rescaling
+        whatever sizes were last set, isn't enough on its own: it has no
+        notion of either drawer's real content floor, so it can shrink an
+        expanded drawer below what its page actually needs and clip it --
+        `_wrap_scrollable`'s horizontal scrollbar is deliberately off, so
+        an over-shrunk page clips rather than scrolls).
+
+        A collapsed drawer's floor is its strip width, not its full content
+        floor -- otherwise reopening a collapsed drawer via a subsequent
+        resize (rather than the tool-strip button) would fight
+        `_set_side_drawer_collapsed`'s own bookkeeping in
+        `_drawer_open_widths`.
+
+        No-ops before `main_splitter` exists -- `QMainWindow.resizeEvent`
+        can fire from `setGeometry`/`show()` earlier in `__init__`, before
+        any of the widgets this reads have been constructed yet.
+        """
+        main_splitter = getattr(self, "main_splitter", None)
+        if main_splitter is None:
+            return
+        total_width = main_splitter.width()
+        if total_width <= 0:
+            return
+        left_min = self.tool_drawer.strip_width if self.tool_drawer.is_collapsed else self._left_drawer_min_width
+        right_min = (
+            self.working_drawer.strip_width if self.working_drawer.is_collapsed else self._right_drawer_min_width
+        )
+        left_width, center_width, right_width = compute_drawer_widths(total_width, left_min, right_min)
+        main_splitter.setSizes([left_width, center_width, right_width])
 
     def _set_side_drawer_collapsed(self, splitter_index: int, drawer: ToolDrawer, collapsed: bool) -> None:
         """Reclaim (or return) a side drawer's width for the plot canvas

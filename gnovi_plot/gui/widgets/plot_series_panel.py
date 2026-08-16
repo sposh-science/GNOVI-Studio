@@ -139,6 +139,12 @@ class PlotSeriesPanel(QWidget):
         self.offset_spin = QDoubleSpinBox()
         self.offset_spin.setRange(-_OFFSET_RANGE, _OFFSET_RANGE)
         self.offset_spin.setDecimals(4)
+        # Qt's own automatic minimumSizeHint scales with the widest value
+        # `_OFFSET_RANGE` (1e9) at 4 decimals could show, even though real
+        # offsets are almost always short -- see the matching note on
+        # `_make_limit_spin` in figure_properties_panel.py. A typed value
+        # far past this width still scrolls within the field normally.
+        self.offset_spin.setMinimumWidth(80)
 
         self.normalize_check = QCheckBox("Normalize to max")
 
@@ -183,12 +189,16 @@ class PlotSeriesPanel(QWidget):
         self.offset_step_spin.setRange(0.0, _OFFSET_RANGE)
         self.offset_step_spin.setDecimals(4)
         self.offset_step_spin.setSpecialValueText("Auto")
+        self.offset_step_spin.setMinimumWidth(80)  # see the matching note on `offset_spin` above
         self.auto_stack_button = QPushButton("Auto-Stack Offsets")
         self.reset_offsets_button = QPushButton("Reset Offsets")
 
         stack_group = QGroupBox("Stacked / Offset Curves")
         stack_form = QFormLayout(stack_group)
-        stack_form.addRow("Offset step (0 = auto)", self.offset_step_spin)
+        # "(0 = auto)" dropped -- redundant with `setSpecialValueText
+        # ("Auto")` above, which already shows "Auto" directly in the field
+        # itself at 0.
+        stack_form.addRow("Offset step", self.offset_step_spin)
         stack_buttons = QHBoxLayout()
         stack_buttons.addWidget(self.auto_stack_button)
         stack_buttons.addWidget(self.reset_offsets_button)

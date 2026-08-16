@@ -71,6 +71,15 @@ def test_badge_shows_p1_for_a_single_panel_layout(qapp):
 def test_clicking_a_different_panel_moves_the_badge(qapp):
     window = MainWindow()
     window.show()
+    # A real, comfortable window size -- at whatever tiny screen the
+    # offscreen test platform reports, both side drawers' real content
+    # floors alone can approach the "screen" width, leaving the plot
+    # canvas too narrow to render a 1x2 layout as two distinct panels
+    # (see gui.main_window.compute_drawer_widths's own docstring on why
+    # `MainWindow` never demands more than the actual screen at
+    # construction). See tests/test_gui_responsiveness.py for the same
+    # pattern.
+    window.resize(1400, 900)
     window.figure_size_panel.layout_combo.setCurrentIndex(1)  # "1 x 2"
     dataset = _make_dataset()
     window.dataset_manager.add(dataset)

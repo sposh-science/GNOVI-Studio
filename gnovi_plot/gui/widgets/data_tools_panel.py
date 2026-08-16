@@ -73,8 +73,15 @@ class DataToolsPanel(QWidget):
 
         self.calculated_column_button = QPushButton("Calculated Column…")
         self.calculated_column_button.setProperty("primary", True)
-        self.exclude_button = QPushButton("Exclude Selected Rows from Working Data")
-        self.keep_button = QPushButton("Keep Selected Rows in Working Data")
+        # "...from/in Working Data" dropped from the label text -- the
+        # enclosing "Working Data Actions" group (and the drawer's own
+        # "Working" header) already say so; the full sentence no longer fit
+        # the right drawer's compact width without clipping (see
+        # `MainWindow`'s `_right_drawer_min_width` note on the drawer's own
+        # responsive floor, which now guarantees these buttons -- at their
+        # shorter natural width -- can never clip regardless).
+        self.exclude_button = QPushButton("Exclude Selected Rows")
+        self.keep_button = QPushButton("Keep Selected Rows")
         self.reset_button = QPushButton("Reset Working Data")
 
         self.history_list = QListWidget()

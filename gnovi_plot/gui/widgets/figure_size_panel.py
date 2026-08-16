@@ -191,6 +191,15 @@ class FigureSizePanel(QWidget):
         self.font_family_combo = QComboBox()
         self.font_family_combo.addItem(_SYSTEM_DEFAULT_FONT)
         self.font_family_combo.addItems(QFontDatabase.families())
+        # A QComboBox's own minimumSizeHint is driven by its single widest
+        # item (here, whatever the system's longest installed font family
+        # name happens to be -- highly system-dependent, and unrelated to
+        # `setMaximumWidth`, which leaves minimumSizeHint untouched) -- see
+        # the matching note on `figure_properties_panel._make_limit_spin`
+        # for the same "configured content, not this widget's own layout
+        # needs, inflated the natural floor" pattern. Only the floor is
+        # overridden; the combo still expands to fill its row normally.
+        self.font_family_combo.setMinimumWidth(90)
 
         self.base_font_spin = self._make_font_spin()
         self.title_font_spin = self._make_font_spin()
