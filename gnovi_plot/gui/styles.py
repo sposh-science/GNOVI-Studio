@@ -222,6 +222,12 @@ QToolButton:checked {{
     border-color: {accent};
 }}
 
+QToolButton:disabled {{
+    background-color: transparent;
+    border-color: transparent;
+    color: {muted_text};
+}}
+
 QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {{
     background-color: {bg_control};
     border: 1px solid {border};
@@ -409,12 +415,58 @@ QWidget#WorkbenchHeader {{
 QLabel#WorkbenchHeaderLabel {{
     color: {muted_text};
     font-weight: 400;
-    letter-spacing: 1px;
 }}
 
-QLabel#WorkbenchHeaderLayoutLabel {{
+/* Workbench tab strip -- see gui.widgets.workbench_tabs.WorkbenchTabBar.
+Application/workspace navigation, deliberately distinct from the bottom
+panel's generic QTabBar (Graphs/Data/Transformations, styled above): an
+underline-tab look rather than a pill-tab look, sitting on the same
+Surface 2 raised band as the toolbar/Workbench header directly below it. */
+QWidget#WorkbenchTabStrip {{
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1, stop:0 {bg_raised_top}, stop:1 {bg_raised_bottom}
+    );
+    border-bottom: 1px solid {border};
+}}
+
+QTabBar#WorkbenchTabBar::tab {{
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 6px 14px;
+    margin-right: 2px;
     color: {muted_text};
-    font-weight: 400;
+    max-width: 180px;
+}}
+
+QTabBar#WorkbenchTabBar::tab:hover {{
+    color: {text};
+}}
+
+QTabBar#WorkbenchTabBar::tab:selected {{
+    color: {accent_pressed};
+    border-bottom: 2px solid {accent};
+}}
+
+QToolButton#WorkbenchNewButton {{
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: {muted_text};
+    font-weight: 600;
+    min-width: 22px;
+    min-height: 22px;
+    margin: 2px 4px;
+}}
+
+QToolButton#WorkbenchNewButton:hover {{
+    background-color: {bg_recessed};
+    border-color: {accent};
+    color: {accent};
+}}
+
+QToolButton#WorkbenchNewButton:pressed {{
+    background-color: {bg_control_press};
 }}
 
 QMenuBar {{

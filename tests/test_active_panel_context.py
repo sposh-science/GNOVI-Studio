@@ -170,7 +170,7 @@ def test_repeated_series_from_the_same_dataset_still_counts_as_one_dataset(qapp)
     assert "Data: 2 datasets" not in label.text()
 
 
-def test_multiple_datasets_shows_a_count_with_a_names_tooltip(qapp):
+def test_multiple_datasets_are_listed_inline_one_per_line(qapp):
     d1 = _make_dataset("Ferricyanide SR-0.05")
     d2 = _make_dataset("Ferricyanide SR-0.10")
     d3 = _make_dataset("Ascorbic Acid")
@@ -181,8 +181,38 @@ def test_multiple_datasets_shows_a_count_with_a_names_tooltip(qapp):
 
     label = ActivePanelLabel(figure, lambda: GraphLibrary())
 
-    assert "Data: 3 datasets" in label.text()
+    assert label.text().endswith(
+        "Data:\n  Ferricyanide SR-0.05\n  Ferricyanide SR-0.10\n  Ascorbic Acid"
+    )
+    assert "Data: 3 datasets" not in label.text()
+    # A tooltip fallback remains, but the names are never *only* in it.
     assert label.toolTip() == "Ferricyanide SR-0.05\nFerricyanide SR-0.10\nAscorbic Acid"
+
+
+def test_multiple_dataset_lines_preserve_first_plotted_order(qapp):
+    d1 = _make_dataset("z-dataset")
+    d2 = _make_dataset("a-dataset")
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(d1, "x", "y"))
+    figure.add_series(PlotSeries.line(d2, "x", "y"))
+
+    label = ActivePanelLabel(figure, lambda: GraphLibrary())
+
+    data_section = label.text().split("Data:\n", 1)[1]
+    assert data_section == "  z-dataset\n  a-dataset"
+
+
+def test_multiple_dataset_names_are_not_bold(qapp):
+    d1 = _make_dataset("A")
+    d2 = _make_dataset("B")
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(d1, "x", "y"))
+    figure.add_series(PlotSeries.line(d2, "x", "y"))
+
+    label = ActivePanelLabel(figure, lambda: GraphLibrary())
+
+    assert label.font().bold() is False
+    assert label.property("contextRow") is True
 
 
 # --- Follows the active panel, not a fixed one ----------------------------------

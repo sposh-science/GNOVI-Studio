@@ -306,6 +306,172 @@ def test_update_button_cancel_leaves_the_stored_graph_untouched(qapp, monkeypatc
     assert library.get(graph_id).panel.title == ""
 
 
+# --- Active panel -> Graph Library selection sync ------------------------------
+#
+# Pure one-way context/navigation display, driven by `sync_active_panel_state()`
+# (the same call already used for Update Saved Graph's enabled state -- see
+# that method's docstring). Never loads a graph, never touches the panel/
+# library, never marks anything dirty, never creates an Undo checkpoint --
+# the reverse direction (selecting a row loading it) stays exclusively the
+# "Load Selected Graph into Active Panel" button.
+
+
+def test_panel_originating_from_a_graph_selects_that_graph(qapp, monkeypatch):
+    dataset = _make_dataset()
+    manager = DatasetManager()
+    manager.add(dataset)
+    figure = GnoviFigure()
+    library = GraphLibrary()
+    g1 = library.save_panel_as_graph(figure, "g1", manager)
+    panel = GraphLibraryPanel(library, lambda: figure, lambda: manager)
+
+    panel.sync_active_panel_state()
+
+    assert panel.graph_list.currentItem() is not None
+    assert panel._current_graph_id() == g1.id
+
+
+def test_different_panels_select_their_own_origin_graph(qapp):
+    dataset = _make_dataset()
+    manager = DatasetManager()
+    manager.add(dataset)
+
+    scratch = GnoviFigure()
+    library = GraphLibrary()
+    g1 = library.save_panel_as_graph(scratch, "g1", manager)
+    scratch.active_panel.clear_series()
+    g2 = library.save_panel_as_graph(scratch, "g2", manager)
+
+    figure = GnoviFigure()
+    figure.set_layout(1, 2)
+    panel = GraphLibraryPanel(library, lambda: figure, lambda: manager)
+
+    figure.set_active_panel(0)
+    library.load_graph_into_panel(g1.id, figure, manager)
+    panel.sync_active_panel_state()
+    assert panel._current_graph_id() == g1.id
+
+    figure.set_active_panel(1)
+    library.load_graph_into_panel(g2.id, figure, manager)
+    panel.sync_active_panel_state()
+    assert panel._current_graph_id() == g2.id
+
+
+def test_unsaved_panel_clears_the_selection(qapp, monkeypatch):
+    panel, figure, manager, dataset, library = _make_panel()
+    _stub_get_text(monkeypatch, "g1")
+    panel.save_button.click()
+    assert panel._current_graph_id() is not None
+
+    # A brand-new, never-saved panel replaces the active one.
+    figure.panels[figure.active_panel_index] = type(figure.active_panel)()
+    panel.sync_active_panel_state()
+
+    assert panel.graph_list.currentRow() == -1
+    assert panel._current_graph_id() is None
+
+
+def test_switching_workbenches_refreshes_the_selection(qapp):
+    """Simulates a Workbench switch: a different `GnoviFigure` (via a fresh
+    `get_figure` callable) becomes current -- selection must follow it."""
+    dataset = _make_dataset()
+    manager = DatasetManager()
+    manager.add(dataset)
+    library = GraphLibrary()
+
+    scratch = GnoviFigure()
+    g1 = library.save_panel_as_graph(scratch, "g1", manager)
+
+    figure_a = GnoviFigure()
+    library.load_graph_into_panel(g1.id, figure_a, manager)
+    figure_b = GnoviFigure()  # a second Workbench's figure -- unsaved
+
+    current_figure = figure_a
+    panel = GraphLibraryPanel(library, lambda: current_figure, lambda: manager)
+    panel.sync_active_panel_state()
+    assert panel._current_graph_id() == g1.id
+
+    current_figure = figure_b  # "switch Workbench"
+    panel.sync_active_panel_state()
+    assert panel._current_graph_id() is None
+
+
+def test_loading_a_saved_graph_updates_the_selection(qapp):
+    dataset = _make_dataset()
+    manager = DatasetManager()
+    manager.add(dataset)
+    library = GraphLibrary()
+    scratch = GnoviFigure()
+    g1 = library.save_panel_as_graph(scratch, "g1", manager)
+
+    target_figure = GnoviFigure()
+    panel = GraphLibraryPanel(library, lambda: target_figure, lambda: manager)
+    assert panel._current_graph_id() is None
+
+    panel.graph_list.setCurrentRow(0)
+    panel.load_button.click()
+
+    assert panel._current_graph_id() == g1.id
+
+
+def test_deleting_the_origin_graph_clears_the_selection(qapp, monkeypatch):
+    panel, figure, manager, dataset, library = _make_panel()
+    _stub_get_text(monkeypatch, "g1")
+    panel.save_button.click()
+    assert panel._current_graph_id() is not None
+
+    panel.delete_button.click()
+
+    assert panel.graph_list.currentRow() == -1
+    assert panel._current_graph_id() is None
+    # The active panel keeps its independent working copy regardless.
+    assert len(figure.active_panel.series) == 1
+
+
+def test_renaming_a_different_graph_does_not_steal_the_selection(qapp, monkeypatch):
+    """Renaming some other Graph Library entry must not select it -- the
+    selection always reflects the ACTIVE PANEL's own origin."""
+    dataset = _make_dataset()
+    manager = DatasetManager()
+    manager.add(dataset)
+    figure = GnoviFigure()
+    library = GraphLibrary()
+    g1 = library.save_panel_as_graph(figure, "g1", manager)
+    scratch = GnoviFigure()
+    g2 = library.save_panel_as_graph(scratch, "g2", manager)
+
+    panel = GraphLibraryPanel(library, lambda: figure, lambda: manager)
+    panel.sync_active_panel_state()
+    assert panel._current_graph_id() == g1.id
+
+    # Select and rename the OTHER graph (g2) via the list/rename button.
+    row = next(i for i in range(panel.graph_list.count()) if panel.graph_list.item(i).text() == "g2")
+    panel.graph_list.setCurrentRow(row)
+    _stub_get_text(monkeypatch, "g2 renamed")
+    panel.rename_button.click()
+    panel.sync_active_panel_state()  # mirrors what MainWindow does on graph_library_changed
+
+    assert panel._current_graph_id() == g1.id  # still g1 -- the active panel's real origin
+
+
+def test_selection_sync_does_not_emit_graph_library_changed(qapp):
+    """Pure display -- must never look like a library mutation to the
+    owner (which would otherwise mark the project dirty)."""
+    dataset = _make_dataset()
+    manager = DatasetManager()
+    manager.add(dataset)
+    figure = GnoviFigure()
+    library = GraphLibrary()
+    library.save_panel_as_graph(figure, "g1", manager)
+    panel = GraphLibraryPanel(library, lambda: figure, lambda: manager)
+    received = []
+    panel.graph_library_changed.connect(lambda: received.append(True))
+
+    panel.sync_active_panel_state()
+
+    assert received == []
+
+
 def test_set_library_repoints_and_reloads_the_list(qapp, monkeypatch):
     panel, figure, manager, dataset, library = _make_panel()
     _stub_get_text(monkeypatch, "Old Project Graph")

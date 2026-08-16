@@ -30,33 +30,28 @@ def _make_dataset(name="d"):
 # --- Label content -----------------------------------------------------------
 
 
-def test_header_shows_the_workbench_label(qapp):
-    header = WorkbenchHeader(GnoviFigure())
-    assert header.title_label.text() == "WORKBENCH"
+def test_header_shows_workbench_name_and_layout(qapp):
+    header = WorkbenchHeader("CV Comparison", GnoviFigure())
+    assert header.label.text() == "WORKBENCH · CV Comparison · 1 × 1"
 
 
 def test_header_shows_the_current_layout(qapp):
     figure = GnoviFigure()
     figure.set_layout(2, 2)
 
-    header = WorkbenchHeader(figure)
+    header = WorkbenchHeader("CV Comparison", figure)
 
-    assert header.layout_label.text() == "2 × 2"
-
-
-def test_header_defaults_to_1x1_layout(qapp):
-    header = WorkbenchHeader(GnoviFigure())
-    assert header.layout_label.text() == "1 × 1"
+    assert header.label.text() == "WORKBENCH · CV Comparison · 2 × 2"
 
 
-def test_refresh_reloads_layout_from_an_externally_mutated_figure(qapp):
+def test_refresh_reloads_name_and_layout(qapp):
     figure = GnoviFigure()
-    header = WorkbenchHeader(figure)
+    header = WorkbenchHeader("CV Comparison", figure)
 
     figure.set_layout(1, 3)
-    header.refresh(figure)
+    header.refresh("New Scan", figure)
 
-    assert header.layout_label.text() == "1 × 3"
+    assert header.label.text() == "WORKBENCH · New Scan · 1 × 3"
 
 
 def test_header_does_not_duplicate_the_active_panel_badge(qapp):
@@ -66,21 +61,20 @@ def test_header_does_not_duplicate_the_active_panel_badge(qapp):
     figure.set_layout(2, 2)
     figure.set_active_panel(2)
 
-    header = WorkbenchHeader(figure)
+    header = WorkbenchHeader("CV Comparison", figure)
 
-    text = f"{header.title_label.text()} {header.layout_label.text()}"
+    text = header.label.text()
     assert "ACTIVE" not in text
     assert "P3" not in text
     assert "Panel" not in text
 
 
-# --- Wired into MainWindow, tracks the real figure ----------------------------
+# --- Wired into MainWindow, tracks the real figure and active Workbench -------
 
 
 def test_main_window_hosts_a_workbench_header(qapp):
     window = MainWindow()
-    assert window.workbench_header.title_label.text() == "WORKBENCH"
-    assert window.workbench_header.layout_label.text() == "1 × 1"
+    assert window.workbench_header.label.text() == "WORKBENCH · Workbench 1 · 1 × 1"
     window.close()
 
 
@@ -88,7 +82,7 @@ def test_main_window_hosts_a_workbench_header(qapp):
 def test_workbench_header_updates_when_layout_changes(qapp, index, expected):
     window = MainWindow()
     window.figure_size_panel.layout_combo.setCurrentIndex(index)
-    assert window.workbench_header.layout_label.text() == expected
+    assert window.workbench_header.label.text() == f"WORKBENCH · Workbench 1 · {expected}"
     window.close()
 
 
@@ -102,27 +96,27 @@ def test_workbench_header_updates_after_project_load(qapp, monkeypatch, tmp_path
     window.save_project_as_action.trigger()
 
     window.new_project_action.trigger()
-    assert window.workbench_header.layout_label.text() == "1 × 1"
+    assert window.workbench_header.label.text() == "WORKBENCH · Workbench 1 · 1 × 1"
 
     monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(out_path), "")))
     window.open_project_action.trigger()
 
-    assert window.workbench_header.layout_label.text() == "2 × 2"
+    assert window.workbench_header.label.text() == "WORKBENCH · Workbench 1 · 2 × 2"
     window.close()
 
 
 def test_workbench_header_updates_on_undo_redo(qapp):
     window = MainWindow()
     window.figure_size_panel.layout_combo.setCurrentIndex(3)  # "2 x 2"
-    assert window.workbench_header.layout_label.text() == "2 × 2"
+    assert window.workbench_header.label.text() == "WORKBENCH · Workbench 1 · 2 × 2"
 
     window._on_undo()
 
-    assert window.workbench_header.layout_label.text() == "1 × 1"
+    assert window.workbench_header.label.text() == "WORKBENCH · Workbench 1 · 1 × 1"
 
     window._on_redo()
 
-    assert window.workbench_header.layout_label.text() == "2 × 2"
+    assert window.workbench_header.label.text() == "WORKBENCH · Workbench 1 · 2 × 2"
     window.close()
 
 

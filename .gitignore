@@ -16,3 +16,8 @@ venv/
 .idea/
 
 .DS_Store
+
+# Manual testing artifacts (saved projects / exported figures)
+*.gnovi
+*.png
+!docs/**/*.png

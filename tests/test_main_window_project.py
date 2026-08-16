@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
 from matplotlib.backend_bases import MouseEvent
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
@@ -152,7 +153,7 @@ def test_save_project_writes_to_the_existing_path_without_prompting(qapp, monkey
 
     assert window._dirty is False
     reloaded = load_project(out_path)
-    assert len(reloaded.figures[0].series) == 2
+    assert len(reloaded.workbenches[0].figure.series) == 2
     window.close()
 
 
@@ -396,7 +397,7 @@ def test_saving_active_panel_as_graph_marks_it_a_working_copy(qapp, monkeypatch)
     window.close()
 
 
-def test_multiple_dataset_provenance_shows_a_count_with_a_tooltip(qapp):
+def test_multiple_dataset_provenance_lists_names_inline(qapp):
     window = _make_window(qapp)
     d1 = _make_dataset("Ferricyanide SR-0.05")
     d2 = _make_dataset("Ascorbic Acid")
@@ -407,7 +408,7 @@ def test_multiple_dataset_provenance_shows_a_count_with_a_tooltip(qapp):
     )
 
     assert window.plot_page_active_panel_label.text() == (
-        "Active panel: Panel 1\nGraph: Unsaved graph\nData: 2 datasets"
+        "Active panel: Panel 1\nGraph: Unsaved graph\nData:\n  Ferricyanide SR-0.05\n  Ascorbic Acid"
     )
     assert window.plot_page_active_panel_label.toolTip() == "Ferricyanide SR-0.05\nAscorbic Acid"
     window.close()
@@ -477,6 +478,160 @@ def test_update_saved_graph_cancel_leaves_the_stored_snapshot_untouched(qapp, mo
     stored = window._project.graph_library.get(graph_id)
     assert len(stored.panel.series) == 1
     assert stored.panel.series[0].label == "Original"
+    window.close()
+
+
+# --- Active panel -> Graph Library selection sync, through MainWindow ----------
+
+
+def test_panel_g1_selects_g1_in_the_graph_library(qapp, monkeypatch):
+    window = _make_window(qapp)
+    dataset = _make_dataset()
+    window.dataset_manager.add(dataset)
+    window.figure_size_panel.layout_combo.setCurrentIndex(1)  # "1 x 2"
+
+    window._set_active_panel(0)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y")])
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("g1", True)))
+    window.graph_library_panel.save_button.click()
+    g1_id = window._project.graph_library.graphs[0].id
+
+    window._set_active_panel(1)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y")])
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("g2", True)))
+    window.graph_library_panel.save_button.click()
+
+    window._set_active_panel(0)
+
+    assert window.graph_library_panel._current_graph_id() == g1_id
+    window.close()
+
+
+def test_panel_g2_selects_g2_in_the_graph_library(qapp, monkeypatch):
+    window = _make_window(qapp)
+    dataset = _make_dataset()
+    window.dataset_manager.add(dataset)
+    window.figure_size_panel.layout_combo.setCurrentIndex(1)  # "1 x 2"
+
+    window._set_active_panel(0)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y")])
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("g1", True)))
+    window.graph_library_panel.save_button.click()
+
+    window._set_active_panel(1)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y")])
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("g2", True)))
+    window.graph_library_panel.save_button.click()
+    g2_id = window._project.graph_library.graphs[-1].id
+
+    assert window.graph_library_panel._current_graph_id() == g2_id
+    window.close()
+
+
+def test_unsaved_active_panel_clears_the_graph_library_selection(qapp, monkeypatch):
+    window = _make_window(qapp)
+    dataset = _make_dataset()
+    window.dataset_manager.add(dataset)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y")])
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("g1", True)))
+    window.graph_library_panel.save_button.click()
+    assert window.graph_library_panel._current_graph_id() is not None
+
+    window.figure_size_panel.layout_combo.setCurrentIndex(1)  # "1 x 2" -- Panel 2 is fresh/unsaved
+    window.toolbar_panel_combo.setCurrentIndex(1)
+
+    assert window.graph_library_panel.graph_list.currentRow() == -1
+    assert window.graph_library_panel._current_graph_id() is None
+    window.close()
+
+
+def test_switching_workbenches_refreshes_the_graph_library_selection(qapp, monkeypatch):
+    window = _make_window(qapp)
+    dataset = _make_dataset()
+    window.dataset_manager.add(dataset)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y")])
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("g1", True)))
+    window.graph_library_panel.save_button.click()
+    g1_id = window._project.graph_library.graphs[0].id
+    workbench_a_id = window._project.active_workbench_id
+
+    window.workbench_tab_bar.new_button.click()  # Workbench 2: fresh, unsaved
+    assert window.graph_library_panel._current_graph_id() is None
+
+    window._on_workbench_tab_selected(workbench_a_id)
+
+    assert window.graph_library_panel._current_graph_id() == g1_id
+    window.close()
+
+
+def test_loading_a_saved_graph_updates_the_graph_library_selection(qapp, monkeypatch):
+    window = _make_window(qapp)
+    dataset = _make_dataset()
+    window.dataset_manager.add(dataset)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y")])
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("g1", True)))
+    window.graph_library_panel.save_button.click()
+    g1_id = window._project.graph_library.graphs[0].id
+
+    window._on_clear_plot()  # active panel is now unsaved again
+    window.workbench_tab_bar.new_button.click()
+    assert window.graph_library_panel._current_graph_id() is None
+
+    window.graph_library_panel.graph_list.setCurrentRow(0)
+    window.graph_library_panel.load_button.click()
+
+    assert window.graph_library_panel._current_graph_id() == g1_id
+    window.close()
+
+
+def test_deleting_the_origin_graph_clears_the_graph_library_selection(qapp, monkeypatch):
+    window = _make_window(qapp)
+    dataset = _make_dataset()
+    window.dataset_manager.add(dataset)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y")])
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("g1", True)))
+    window.graph_library_panel.save_button.click()
+    assert window.graph_library_panel._current_graph_id() is not None
+
+    window.graph_library_panel.graph_list.setCurrentRow(0)
+    window.graph_library_panel.delete_button.click()
+
+    assert window.graph_library_panel.graph_list.currentRow() == -1
+    assert window.graph_library_panel._current_graph_id() is None
+    # The active panel keeps its independent working copy regardless.
+    assert len(window.figure_model.series) == 1
+    window.close()
+
+
+def test_graph_library_selection_sync_does_not_mark_the_project_dirty(qapp, monkeypatch):
+    window = _make_window(qapp)
+    dataset = _make_dataset()
+    window.dataset_manager.add(dataset)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y")])
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("g1", True)))
+    window.graph_library_panel.save_button.click()
+    window.figure_size_panel.layout_combo.setCurrentIndex(1)  # "1 x 2"
+    window._set_dirty(False)
+
+    window.toolbar_panel_combo.setCurrentIndex(1)  # Panel 2 -- pure navigation
+
+    assert window._dirty is False
+    window.close()
+
+
+def test_graph_library_selection_sync_does_not_create_an_undo_checkpoint(qapp, monkeypatch):
+    window = _make_window(qapp)
+    dataset = _make_dataset()
+    window.dataset_manager.add(dataset)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y")])
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("g1", True)))
+    window.graph_library_panel.save_button.click()
+    window.figure_size_panel.layout_combo.setCurrentIndex(1)  # "1 x 2"
+    can_undo_before = window.undo_action.isEnabled()
+
+    window.toolbar_panel_combo.setCurrentIndex(1)  # Panel 2 -- pure navigation
+
+    assert window.undo_action.isEnabled() == can_undo_before
     window.close()
 
 
@@ -605,6 +760,396 @@ def test_rerender_alone_does_not_set_dirty(qapp):
     window._rerender()
 
     assert window._dirty is False
+    window.close()
+
+
+# --- Workbenches: menu, dirty state, undo isolation, core workflow -------------
+
+
+def test_workbench_menu_has_new_rename_duplicate_delete_actions(qapp):
+    window = _make_window(qapp)
+    assert window.new_workbench_action.text() == "New Workbench"
+    assert window.rename_workbench_action.text() == "Rename Workbench"
+    assert window.duplicate_workbench_action.text() == "Duplicate Workbench"
+    assert window.delete_workbench_action.text() == "Delete Workbench"
+    window.close()
+
+
+def test_delete_workbench_action_disabled_with_only_one_workbench(qapp):
+    window = _make_window(qapp)
+    window._sync_workbench_menu_state()
+    assert window.delete_workbench_action.isEnabled() is False
+    window.close()
+
+
+def test_delete_workbench_action_enabled_once_a_second_exists(qapp):
+    window = _make_window(qapp)
+    window.workbench_tab_bar.new_button.click()
+    window._sync_workbench_menu_state()
+    assert window.delete_workbench_action.isEnabled() is True
+    window.close()
+
+
+def test_new_workbench_action_creates_and_switches_via_the_menu(qapp):
+    window = _make_window(qapp)
+    original_id = window._project.active_workbench_id
+
+    window.new_workbench_action.trigger()
+
+    assert len(window._project.workbenches) == 2
+    assert window._project.active_workbench_id != original_id
+    assert window.workbench_tab_bar.tab_bar.count() == 2
+    window.close()
+
+
+def test_rename_workbench_action_targets_the_active_workbench(qapp, monkeypatch):
+    window = _make_window(qapp)
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("CV Scan Rates", True)))
+
+    window.rename_workbench_action.trigger()
+
+    assert window._project.active_workbench.name == "CV Scan Rates"
+    assert window.workbench_tab_bar.tab_bar.tabText(0) == "CV Scan Rates"
+    window.close()
+
+
+def test_duplicate_workbench_action_targets_the_active_workbench(qapp):
+    window = _make_window(qapp)
+    original_id = window._project.active_workbench_id
+
+    window.duplicate_workbench_action.trigger()
+
+    assert len(window._project.workbenches) == 2
+    assert window._project.active_workbench_id != original_id
+    assert window._project.active_workbench.name == "Workbench 1 (Copy)"
+    window.close()
+
+
+def test_delete_workbench_action_requires_confirmation(qapp, monkeypatch):
+    window = _make_window(qapp)
+    window.workbench_tab_bar.new_button.click()
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Cancel))
+
+    window.delete_workbench_action.trigger()
+
+    assert len(window._project.workbenches) == 2  # cancelled -- nothing removed
+    window.close()
+
+
+def test_delete_workbench_action_removes_on_confirmation(qapp, monkeypatch):
+    window = _make_window(qapp)
+    window.workbench_tab_bar.new_button.click()
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Yes))
+
+    window.delete_workbench_action.trigger()
+
+    assert len(window._project.workbenches) == 1
+    window.close()
+
+
+# --- Workbench dirty state -------------------------------------------------------
+
+
+def test_creating_a_workbench_marks_dirty(qapp):
+    window = _make_window(qapp)
+    window._set_dirty(False)
+
+    window.workbench_tab_bar.new_button.click()
+
+    assert window._dirty is True
+    window.close()
+
+
+def test_renaming_a_workbench_marks_dirty(qapp, monkeypatch):
+    window = _make_window(qapp)
+    window._set_dirty(False)
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("Renamed", True)))
+
+    window.rename_workbench_action.trigger()
+
+    assert window._dirty is True
+    window.close()
+
+
+def test_duplicating_a_workbench_marks_dirty(qapp):
+    window = _make_window(qapp)
+    window._set_dirty(False)
+
+    window.duplicate_workbench_action.trigger()
+
+    assert window._dirty is True
+    window.close()
+
+
+def test_deleting_a_workbench_marks_dirty(qapp, monkeypatch):
+    window = _make_window(qapp)
+    window.workbench_tab_bar.new_button.click()
+    window._set_dirty(False)
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Yes))
+
+    window.delete_workbench_action.trigger()
+
+    assert window._dirty is True
+    window.close()
+
+
+def test_switching_the_active_workbench_alone_does_not_mark_dirty(qapp):
+    window = _make_window(qapp)
+    window.workbench_tab_bar.new_button.click()
+    second_id = window._project.active_workbench_id
+    first_id = next(w.id for w in window._project.workbenches if w.id != second_id)
+    window._set_dirty(False)
+
+    window._on_workbench_tab_selected(first_id)
+
+    assert window._dirty is False
+    window.close()
+
+
+# --- Prominent Undo/Redo: shared QAction, icons, disabled state -----------------
+
+
+def test_undo_redo_toolbar_and_menu_share_the_same_qaction_objects(qapp):
+    """Menu Undo/Redo and toolbar Undo/Redo must be driven by the exact
+    same QAction -- never two separate systems."""
+    from PySide6.QtWidgets import QToolBar
+
+    window = _make_window(qapp)
+    main_toolbar = next(tb for tb in window.findChildren(QToolBar) if tb.windowTitle() == "Main")
+    assert window.undo_action in main_toolbar.actions()
+    assert window.redo_action in main_toolbar.actions()
+    window.close()
+
+
+def test_undo_redo_actions_have_icons(qapp):
+    window = _make_window(qapp)
+    assert not window.undo_action.icon().isNull()
+    assert not window.redo_action.icon().isNull()
+    window.close()
+
+
+def test_undo_redo_actions_start_disabled(qapp):
+    window = _make_window(qapp)
+    assert window.undo_action.isEnabled() is False
+    assert window.redo_action.isEnabled() is False
+    window.close()
+
+
+def test_undo_action_enabled_after_a_content_edit(qapp):
+    window = _dirty_window(qapp)
+    assert window.undo_action.isEnabled() is True
+    assert window.redo_action.isEnabled() is False
+    window.close()
+
+
+def test_redo_action_enabled_after_an_undo(qapp):
+    window = _dirty_window(qapp)
+    window._on_undo()
+    assert window.redo_action.isEnabled() is True
+    window.close()
+
+
+def test_redo_action_supports_ctrl_y_in_addition_to_the_standard_shortcut(qapp):
+    from PySide6.QtGui import QKeySequence
+
+    window = _make_window(qapp)
+    shortcuts = [s.toString() for s in window.redo_action.shortcuts()]
+    assert QKeySequence("Ctrl+Y").toString() in shortcuts
+    window.close()
+
+
+def test_undo_redo_tooltips_are_generic_not_per_action_descriptions(qapp):
+    """Per-action descriptions (e.g. "Undo: Change Series Color") are
+    explicitly deferred this phase -- generic tooltips are sufficient."""
+    window = _make_window(qapp)
+    assert window.undo_action.toolTip() == "Undo (Ctrl+Z)"
+    assert window.redo_action.toolTip() == "Redo (Ctrl+Shift+Z)"
+    window.close()
+
+
+# --- Per-Workbench Undo isolation ------------------------------------------------
+
+
+def test_undo_is_isolated_per_workbench(qapp):
+    """The exact scenario: Workbench A changes a series color (A1);
+    Workbench B changes its title twice (B1, B2). Undo while B is active
+    must undo only B2; switching to A and undoing must undo only A1;
+    switching back to B must show it still in its (already undone) B1
+    state."""
+    window = _dirty_window(qapp)  # one dataset + one series plotted
+    workbench_a_id = window._project.active_workbench_id
+    original_color = window.figure_model.series[0].color
+    window.figure_model.series[0].color = "#111111"
+    window._on_figure_content_changed()  # A1
+
+    window.workbench_tab_bar.new_button.click()
+    workbench_b_id = window._project.active_workbench_id
+    window.figure_model.title = "B1"
+    window._on_figure_content_changed()  # B1
+    window.figure_model.title = "B2"
+    window._on_figure_content_changed()  # B2
+
+    window._on_undo()
+    assert window.figure_model.title == "B1"
+
+    window._on_workbench_tab_selected(workbench_a_id)
+    assert window.figure_model.series[0].color == "#111111"
+
+    window._on_undo()
+    assert window.figure_model.series[0].color == original_color
+
+    window._on_workbench_tab_selected(workbench_b_id)
+    assert window.figure_model.title == "B1"  # untouched by A's undo
+    window.close()
+
+
+def test_deleting_a_workbench_drops_its_undo_state(qapp, monkeypatch):
+    window = _make_window(qapp)
+    window.workbench_tab_bar.new_button.click()
+    second_id = window._project.active_workbench_id
+    window.figure_model.title = "Edited"
+    window._on_figure_content_changed()
+    assert second_id in window._undo_managers
+
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Yes))
+    window._on_delete_workbench_requested(second_id)
+
+    assert second_id not in window._undo_managers
+    assert second_id not in window._pending_snapshots
+    window.close()
+
+
+# --- Core workflow scenario (task section 19) -----------------------------------
+
+
+def test_core_multi_workbench_workflow_end_to_end(qapp, monkeypatch, tmp_path):
+    window = _make_window(qapp)
+    dataset = _make_dataset("d")
+    window.dataset_manager.add(dataset)
+    window.dataset_panel.datasets_changed.emit()
+
+    # Workbench A: "CV Comparison", 2x2, four independent graphs.
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("CV Comparison", True)))
+    window.rename_workbench_action.trigger()
+    window.figure_size_panel.layout_combo.setCurrentIndex(3)  # 2x2
+    graph_ids = []
+    for panel_index in range(4):
+        window._set_active_panel(panel_index)
+        window._on_add_to_plot([PlotSeries.line(dataset, "x", "y", label=f"g{panel_index}")])
+        monkeypatch.setattr(
+            QInputDialog, "getText", staticmethod(lambda *a, i=panel_index, **k: (f"Graph {i}", True))
+        )
+        window.graph_library_panel.save_button.click()
+        graph_ids.append(window._project.graph_library.graphs[-1].id)
+    workbench_a_id = window._project.active_workbench_id
+    assert len(window._project.graph_library.graphs) == 4
+
+    # Workbench B: "New Graph", 1x1, a fresh graph.
+    window.new_workbench_action.trigger()
+    window._project.rename_workbench(window._project.active_workbench_id, "New Graph")
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y", label="fresh")])
+    workbench_b_id = window._project.active_workbench_id
+
+    # Switch back to A: all 4 graphs unchanged.
+    window._on_workbench_tab_selected(workbench_a_id)
+    assert window.figure_model.layout == (2, 2)
+    assert sum(len(panel.series) for panel in window.figure_model.panels) == 4
+    assert all(len(panel.series) == 1 for panel in window.figure_model.panels)
+
+    # Switch to B: new graph unchanged.
+    window._on_workbench_tab_selected(workbench_b_id)
+    assert window.figure_model.layout == (1, 1)
+    assert window.figure_model.series[0].label == "fresh"
+
+    # Workbench C: 1x2, load Saved Graph 0 into Panel 1, Graph 1 into Panel 2.
+    window.new_workbench_action.trigger()
+    window._project.rename_workbench(window._project.active_workbench_id, "Publication Figure")
+    workbench_c_id = window._project.active_workbench_id
+    window.figure_size_panel.layout_combo.setCurrentIndex(1)  # 1x2
+    window._set_active_panel(0)
+    list_row = next(
+        i
+        for i in range(window.graph_library_panel.graph_list.count())
+        if window.graph_library_panel.graph_list.item(i).data(Qt.UserRole) == graph_ids[0]
+    )
+    window.graph_library_panel.graph_list.setCurrentRow(list_row)
+    window.graph_library_panel.load_button.click()
+    window._set_active_panel(1)
+    list_row = next(
+        i
+        for i in range(window.graph_library_panel.graph_list.count())
+        if window.graph_library_panel.graph_list.item(i).data(Qt.UserRole) == graph_ids[1]
+    )
+    window.graph_library_panel.graph_list.setCurrentRow(list_row)
+    window.graph_library_panel.load_button.click()
+
+    assert len(window._project.workbenches) == 3
+
+    out_path = tmp_path / "core_workflow.gnovi"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(out_path), "")))
+    window.save_project_as_action.trigger()
+    assert window._dirty is False
+
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Discard))
+    window.new_project_action.trigger()
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(out_path), "")))
+    window.open_project_action.trigger()
+
+    reopened = window._project
+    assert len(reopened.workbenches) == 3
+    names = {w.name for w in reopened.workbenches}
+    assert names == {"CV Comparison", "New Graph", "Publication Figure"}
+    assert reopened.active_workbench_id == workbench_c_id
+
+    reopened_a = reopened.get_workbench(workbench_a_id)
+    assert reopened_a.figure.layout == (2, 2)
+    assert sum(len(panel.series) for panel in reopened_a.figure.panels) == 4
+
+    reopened_b = reopened.get_workbench(workbench_b_id)
+    assert reopened_b.figure.series[0].label == "fresh"
+
+    reopened_c = reopened.get_workbench(workbench_c_id)
+    assert reopened_c.figure.layout == (1, 2)
+    assert len(reopened_c.figure.panels[0].series) == 1
+    assert len(reopened_c.figure.panels[1].series) == 1
+
+    # Shared datasets/Graph Library.
+    assert len(reopened.dataset_manager.datasets) == 1
+    assert len(reopened.graph_library.graphs) == 4
+
+    # Independent working copies remain independent.
+    reopened_c.figure.panels[0].title = "Edited in C"
+    assert reopened_a.figure.panels[0].title == ""
+    window.close()
+
+
+# --- Workbench duplication (task section 20) -------------------------------------
+
+
+def test_duplicate_workbench_end_to_end_through_main_window(qapp):
+    window = _make_window(qapp)
+    dataset = _make_dataset()
+    window.dataset_manager.add(dataset)
+    window._on_add_to_plot([PlotSeries.line(dataset, "x", "y", color="#111111")])
+    original_id = window._project.active_workbench_id
+
+    window.duplicate_workbench_action.trigger()
+    duplicate_id = window._project.active_workbench_id
+    assert duplicate_id != original_id
+
+    # Change title, one series color, and panel layout on the duplicate.
+    window.figure_model.active_panel.title = "Duplicate Title"
+    window.figure_model.series[0].color = "#999999"
+    window.figure_size_panel.layout_combo.setCurrentIndex(1)  # 1x2
+
+    original = window._project.get_workbench(original_id)
+    assert original.figure.active_panel.title == ""
+    assert original.figure.series[0].color == "#111111"
+    assert original.figure.layout == (1, 1)
+
+    # Datasets remain shared, not duplicated.
+    assert original.figure.series[0].dataset is window.figure_model.series[0].dataset
+    assert len(window.dataset_manager) == 1
     window.close()
 
 

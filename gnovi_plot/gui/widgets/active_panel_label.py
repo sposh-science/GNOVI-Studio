@@ -31,8 +31,14 @@ class ActivePanelLabel(QLabel):
 
     "Data" is the active panel's plotted dataset provenance, derived
     directly from its `PlotSeries.dataset` references (never a separate
-    stored list -- see `Panel`'s docstring): "No data", the one dataset's
-    name, or "N datasets" with a tooltip listing every name.
+    stored list -- see `Panel`'s docstring), in the order each dataset was
+    first plotted, de-duplicated (several series/cycles sharing one
+    dataset count once): "No data"; the one dataset's name inline
+    ("Data: <name>") when there's exactly one; or, for two or more, "Data:"
+    on its own line followed by one indented line per dataset name --
+    always fully visible inline, never dependent on a tooltip to read them.
+    A tooltip with the same names is kept only as a narrow-drawer/wrapped-
+    text fallback, never the primary way to see them.
 
     `get_graph_library` is a callable (re-invoked on every `refresh()`,
     like `GraphLibraryPanel`'s own `get_figure`/`get_dataset_manager`) so
@@ -64,6 +70,12 @@ class ActivePanelLabel(QLabel):
         super().__init__(parent)
         self._get_graph_library = get_graph_library
         self.setProperty("contextRow", True)
+        # Long dataset names must wrap within the drawer's existing width
+        # rather than pushing the whole left drawer/page wider (see
+        # `refresh`'s multi-dataset lines) -- the label's own height still
+        # grows naturally to fit however many lines that takes (no fixed
+        # height is ever set here), it just never grows *wider* on its own.
+        self.setWordWrap(True)
         self.refresh(figure)
 
     def refresh(self, figure: GnoviFigure) -> None:
@@ -92,8 +104,9 @@ class ActivePanelLabel(QLabel):
             elif len(dataset_names) == 1:
                 lines.append(f"Data: {dataset_names[0]}")
             else:
-                lines.append(f"Data: {len(dataset_names)} datasets")
-                tooltip = "\n".join(dataset_names)
+                lines.append("Data:")
+                lines.extend(f"  {name}" for name in dataset_names)
+                tooltip = "\n".join(dataset_names)  # fallback only, see class docstring
 
         self.setText("\n".join(lines))
         self.setToolTip(tooltip)

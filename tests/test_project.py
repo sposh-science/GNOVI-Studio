@@ -2,6 +2,7 @@ import pandas as pd
 
 from gnovi_plot.core.project import Project
 from gnovi_plot.core.project_io import PROJECT_FORMAT_VERSION
+from gnovi_plot.core.workbench import Workbench
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.plotting.figure import GnoviFigure
 
@@ -11,24 +12,25 @@ def _make_dataset(name="d"):
     return Dataset(name=name, dataframe=df)
 
 
-def test_project_new_is_empty_with_a_single_default_figure():
+def test_project_new_is_empty_with_a_single_default_workbench():
     project = Project.new()
     assert project.name == "Untitled Project"
     assert len(project.dataset_manager) == 0
     assert len(project.graph_library) == 0
-    assert len(project.figures) == 1
-    assert project.active_figure_index == 0
+    assert len(project.workbenches) == 1
+    assert project.workbenches[0].name == "Workbench 1"
+    assert project.active_workbench_id == project.workbenches[0].id
     assert project.path is None
 
 
-def test_project_active_figure_property_follows_the_index():
-    figure_a = GnoviFigure(name="A")
-    figure_b = GnoviFigure(name="B")
-    project = Project(figures=[figure_a, figure_b], active_figure_index=1)
-    assert project.active_figure is figure_b
+def test_project_active_workbench_property_follows_the_id():
+    workbench_a = Workbench(name="A", figure=GnoviFigure())
+    workbench_b = Workbench(name="B", figure=GnoviFigure())
+    project = Project(workbenches=[workbench_a, workbench_b], active_workbench_id=workbench_b.id)
+    assert project.active_workbench is workbench_b
 
-    project.active_figure_index = 0
-    assert project.active_figure is figure_a
+    project.active_workbench_id = workbench_a.id
+    assert project.active_workbench is workbench_a
 
 
 def test_project_dataset_ids_are_stable_and_unique_across_multiple_datasets():

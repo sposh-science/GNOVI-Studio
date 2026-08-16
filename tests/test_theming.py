@@ -58,7 +58,18 @@ def test_stylesheet_defines_the_workbench_header_selectors():
     -- confirms the styling hooks it relies on exist without asserting
     exact cosmetic pixel values."""
     qss = build_stylesheet()
-    for selector in ("QWidget#WorkbenchHeader", "QLabel#WorkbenchHeaderLabel", "QLabel#WorkbenchHeaderLayoutLabel"):
+    for selector in ("QWidget#WorkbenchHeader", "QLabel#WorkbenchHeaderLabel"):
+        assert selector in qss
+
+
+def test_stylesheet_defines_the_workbench_tab_strip_selectors():
+    """Application chrome for `gui.widgets.workbench_tabs.WorkbenchTabBar`."""
+    qss = build_stylesheet()
+    for selector in (
+        "QWidget#WorkbenchTabStrip",
+        "QTabBar#WorkbenchTabBar::tab",
+        "QToolButton#WorkbenchNewButton",
+    ):
         assert selector in qss
 
 

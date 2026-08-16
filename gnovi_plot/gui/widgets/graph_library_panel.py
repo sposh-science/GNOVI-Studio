@@ -49,6 +49,18 @@ class GraphLibraryPanel(QWidget):
     loaded/renamed/deleted, undo/redo, project load) so its enabled state
     and label stay correct -- it is never inferred from `graph_list`
     selection changes alone, since selecting a row must not affect it.
+
+    That same call also drives `graph_list`'s own selection: whenever the
+    active panel's origin Graph is known (`Panel.source_graph_id` resolves
+    in this library), the matching row is selected/scrolled into view;
+    otherwise (never saved, or its origin Graph was deleted) the selection
+    is cleared. This is pure, one-way context/navigation display -- it
+    never loads a graph, never touches the active panel or the library,
+    and never marks the project dirty or creates an Undo checkpoint (see
+    `_sync_graph_list_selection`). The reverse direction is deliberately
+    NOT automatic: selecting a row here never loads it into the active
+    panel -- that stays the explicit "Load Selected Graph into Active
+    Panel" button.
     """
 
     graph_library_changed = Signal()
@@ -164,10 +176,38 @@ class GraphLibraryPanel(QWidget):
         return self._library.get(panel.source_graph_id)
 
     def sync_active_panel_state(self) -> None:
-        """Refresh Update Saved Graph's enabled state from the active
-        panel's current origin -- see this class's docstring for when to
-        call this."""
-        self.update_button.setEnabled(self._origin_graph() is not None)
+        """Refresh Update Saved Graph's enabled state AND `graph_list`'s
+        selection from the active panel's current origin -- see this
+        class's docstring for when to call this and for the "never loads,
+        never dirties, never undoable" guarantee `_sync_graph_list_selection`
+        relies on."""
+        graph = self._origin_graph()
+        self.update_button.setEnabled(graph is not None)
+        self._sync_graph_list_selection(graph)
+
+    def _sync_graph_list_selection(self, graph) -> None:
+        """Select/scroll-to `graph`'s row in `graph_list` (or clear the
+        selection if `graph` is None) -- purely a display of "which saved
+        Graph does the active panel's origin currently point at", never a
+        request to load anything (see class docstring). `blockSignals`
+        guards against ever wiring a future `graph_list` selection signal
+        that would turn this into an accidental action; today nothing is
+        connected to it, so this is a defensive no-op cost, not a
+        currently-observable behavior change."""
+        self.graph_list.blockSignals(True)
+        target_item = None
+        if graph is not None:
+            for i in range(self.graph_list.count()):
+                item = self.graph_list.item(i)
+                if item.data(Qt.UserRole) == graph.id:
+                    target_item = item
+                    break
+        if target_item is not None:
+            self.graph_list.setCurrentItem(target_item)
+            self.graph_list.scrollToItem(target_item)
+        else:
+            self.graph_list.setCurrentRow(-1)
+        self.graph_list.blockSignals(False)
 
     def _on_update_clicked(self) -> None:
         graph = self._origin_graph()

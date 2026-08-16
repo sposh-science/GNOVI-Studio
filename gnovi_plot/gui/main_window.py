@@ -1,13 +1,26 @@
+import math
 from pathlib import Path
 
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
-from PySide6.QtCore import QRect, QSettings, Qt
-from PySide6.QtGui import QActionGroup, QGuiApplication, QKeySequence
+from PySide6.QtCore import QPointF, QRect, QRectF, QSettings, Qt
+from PySide6.QtGui import (
+    QActionGroup,
+    QColor,
+    QGuiApplication,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QPolygonF,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QFileDialog,
     QFrame,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -23,6 +36,7 @@ from gnovi_plot.analysis.segments import InvalidRowRangeError, contiguous_row_ra
 from gnovi_plot.core.app_info import APP_NAME, about_text
 from gnovi_plot.core.project import Project
 from gnovi_plot.core.project_io import ProjectIOError, load_project, save_project
+from gnovi_plot.core.workbench import Workbench
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
 from gnovi_plot.gui.dialogs.export_figure_dialog import ExportFigureDialog
 from gnovi_plot.gui.styles import PlotTheme, apply_app_theme
@@ -40,6 +54,7 @@ from gnovi_plot.gui.widgets.plot_canvas import PlotCanvas, ReferenceCursorMode
 from gnovi_plot.gui.widgets.plot_series_panel import PlotSeriesPanel
 from gnovi_plot.gui.widgets.tool_drawer import ToolDrawer
 from gnovi_plot.gui.widgets.workbench_header import WorkbenchHeader
+from gnovi_plot.gui.widgets.workbench_tabs import WorkbenchTabBar
 from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.series import PlotSeries
 
@@ -47,6 +62,72 @@ from gnovi_plot.plotting.series import PlotSeries
 # coordinate readout never changes width as digits change while the mouse
 # moves over the plot -- nothing else in the toolbar/status bar shifts.
 _COORD_LABEL_SAMPLE_TEXT = "x = -0000.0000, y = -0000.0000"
+
+_UNDO_REDO_ICON_SIZE = 20
+_UNDO_REDO_ICON_COLOR = "#20242b"  # matches styles._LIGHT_PALETTE["text"]; see _make_undo_redo_icon
+
+
+def _arc_point(rect: QRectF, angle_deg: float) -> QPointF:
+    """The point on `rect`'s ellipse at `angle_deg`, using Qt's own
+    `QPainterPath` arc convention (0 deg = 3 o'clock, positive = counter-
+    clockwise on screen) -- sampled via Qt itself rather than hand-derived
+    trig, so `_make_undo_redo_icon`'s arrowhead orientation is correct
+    regardless of that convention's exact sign."""
+    path = QPainterPath()
+    path.arcMoveTo(rect, angle_deg)
+    return path.currentPosition()
+
+
+def _arrowhead_polygon(tip: QPointF, direction: QPointF, size: float) -> QPolygonF:
+    """A small filled triangle at `tip`, pointing along `direction`."""
+    length = math.hypot(direction.x(), direction.y()) or 1.0
+    dx, dy = direction.x() / length, direction.y() / length
+    px, py = -dy, dx
+    back = QPointF(tip.x() - dx * size, tip.y() - dy * size)
+    left = QPointF(back.x() + px * size * 0.65, back.y() + py * size * 0.65)
+    right = QPointF(back.x() - px * size * 0.65, back.y() - py * size * 0.65)
+    return QPolygonF([tip, left, right])
+
+
+def _make_undo_redo_icon(direction: str) -> QIcon:
+    """A small curved-arrow glyph (undo: counter-clockwise, gap top-right;
+    redo: its mirror, gap top-left) drawn in-process via QPainter --
+    consistent with the app's existing icon system (see
+    `gui.widgets.tool_drawer._make_icon`, the same hand-drawn-glyph
+    technique), never dependent on an OS/desktop icon theme being present
+    (`QIcon.fromTheme` would silently return a null icon on many Windows/
+    macOS/minimal-Linux setups)."""
+    size = _UNDO_REDO_ICON_SIZE
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(_UNDO_REDO_ICON_COLOR))
+    pen.setWidthF(1.8)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+
+    rect = QRectF(3, 3, size - 6, size - 6)
+    # Redo is undo's mirror: same span, start angle reflected about the
+    # vertical axis (90 - start), so the gap moves from top-right to
+    # top-left and the arrowhead flips from pointing left to pointing right.
+    start_angle, span_angle = (0, 270) if direction == "undo" else (90, 270)
+
+    path = QPainterPath()
+    path.arcMoveTo(rect, start_angle)
+    path.arcTo(rect, start_angle, span_angle)
+    painter.setPen(pen)
+    painter.strokePath(path, pen)
+
+    end_point = _arc_point(rect, start_angle + span_angle)
+    near_end_point = _arc_point(rect, start_angle + span_angle - 6)
+    direction_vec = QPointF(end_point.x() - near_end_point.x(), end_point.y() - near_end_point.y())
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(_UNDO_REDO_ICON_COLOR))
+    painter.drawPolygon(_arrowhead_polygon(end_point, direction_vec, 6.0))
+
+    painter.end()
+    return QIcon(pixmap)
 
 _PLOT_THEME_MENU_LABELS = ((PlotTheme.LIGHT, "Light"), (PlotTheme.DARK, "Dark"))
 
@@ -162,15 +243,29 @@ class MainWindow(QMainWindow):
         # (see core.project.Project / core.project_io); `dataset_manager`/
         # `figure_model` stay as MainWindow's own attribute names (used
         # throughout this file) but are just references into it, reassigned
-        # together by `_load_project_into_window` on New/Open Project.
+        # together by `_load_project_into_window` on New/Open Project and by
+        # `_activate_workbench` on Workbench switch/create/duplicate/delete.
         self._project = self._new_project()
         self.dataset_manager = self._project.dataset_manager
-        self.figure_model = self._project.active_figure
-        self._dirty = False
 
         # Undo/Redo (figure/panels/series/styling only -- see
         # gui.undo_manager for why dataset mutations are deliberately out
         # of scope here and stay tracked only in Transformation History).
+        # One independent `UndoManager` + pending-snapshot per Workbench,
+        # keyed by `Workbench.id` -- see `self._undo_manager`/
+        # `self._pending_undo_snapshot` properties below, which always
+        # resolve against `self._current_workbench_id`. This makes "Undo
+        # applied to the wrong Workbench" structurally impossible: switching
+        # Workbenches (`_activate_workbench`) just repoints which dict entry
+        # those properties resolve to, never mixes entries, and Workbench
+        # switching itself never touches either dict's *contents* (no
+        # checkpoint is committed by navigation alone).
+        self._undo_managers: dict[str, UndoManager] = {}
+        self._pending_snapshots: dict[str, GnoviFigure] = {}
+        self._current_workbench_id = self._project.active_workbench.id
+        self.figure_model = self._project.active_workbench.figure
+        self._dirty = False
+
         # `_pending_undo_snapshot` always holds a snapshot of the figure as
         # of the last committed checkpoint; see `_commit_undo_checkpoint`.
         self._undo_manager = UndoManager()
@@ -184,7 +279,8 @@ class MainWindow(QMainWindow):
             self._cursor_mode = ReferenceCursorMode.OFF
 
         self.plot_canvas = PlotCanvas(self)
-        self.workbench_header = WorkbenchHeader(self.figure_model)
+        self.workbench_tab_bar = WorkbenchTabBar()
+        self.workbench_header = WorkbenchHeader(self._project.active_workbench.name, self.figure_model)
         # coordinates=False: Matplotlib's built-in toolbar coordinate label
         # uses an Expanding size policy that reflows neighboring toolbar
         # content as its text width changes -- exactly the instability
@@ -362,17 +458,20 @@ class MainWindow(QMainWindow):
         # height and is fully drag-resizable/hideable without affecting the
         # figure's own configured size (on-screen canvas size never drives
         # export resolution; see plotting.backends / export.figure_export).
-        # `workbench_header` is a slim application-chrome strip docked
-        # directly above `plot_canvas` -- wrapped together in
+        # `workbench_tab_bar` (the Workbench switcher) and `workbench_header`
+        # (a slim application-chrome strip naming the active Workbench) are
+        # docked directly above `plot_canvas` -- wrapped together in
         # `workbench_container` purely for layout purposes; `self.plot_canvas`
         # itself is untouched (still the exact widget added to the splitter
         # in earlier milestones, just now inside one extra container), so
         # every existing `window.plot_canvas.*` call site keeps working
-        # unchanged. See `gui.widgets.workbench_header.WorkbenchHeader`.
+        # unchanged. See `gui.widgets.workbench_tabs.WorkbenchTabBar` and
+        # `gui.widgets.workbench_header.WorkbenchHeader`.
         workbench_container = QWidget()
         workbench_layout = QVBoxLayout(workbench_container)
         workbench_layout.setContentsMargins(0, 0, 0, 0)
         workbench_layout.setSpacing(0)
+        workbench_layout.addWidget(self.workbench_tab_bar)
         workbench_layout.addWidget(self.workbench_header)
         workbench_layout.addWidget(self.plot_canvas, 1)
 
@@ -446,9 +545,38 @@ class MainWindow(QMainWindow):
         self.data_tools_panel.plot_selected_rows_requested.connect(self._on_plot_selected_rows)
         self.figure_size_panel.panel_labels_check.toggled.connect(self._sync_panel_labels_action)
 
+        self.workbench_tab_bar.workbench_selected.connect(self._on_workbench_tab_selected)
+        self.workbench_tab_bar.new_workbench_requested.connect(self._on_new_workbench_requested)
+        self.workbench_tab_bar.rename_requested.connect(self._on_rename_workbench_requested)
+        self.workbench_tab_bar.duplicate_requested.connect(self._on_duplicate_workbench_requested)
+        self.workbench_tab_bar.delete_requested.connect(self._on_delete_workbench_requested)
+        self.workbench_tab_bar.set_workbenches(self._project.workbenches, self._project.active_workbench_id)
+
         self._create_menu()
         self._create_toolbar()
         self._sync_window_title()
+
+    # --- Undo/Redo per-Workbench state (see the dict comment in __init__) --
+
+    @property
+    def _undo_manager(self) -> UndoManager:
+        return self._undo_managers.setdefault(self._current_workbench_id, UndoManager())
+
+    @_undo_manager.setter
+    def _undo_manager(self, value: UndoManager) -> None:
+        self._undo_managers[self._current_workbench_id] = value
+
+    @property
+    def _pending_undo_snapshot(self) -> GnoviFigure:
+        if self._current_workbench_id not in self._pending_snapshots:
+            self._pending_snapshots[self._current_workbench_id] = snapshot_figure(
+                self.figure_model, self.dataset_manager
+            )
+        return self._pending_snapshots[self._current_workbench_id]
+
+    @_pending_undo_snapshot.setter
+    def _pending_undo_snapshot(self, value: GnoviFigure) -> None:
+        self._pending_snapshots[self._current_workbench_id] = value
 
     # --- Menus -----------------------------------------------------------
 
@@ -473,13 +601,23 @@ class MainWindow(QMainWindow):
         # Figure-content Undo/Redo only -- see gui.undo_manager for the
         # scoping rationale (dataset mutations keep their own Reset Working
         # Data recovery path and Transformation History, deliberately kept
-        # separate from this stack).
+        # separate from this stack). These are the SAME QAction objects the
+        # toolbar's Undo/Redo buttons use (see `_create_toolbar`) -- one
+        # shared action pair drives both, never two separate systems. Scoped
+        # per-Workbench (see the `_undo_manager`/`_pending_undo_snapshot`
+        # properties above): whichever Workbench is active when Undo/Redo
+        # fires is the only one they can ever affect.
         edit_menu = self.menuBar().addMenu("&Edit")
         self.undo_action = edit_menu.addAction("Undo")
-        self.undo_action.setShortcut(QKeySequence.Undo)
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.undo_action.setToolTip("Undo (Ctrl+Z)")
         self.undo_action.triggered.connect(self._on_undo)
         self.redo_action = edit_menu.addAction("Redo")
-        self.redo_action.setShortcut(QKeySequence.Redo)
+        # Ctrl+Shift+Z is QKeySequence.Redo's own platform-standard binding
+        # on Linux/macOS; Ctrl+Y is added as a widely-expected alternative
+        # (e.g. the Windows convention) regardless of platform.
+        self.redo_action.setShortcuts([QKeySequence.StandardKey.Redo, QKeySequence("Ctrl+Y")])
+        self.redo_action.setToolTip("Redo (Ctrl+Shift+Z)")
         self.redo_action.triggered.connect(self._on_redo)
         self._sync_undo_redo_actions()
 
@@ -523,6 +661,28 @@ class MainWindow(QMainWindow):
         self.panel_labels_action = self.panels_menu.addAction("Panel Labels On/Off")
         self.panel_labels_action.setCheckable(True)
         self.panel_labels_action.toggled.connect(self._on_toggle_panel_labels)
+
+        # Dedicated top-level menu (not nested under File) -- these act on
+        # whichever Workbench is currently active, exactly mirroring what
+        # the Workbench tab strip's right-click context menu offers as a
+        # secondary path (see `gui.widgets.workbench_tabs.WorkbenchTabBar`).
+        self.workbench_menu = self.menuBar().addMenu("&Workbench")
+        self.new_workbench_action = self.workbench_menu.addAction("New Workbench")
+        self.new_workbench_action.triggered.connect(self._on_new_workbench_requested)
+        self.rename_workbench_action = self.workbench_menu.addAction("Rename Workbench")
+        self.rename_workbench_action.triggered.connect(
+            lambda: self._on_rename_workbench_requested(self._project.active_workbench_id)
+        )
+        self.duplicate_workbench_action = self.workbench_menu.addAction("Duplicate Workbench")
+        self.duplicate_workbench_action.triggered.connect(
+            lambda: self._on_duplicate_workbench_requested(self._project.active_workbench_id)
+        )
+        self.delete_workbench_action = self.workbench_menu.addAction("Delete Workbench")
+        self.delete_workbench_action.triggered.connect(
+            lambda: self._on_delete_workbench_requested(self._project.active_workbench_id)
+        )
+        self.workbench_menu.aboutToShow.connect(self._sync_workbench_menu_state)
+        self._sync_workbench_menu_state()
 
         view_menu = self.menuBar().addMenu("&View")
         # Hides/shows the entire left tool strip + drawer (both the Data /
@@ -609,6 +769,23 @@ class MainWindow(QMainWindow):
     def _create_toolbar(self) -> None:
         toolbar = QToolBar("Main", self)
         self.addToolBar(toolbar)
+
+        # Undo/Redo: the SAME `self.undo_action`/`self.redo_action` QAction
+        # objects the Edit menu uses (see `_create_menu`) -- `addAction`
+        # adds the identical object to this toolbar, not a copy, so menu
+        # and toolbar are always in sync by construction, never two
+        # systems. Leading position (before Import/Save/Export) since these
+        # are described as important, immediately-discoverable working
+        # controls. Icons are hand-drawn (see `_make_undo_redo_icon`) so
+        # they render identically regardless of OS icon theme; disabled
+        # state (nothing to undo/redo) already renders muted via the
+        # QToolButton:disabled QSS rule plus Qt's own auto-generated
+        # disabled-icon treatment.
+        self.undo_action.setIcon(_make_undo_redo_icon("undo"))
+        self.redo_action.setIcon(_make_undo_redo_icon("redo"))
+        toolbar.addAction(self.undo_action)
+        toolbar.addAction(self.redo_action)
+        toolbar.addSeparator()
 
         import_action = toolbar.addAction("Import Data")
         import_action.triggered.connect(self._on_import_data)
@@ -981,19 +1158,20 @@ class MainWindow(QMainWindow):
     def _refresh_active_panel_context(self) -> None:
         """Refresh every page's "Active panel / Graph / Data" context line
         (see `gui.widgets.active_panel_label.ActivePanelLabel`), the
-        Workbench header's panel-layout readout (see
+        Workbench header's name/panel-layout readout (see
         `gui.widgets.workbench_header.WorkbenchHeader`), plus the Graph
         Library's Update Saved Graph enabled state -- call whenever the
         active panel's identity, its origin Graph, its plotted series/
-        datasets, or the panel layout may have changed (panel switch, any
-        figure-content edit, graph saved/loaded/renamed/duplicated/deleted/
-        updated, undo/redo, project load)."""
+        datasets, the panel layout, or the active Workbench's name may have
+        changed (panel switch, any figure-content edit, graph saved/
+        loaded/renamed/duplicated/deleted/updated, undo/redo, project load,
+        Workbench switch/rename)."""
         self.plot_page_active_panel_label.refresh(self.figure_model)
         self.series_panel.active_panel_label.refresh(self.figure_model)
         self.figure_size_panel.active_panel_label.refresh(self.figure_model)
         self.figure_layout_panel.active_panel_label.refresh(self.figure_model)
         self.properties_panel.active_panel_label.refresh(self.figure_model)
-        self.workbench_header.refresh(self.figure_model)
+        self.workbench_header.refresh(self._project.active_workbench.name, self.figure_model)
         self.graph_library_panel.sync_active_panel_state()
 
     def _on_export_figure(self):
@@ -1153,13 +1331,14 @@ class MainWindow(QMainWindow):
         return True
 
     def _new_project(self) -> Project:
-        """A fresh, empty `Project` -- like `Project.new()`, except its
-        default figure's Plot Theme is seeded from QSettings' last-used
-        value (see `__init__`) rather than always `PlotTheme.LIGHT`. Used
-        for the app's initial project and "New Project"; never for Open
-        Project, whose loaded figure's own saved theme always governs."""
+        """A fresh, empty `Project` (one blank Workbench) -- like
+        `Project.new()`, except its default figure's Plot Theme is seeded
+        from QSettings' last-used value (see `__init__`) rather than always
+        `PlotTheme.LIGHT`. Used for the app's initial project and "New
+        Project"; never for Open Project, whose loaded figure's own saved
+        theme always governs."""
         project = Project.new()
-        project.active_figure.plot_theme = self._default_new_figure_theme
+        project.active_workbench.figure.plot_theme = self._default_new_figure_theme
         return project
 
     def _on_new_project(self) -> None:
@@ -1211,36 +1390,143 @@ class MainWindow(QMainWindow):
         self._set_dirty(False)
         return True
 
-    def _load_project_into_window(self, project: Project) -> None:
-        """The single path New Project and Open Project both funnel
-        through: repoint every widget that caches the dataset manager/
-        active figure (see each widget's `set_manager`/`set_figure`), reset
-        Undo/Redo to a fresh stack (loading a project must not let the
-        previous project's undo history restore its content -- decision:
-        Undo/Redo is scoped to the FIGURE, not the project on disk), and
-        reset the dirty flag."""
-        self._project = project
-        self.dataset_manager = project.dataset_manager
-        self.figure_model = project.active_figure
+    def _activate_workbench(self, workbench: Workbench) -> None:
+        """Point every figure-dependent GUI widget at `workbench.figure` and
+        swap in `workbench`'s own per-Workbench Undo/Redo history -- the one
+        shared retargeting path `_on_workbench_tab_selected`/
+        `_on_new_workbench_requested`/`_on_duplicate_workbench_requested`/
+        `_on_delete_workbench_requested` (Workbench switch/create/duplicate/
+        delete) and `_load_project_into_window` (New/Open Project) all
+        funnel through, so there is exactly one place that knows how to
+        retarget the GUI to a different Figure. Never marks the project
+        dirty and never commits an undo checkpoint itself -- purely
+        navigation/retargeting (see each caller for what it does around
+        this, e.g. `_load_project_into_window` also resets the per-project
+        dataset manager/Graph Library and the dirty flag, none of which
+        belongs here since a plain Workbench switch must touch neither)."""
+        self._current_workbench_id = workbench.id
+        self.figure_model = workbench.figure
 
-        self.dataset_panel.set_manager(self.dataset_manager)
         self.series_panel.set_figure(self.figure_model)
         self.properties_panel.set_figure(self.figure_model)
         self.figure_size_panel.set_figure(self.figure_model)
         self.figure_layout_panel.set_figure(self.figure_model)
-        self.graph_library_panel.set_library(project.graph_library)
-        self._refresh_active_panel_context()
 
-        self._undo_manager = UndoManager()
-        self._pending_undo_snapshot = snapshot_figure(self.figure_model, self.dataset_manager)
         self._sync_undo_redo_actions()
+        self._refresh_active_panel_context()
+        self._sync_toolbar_panel_controls()
+        self._sync_theme_controls()  # the newly-active Workbench may have a different Plot Theme
+        self._rerender()
+
+    def _load_project_into_window(self, project: Project) -> None:
+        """The single path New Project and Open Project both funnel
+        through: repoint every widget that caches the dataset manager/Graph
+        Library/active Figure (see `_activate_workbench` for the Figure
+        side), reset every Workbench's Undo/Redo to a fresh per-Workbench
+        stack (loading a project must not let the previous project's undo
+        history restore its content -- decision: Undo/Redo is scoped to
+        the WORKBENCH, not the project on disk), and reset the dirty flag."""
+        self._project = project
+        self.dataset_manager = project.dataset_manager
+
+        self.dataset_panel.set_manager(self.dataset_manager)
+        self.graph_library_panel.set_library(project.graph_library)
+
+        self._undo_managers = {}
+        self._pending_snapshots = {}
+        self._activate_workbench(project.active_workbench)
+
+        self.workbench_tab_bar.set_workbenches(project.workbenches, project.active_workbench_id)
+        self._sync_workbench_menu_state()
 
         self.preview_model.set_dataframe(None)
         self.data_tools_panel.set_dataset(None)
-        self._sync_toolbar_panel_controls()
-        self._sync_theme_controls()  # the newly-active figure may have a different Plot Theme
-        self._rerender()
         self._set_dirty(False)
+
+    # --- Workbenches (switch/create/rename/duplicate/delete) ---------------
+
+    def _sync_workbench_menu_state(self) -> None:
+        """Delete Workbench must be disabled whenever exactly one Workbench
+        remains -- a `Project` always keeps at least one (see
+        `Project.remove_workbench`)."""
+        self.delete_workbench_action.setEnabled(len(self._project.workbenches) > 1)
+
+    def _on_workbench_tab_selected(self, workbench_id: str) -> None:
+        """Pure navigation -- see `_activate_workbench`'s docstring: never
+        marks the project dirty, never commits an undo checkpoint, and the
+        Workbench being left behind keeps its own Undo/Redo history exactly
+        as it was, ready to resume the moment the user switches back."""
+        if workbench_id == self._current_workbench_id:
+            return
+        workbench = self._project.get_workbench(workbench_id)
+        if workbench is None:
+            return
+        self._project.active_workbench_id = workbench_id
+        self._activate_workbench(workbench)
+
+    def _on_new_workbench_requested(self) -> None:
+        name = f"Workbench {len(self._project.workbenches) + 1}"
+        workbench = Workbench(name=name, figure=GnoviFigure())
+        self._project.add_workbench(workbench)
+        self._project.active_workbench_id = workbench.id
+        self._activate_workbench(workbench)
+        self.workbench_tab_bar.set_workbenches(self._project.workbenches, self._project.active_workbench_id)
+        self._sync_workbench_menu_state()
+        self._set_dirty(True)
+
+    def _on_rename_workbench_requested(self, workbench_id: str) -> None:
+        workbench = self._project.get_workbench(workbench_id)
+        if workbench is None:
+            return
+        new_name, ok = QInputDialog.getText(self, "Rename Workbench", "Workbench name:", text=workbench.name)
+        new_name = new_name.strip()
+        if not ok or not new_name:
+            return
+        self._project.rename_workbench(workbench_id, new_name)
+        self.workbench_tab_bar.set_workbenches(self._project.workbenches, self._project.active_workbench_id)
+        self._refresh_active_panel_context()  # the Workbench header shows the new name if it's the active one
+        self._set_dirty(True)
+
+    def _on_duplicate_workbench_requested(self, workbench_id: str) -> None:
+        copy_workbench = self._project.duplicate_workbench(workbench_id)
+        if copy_workbench is None:
+            return
+        self._project.active_workbench_id = copy_workbench.id
+        self._activate_workbench(copy_workbench)
+        self.workbench_tab_bar.set_workbenches(self._project.workbenches, self._project.active_workbench_id)
+        self._sync_workbench_menu_state()
+        self._set_dirty(True)
+
+    def _on_delete_workbench_requested(self, workbench_id: str) -> None:
+        # Note: `self.delete_workbench_action` itself is also kept in sync
+        # eagerly (see the `_sync_workbench_menu_state()` calls in the
+        # other three handlers here, not just `aboutToShow`) so a disabled
+        # action can never be `.trigger()`-ed at all -- this guard is the
+        # second, always-correct line of defense (e.g. for the tab strip's
+        # own context-menu path, which never goes through this QAction).
+        workbench = self._project.get_workbench(workbench_id)
+        if workbench is None or len(self._project.workbenches) <= 1:
+            return
+        response = QMessageBox.warning(
+            self,
+            "Delete Workbench",
+            f'Delete Workbench "{workbench.name}"? This cannot be undone.',
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if response != QMessageBox.Yes:
+            return
+        removed = self._project.remove_workbench(workbench_id)
+        if not removed:
+            return
+        # Drop the deleted Workbench's runtime Undo/Redo state -- it can
+        # never be switched back to.
+        self._undo_managers.pop(workbench_id, None)
+        self._pending_snapshots.pop(workbench_id, None)
+        self._activate_workbench(self._project.active_workbench)
+        self.workbench_tab_bar.set_workbenches(self._project.workbenches, self._project.active_workbench_id)
+        self._sync_workbench_menu_state()
+        self._set_dirty(True)
 
     def closeEvent(self, event) -> None:
         if self._confirm_discard_unsaved():

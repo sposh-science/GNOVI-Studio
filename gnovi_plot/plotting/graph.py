@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from gnovi_plot.data.dataset import Dataset
-from gnovi_plot.plotting.figure import Panel
+from gnovi_plot.plotting.figure import GnoviFigure, Panel
 
 
 @dataclass
@@ -65,3 +65,16 @@ def clone_panel_with_shared_datasets(panel: Panel, dataset_manager) -> Panel:
     `PlotSeries.dataset` pointed at the same live `Dataset` instance from
     `dataset_manager` -- see `dataset_identity_memo`."""
     return copy.deepcopy(panel, dataset_identity_memo(dataset_manager))
+
+
+def clone_figure_with_shared_datasets(figure: GnoviFigure, dataset_manager) -> GnoviFigure:
+    """Deep-copy `figure` (every panel, every series, every display/layout/
+    typography setting) while keeping every `PlotSeries.dataset` pointed at
+    the same live `Dataset` instance from `dataset_manager` -- the
+    whole-figure counterpart of `clone_panel_with_shared_datasets`, same
+    `dataset_identity_memo` trick. Used by `core.workbench.Workbench`
+    duplication (`core.project.Project.duplicate_workbench`) to produce an
+    independent working copy of an entire Workbench's Figure -- every
+    `Panel.source_graph_id` (Graph Library provenance) is preserved
+    automatically, since it's just another field in the copied tree."""
+    return copy.deepcopy(figure, dataset_identity_memo(dataset_manager))

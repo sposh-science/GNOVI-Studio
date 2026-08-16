@@ -14,6 +14,7 @@ from gnovi_plot.core.project_io import (
     CorruptProjectError,
     ProjectIOError,
     UnsupportedProjectVersionError,
+    _migrate_v1_to_v2,
     load_project,
     save_project,
 )
@@ -31,7 +32,7 @@ def _basic_project(source_path=None):
     dataset = _simple_dataset(source_path=source_path)
     project = Project.new()
     project.dataset_manager.add(dataset)
-    project.figures[0].add_series(PlotSeries.line(dataset, "x", "y"))
+    project.workbenches[0].figure.add_series(PlotSeries.line(dataset, "x", "y"))
     return project, dataset
 
 
@@ -55,9 +56,10 @@ def test_load_project_round_trips_dataset_series_and_id(tmp_path):
     loaded_dataset = loaded.dataset_manager.datasets[0]
     assert loaded_dataset.id == dataset.id
     pdt.assert_frame_equal(loaded_dataset.dataframe, dataset.dataframe)
-    assert len(loaded.figures) == 1
-    assert len(loaded.figures[0].series) == 1
-    assert loaded.figures[0].series[0].dataset is loaded_dataset
+    assert len(loaded.workbenches) == 1
+    assert loaded.workbenches[0].name == "Workbench 1"
+    assert len(loaded.workbenches[0].figure.series) == 1
+    assert loaded.workbenches[0].figure.series[0].dataset is loaded_dataset
 
 
 def test_save_project_as_gives_the_project_a_path(tmp_path):
@@ -72,28 +74,28 @@ def test_save_project_as_gives_the_project_a_path(tmp_path):
 
 def test_light_theme_project_round_trips_and_reopens_light(tmp_path):
     project, _dataset = _basic_project()
-    project.figures[0].plot_theme = PlotTheme.LIGHT
+    project.workbenches[0].figure.plot_theme = PlotTheme.LIGHT
 
     out_path = save_project(project, tmp_path / "light.gnovi")
     with zipfile.ZipFile(out_path) as zf:
         manifest = json.loads(zf.read("project.json"))
-    assert manifest["figures"][0]["plot_theme"] == "light"
+    assert manifest["workbenches"][0]["figure"]["plot_theme"] == "light"
 
     loaded = load_project(out_path)
-    assert loaded.figures[0].plot_theme == PlotTheme.LIGHT
+    assert loaded.workbenches[0].figure.plot_theme == PlotTheme.LIGHT
 
 
 def test_dark_theme_project_round_trips_and_reopens_dark(tmp_path):
     project, _dataset = _basic_project()
-    project.figures[0].plot_theme = PlotTheme.DARK
+    project.workbenches[0].figure.plot_theme = PlotTheme.DARK
 
     out_path = save_project(project, tmp_path / "dark.gnovi")
     with zipfile.ZipFile(out_path) as zf:
         manifest = json.loads(zf.read("project.json"))
-    assert manifest["figures"][0]["plot_theme"] == "dark"
+    assert manifest["workbenches"][0]["figure"]["plot_theme"] == "dark"
 
     loaded = load_project(out_path)
-    assert loaded.figures[0].plot_theme == PlotTheme.DARK
+    assert loaded.workbenches[0].figure.plot_theme == PlotTheme.DARK
 
 
 def test_saved_theme_is_restored_after_reopen_even_when_it_differs_from_the_default(tmp_path):
@@ -102,16 +104,16 @@ def test_saved_theme_is_restored_after_reopen_even_when_it_differs_from_the_defa
     reopen looking exactly as it was saved, independent of whatever the
     QSettings default-for-new-figures happens to be at open time."""
     project, dataset = _basic_project()
-    assert project.figures[0].plot_theme == PlotTheme.LIGHT  # the ordinary default
-    project.figures[0].plot_theme = PlotTheme.DARK
+    assert project.workbenches[0].figure.plot_theme == PlotTheme.LIGHT  # the ordinary default
+    project.workbenches[0].figure.plot_theme = PlotTheme.DARK
     out_path = save_project(project, tmp_path / "explicit_dark.gnovi")
 
     loaded = load_project(out_path)
 
-    assert loaded.figures[0].plot_theme == PlotTheme.DARK
+    assert loaded.workbenches[0].figure.plot_theme == PlotTheme.DARK
     # Nothing else about the round trip regressed alongside the theme fix.
     assert loaded.dataset_manager.datasets[0].id == dataset.id
-    assert len(loaded.figures[0].series) == 1
+    assert len(loaded.workbenches[0].figure.series) == 1
 
 
 # --- Figure Aspect Ratio vs. Panel Aspect Ratio: independent round trip -------
@@ -122,7 +124,7 @@ def test_figure_and_panel_aspect_ratio_round_trip_independently(tmp_path):
     = 1:1, Layout = 2x3 -- save, reopen, all three must be restored exactly,
     never inferred from the current canvas."""
     project, _dataset = _basic_project()
-    figure = project.figures[0]
+    figure = project.workbenches[0].figure
     figure.set_layout(2, 3)
     figure.figure_width_in = 16.0
     figure.figure_height_in = 9.0
@@ -132,7 +134,7 @@ def test_figure_and_panel_aspect_ratio_round_trip_independently(tmp_path):
     out_path = save_project(project, tmp_path / "figure_vs_panel_aspect.gnovi")
 
     loaded = load_project(out_path)
-    loaded_figure = loaded.figures[0]
+    loaded_figure = loaded.workbenches[0].figure
 
     assert loaded_figure.layout == (2, 3)
     assert loaded_figure.aspect_preset == "16:9"
@@ -144,7 +146,7 @@ def test_panel_aspect_ratio_persists_independently_of_figure_aspect_ratio(tmp_pa
     """Changing one must never affect the other, including across a save/
     reopen round trip."""
     project, _dataset = _basic_project()
-    figure = project.figures[0]
+    figure = project.workbenches[0].figure
     figure.aspect_preset = "4:3"
     figure.lock_aspect_ratio = True
     figure.panel_aspect_preset = "16:9"
@@ -152,8 +154,8 @@ def test_panel_aspect_ratio_persists_independently_of_figure_aspect_ratio(tmp_pa
 
     loaded = load_project(out_path)
 
-    assert loaded.figures[0].aspect_preset == "4:3"
-    assert loaded.figures[0].panel_aspect_preset == "16:9"
+    assert loaded.workbenches[0].figure.aspect_preset == "4:3"
+    assert loaded.workbenches[0].figure.panel_aspect_preset == "16:9"
 
 
 def test_panel_aspect_ratio_defaults_to_auto_for_a_project_saved_before_the_feature_existed(tmp_path):
@@ -165,7 +167,7 @@ def test_panel_aspect_ratio_defaults_to_auto_for_a_project_saved_before_the_feat
 
     with zipfile.ZipFile(out_path) as zf:
         manifest = json.loads(zf.read("project.json"))
-    del manifest["figures"][0]["panel_aspect_preset"]
+    del manifest["workbenches"][0]["figure"]["panel_aspect_preset"]
     stripped_path = tmp_path / "old_format_stripped.gnovi"
     with zipfile.ZipFile(out_path) as zf_in, zipfile.ZipFile(stripped_path, "w") as zf_out:
         for name in zf_in.namelist():
@@ -176,7 +178,7 @@ def test_panel_aspect_ratio_defaults_to_auto_for_a_project_saved_before_the_feat
 
     loaded = load_project(stripped_path)
 
-    assert loaded.figures[0].panel_aspect_preset == "Auto"
+    assert loaded.workbenches[0].figure.panel_aspect_preset == "Auto"
 
 
 # --- project_format_version ---------------------------------------------------
@@ -188,9 +190,254 @@ def test_saved_manifest_contains_the_current_format_version(tmp_path):
 
     with zipfile.ZipFile(out_path) as zf:
         manifest = json.loads(zf.read("project.json"))
-    assert manifest["project_format_version"] == PROJECT_FORMAT_VERSION == 1
+    assert manifest["project_format_version"] == PROJECT_FORMAT_VERSION == 2
     # Independent of the app's own version string.
     assert "app_version" in manifest
+
+
+# --- v1 -> v2 migration: figures/active_figure_index -> workbenches -----------
+
+
+def _rewrite_manifest(zip_path, tmp_path, new_manifest: dict, *, out_name: str = "rewritten.gnovi"):
+    """Copy `zip_path` to a new file with its `project.json` replaced by
+    `new_manifest`, keeping every other member (dataset CSVs) byte-for-byte
+    -- how every "hand a load_project a manifest I control" test in this
+    file builds its fixture, from the malformed-file tests through the
+    migration tests below."""
+    out_path = tmp_path / out_name
+    with zipfile.ZipFile(zip_path) as zf_in, zipfile.ZipFile(out_path, "w") as zf_out:
+        for name in zf_in.namelist():
+            if name == "project.json":
+                zf_out.writestr(name, json.dumps(new_manifest))
+            else:
+                zf_out.writestr(name, zf_in.read(name))
+    return out_path
+
+
+def test_migrate_v1_to_v2_is_a_pure_dict_transform():
+    """Exercises `_migrate_v1_to_v2` directly against a literal, hand-written
+    v1-shaped manifest -- independent of whatever the current `save_project`
+    happens to produce, so this keeps testing the real migration a genuinely
+    old `.gnovi` file goes through even if `_build_manifest`'s own shape
+    drifts further in the future."""
+    figure_a = GnoviFigure(name="A").to_dict()
+    figure_b = GnoviFigure(name="B").to_dict()
+    v1_manifest = {
+        "project_format_version": 1,
+        "app_version": "0.1.0",
+        "project_name": "Old Project",
+        "datasets": [],
+        "graph_library": [],
+        "figures": [figure_a, figure_b],
+        "active_figure_index": 1,
+        "results": [],
+    }
+
+    migrated = _migrate_v1_to_v2(v1_manifest)
+
+    assert migrated["project_format_version"] == 2
+    assert len(migrated["workbenches"]) == 2
+    assert [w["name"] for w in migrated["workbenches"]] == ["Workbench 1", "Workbench 2"]
+    assert migrated["workbenches"][0]["figure"] == figure_a
+    assert migrated["workbenches"][1]["figure"] == figure_b
+    assert migrated["active_workbench_id"] == migrated["workbenches"][1]["id"]
+    assert migrated["workbenches"][0]["id"] != migrated["workbenches"][1]["id"]
+
+
+def test_migrate_v1_to_v2_with_zero_figures_produces_one_default_workbench():
+    v1_manifest = {
+        "project_format_version": 1,
+        "datasets": [],
+        "graph_library": [],
+        "figures": [],
+        "active_figure_index": 0,
+    }
+
+    migrated = _migrate_v1_to_v2(v1_manifest)
+
+    assert len(migrated["workbenches"]) == 1
+    assert migrated["active_workbench_id"] == migrated["workbenches"][0]["id"]
+
+
+def test_migrate_v1_to_v2_clamps_an_out_of_range_active_figure_index():
+    v1_manifest = {
+        "project_format_version": 1,
+        "datasets": [],
+        "graph_library": [],
+        "figures": [GnoviFigure().to_dict()],
+        "active_figure_index": 99,
+    }
+
+    migrated = _migrate_v1_to_v2(v1_manifest)
+
+    assert migrated["active_workbench_id"] == migrated["workbenches"][0]["id"]
+
+
+def test_opening_a_v1_project_migrates_to_one_named_workbench_preserving_content(tmp_path):
+    """The end-to-end path: a real v1 `.gnovi` file (with an embedded
+    dataset and a series) opens as a Workbench, all scientific content
+    intact -- not just the pure dict transform in isolation above."""
+    project, dataset = _basic_project()
+    out_path = save_project(project, tmp_path / "v2_source.gnovi")
+    with zipfile.ZipFile(out_path) as zf:
+        v2_manifest = json.loads(zf.read("project.json"))
+
+    v1_manifest = {
+        "project_format_version": 1,
+        "app_version": v2_manifest["app_version"],
+        "project_name": v2_manifest["project_name"],
+        "saved_at": v2_manifest["saved_at"],
+        "datasets": v2_manifest["datasets"],
+        "graph_library": v2_manifest["graph_library"],
+        "figures": [v2_manifest["workbenches"][0]["figure"]],
+        "active_figure_index": 0,
+        "results": [],
+    }
+    v1_path = _rewrite_manifest(out_path, tmp_path, v1_manifest, out_name="v1_real.gnovi")
+
+    loaded = load_project(v1_path)
+
+    assert len(loaded.workbenches) == 1
+    assert loaded.workbenches[0].name == "Workbench 1"
+    assert loaded.active_workbench_id == loaded.workbenches[0].id
+    assert len(loaded.workbenches[0].figure.series) == 1
+    loaded_series = loaded.workbenches[0].figure.series[0]
+    assert loaded_series.dataset.id == dataset.id
+    assert loaded_series.dataset.name == dataset.name
+    assert len(loaded.dataset_manager.datasets) == 1
+
+
+def test_opening_a_v1_project_with_multiple_figures_migrates_to_multiple_named_workbenches(tmp_path):
+    project = Project.new()
+    project.workbenches[0].figure.active_panel.title = "First"
+    from gnovi_plot.core.workbench import Workbench
+
+    project.add_workbench(Workbench(name="ignored-by-v1", figure=GnoviFigure()))
+    project.workbenches[1].figure.active_panel.title = "Second"
+    project.workbenches[1].figure.set_layout(1, 2)
+    out_path = save_project(project, tmp_path / "v2_source.gnovi")
+    with zipfile.ZipFile(out_path) as zf:
+        v2_manifest = json.loads(zf.read("project.json"))
+
+    v1_manifest = {
+        "project_format_version": 1,
+        "app_version": v2_manifest["app_version"],
+        "project_name": v2_manifest["project_name"],
+        "datasets": [],
+        "graph_library": [],
+        "figures": [w["figure"] for w in v2_manifest["workbenches"]],
+        "active_figure_index": 1,
+        "results": [],
+    }
+    v1_path = _rewrite_manifest(out_path, tmp_path, v1_manifest, out_name="v1_multi.gnovi")
+
+    loaded = load_project(v1_path)
+
+    assert len(loaded.workbenches) == 2
+    assert [w.name for w in loaded.workbenches] == ["Workbench 1", "Workbench 2"]
+    assert loaded.workbenches[0].figure.active_panel.title == "First"
+    assert loaded.workbenches[1].figure.active_panel.title == "Second"
+    assert loaded.workbenches[1].figure.layout == (1, 2)
+    # active_figure_index (1) migrated to point at the second Workbench.
+    assert loaded.active_workbench_id == loaded.workbenches[1].id
+
+
+def test_reopening_a_migrated_v1_project_and_resaving_writes_v2(tmp_path):
+    project, dataset = _basic_project()
+    out_path = save_project(project, tmp_path / "v2_source.gnovi")
+    with zipfile.ZipFile(out_path) as zf:
+        v2_manifest = json.loads(zf.read("project.json"))
+    v1_manifest = {
+        "project_format_version": 1,
+        "app_version": v2_manifest["app_version"],
+        "project_name": v2_manifest["project_name"],
+        "datasets": v2_manifest["datasets"],
+        "graph_library": v2_manifest["graph_library"],
+        "figures": [v2_manifest["workbenches"][0]["figure"]],
+        "active_figure_index": 0,
+        "results": [],
+    }
+    v1_path = _rewrite_manifest(out_path, tmp_path, v1_manifest, out_name="v1.gnovi")
+
+    loaded = load_project(v1_path)
+    resave_path = tmp_path / "resaved.gnovi"
+    save_project(loaded, resave_path)
+
+    with zipfile.ZipFile(resave_path) as zf:
+        resaved_manifest = json.loads(zf.read("project.json"))
+    assert resaved_manifest["project_format_version"] == 2
+    assert "workbenches" in resaved_manifest
+    assert "figures" not in resaved_manifest
+
+    reloaded = load_project(resave_path)
+    assert len(reloaded.workbenches) == 1
+    assert len(reloaded.workbenches[0].figure.series) == 1
+
+
+# --- v2 manifests missing/misreferencing workbenches -- fall back cleanly -----
+
+
+def test_v2_manifest_with_no_workbenches_key_falls_back_to_one_default_workbench(tmp_path):
+    project, _dataset = _basic_project()
+    out_path = save_project(project, tmp_path / "proj.gnovi")
+    with zipfile.ZipFile(out_path) as zf:
+        manifest = json.loads(zf.read("project.json"))
+    del manifest["workbenches"]
+    del manifest["active_workbench_id"]
+    stripped_path = _rewrite_manifest(out_path, tmp_path, manifest, out_name="no_workbenches.gnovi")
+
+    loaded = load_project(stripped_path)
+
+    assert len(loaded.workbenches) == 1
+    assert loaded.active_workbench_id == loaded.workbenches[0].id
+
+
+def test_active_workbench_id_not_matching_any_workbench_falls_back_to_first(tmp_path):
+    project, _dataset = _basic_project()
+    out_path = save_project(project, tmp_path / "proj.gnovi")
+    with zipfile.ZipFile(out_path) as zf:
+        manifest = json.loads(zf.read("project.json"))
+    manifest["active_workbench_id"] = "does-not-exist"
+    stripped_path = _rewrite_manifest(out_path, tmp_path, manifest, out_name="bad_active_id.gnovi")
+
+    loaded = load_project(stripped_path)
+
+    assert loaded.active_workbench_id == loaded.workbenches[0].id
+
+
+# --- Multi-workbench v2 round trip ---------------------------------------------
+
+
+def test_multiple_workbenches_round_trip_independently(tmp_path):
+    dataset = _simple_dataset()
+    project = Project.new()
+    project.dataset_manager.add(dataset)
+    project.workbenches[0].name = "CV Comparison"
+    project.workbenches[0].figure.set_layout(2, 2)
+    project.workbenches[0].figure.add_series(PlotSeries.line(dataset, "x", "y", label="a"))
+
+    from gnovi_plot.core.workbench import Workbench
+
+    second = Workbench(name="New Scan", figure=GnoviFigure())
+    second.figure.add_series(PlotSeries.line(dataset, "x", "y", label="b"))
+    project.add_workbench(second)
+    project.active_workbench_id = second.id
+
+    out_path = save_project(project, tmp_path / "multi.gnovi")
+    loaded = load_project(out_path)
+
+    assert len(loaded.workbenches) == 2
+    names = {w.name for w in loaded.workbenches}
+    assert names == {"CV Comparison", "New Scan"}
+    loaded_first = next(w for w in loaded.workbenches if w.name == "CV Comparison")
+    loaded_second = next(w for w in loaded.workbenches if w.name == "New Scan")
+    assert loaded_first.figure.layout == (2, 2)
+    assert loaded_first.figure.series[0].label == "a"
+    assert loaded_second.figure.series[0].label == "b"
+    assert loaded.active_workbench_id == loaded_second.id
+    # Shared dataset, not duplicated.
+    assert loaded_first.figure.series[0].dataset is loaded_second.figure.series[0].dataset
+    assert len(loaded.dataset_manager.datasets) == 1
 
 
 # --- Malformed files -----------------------------------------------------------
@@ -222,7 +469,7 @@ def test_manifest_with_malformed_json_is_rejected(tmp_path):
 def test_manifest_missing_format_version_is_rejected(tmp_path):
     path = tmp_path / "no_version.gnovi"
     with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("project.json", json.dumps({"datasets": [], "figures": []}))
+        zf.writestr("project.json", json.dumps({"datasets": [], "workbenches": []}))
     with pytest.raises(CorruptProjectError):
         load_project(path)
 
@@ -237,7 +484,7 @@ def test_unsupported_future_format_version_is_rejected(tmp_path):
                     "project_format_version": PROJECT_FORMAT_VERSION + 1,
                     "datasets": [],
                     "graph_library": [],
-                    "figures": [],
+                    "workbenches": [],
                 }
             ),
         )
@@ -404,7 +651,7 @@ def _build_representative_project():
     assert len(graphs_by_name) == 10
 
     # The current Figure: 2x2, custom ratio/margins/spacing/grid/legend.
-    figure = project.figures[0]
+    figure = project.workbenches[0].figure
     figure.figure_width_in = 9.0
     figure.figure_height_in = 6.0
     figure.margin_left = 0.18
@@ -456,7 +703,7 @@ def _build_representative_project():
 
 def test_representative_project_round_trip(tmp_path):
     project, ds1, ds2, graphs_by_name = _build_representative_project()
-    figure = project.figures[0]
+    figure = project.workbenches[0].figure
     expected_source_graph_ids = [graphs_by_name[f"Graph {n}"].id for n in (2, 5, 7, 10)]
 
     out_path = save_project(project, tmp_path / "big.gnovi")
@@ -494,8 +741,13 @@ def test_representative_project_round_trip(tmp_path):
         for series in g.panel.series:
             assert series.dataset is loaded_ds1  # shared reference, not a duplicate
 
+    # --- workbenches: exactly one, named --------------------------------
+    assert len(loaded.workbenches) == 1
+    assert loaded.workbenches[0].name == "Workbench 1"
+    assert loaded.active_workbench_id == loaded.workbenches[0].id
+
     # --- figure: layout, ratio, margins/spacing, grid/legend ---------------
-    loaded_figure = loaded.figures[0]
+    loaded_figure = loaded.workbenches[0].figure
     assert loaded_figure.layout == (2, 2)
     assert len(loaded_figure.panels) == 4
     assert loaded_figure.figure_width_in == 9.0
