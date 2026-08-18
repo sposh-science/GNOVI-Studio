@@ -7,7 +7,7 @@ _PYPROJECT_PATH = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
 
 def test_identity_constants_are_nonempty():
-    assert APP_NAME == "Gnovi Studio"
+    assert APP_NAME == "GNOVI Studio"
     assert APP_TAGLINE
     assert __version__
     assert VERSION_LABEL

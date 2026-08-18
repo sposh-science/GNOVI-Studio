@@ -166,6 +166,11 @@ class FigurePropertiesPanel(QWidget):
         self.legend_check = QCheckBox("Show legend")
         self.legend_loc_combo = QComboBox()
         self.legend_loc_combo.addItems(_LEGEND_LOCATIONS)
+        # The longest Matplotlib location strings ("outside bottom" etc.)
+        # were driving this combo's own natural minimumSizeHint -- see the
+        # matching note on `figure_size_panel.font_family_combo` for the
+        # same pattern.
+        self.legend_loc_combo.setMinimumWidth(90)
         self.legend_ncol_spin = QSpinBox()
         self.legend_ncol_spin.setRange(1, 10)
         self.legend_frame_check = QCheckBox("Legend frame")
@@ -338,6 +343,12 @@ class FigurePropertiesPanel(QWidget):
         spin.setRange(0.0, _TICK_SPACING_RANGE)
         spin.setDecimals(6)
         spin.setSpecialValueText("Auto")
+        # Same "configured range inflated the natural minimum" pattern as
+        # `_make_limit_spin` above (`_TICK_SPACING_RANGE` is 1e9 at 6
+        # decimals -- a ~16-character string) -- four of these
+        # (major/minor spacing x/y) sit in the Axes drawer page, so this
+        # alone was a real contributor to that page's default width.
+        spin.setMinimumWidth(80)
         return spin
 
     @staticmethod

@@ -46,7 +46,7 @@ class CorruptProjectError(ProjectIOError):
 
 class UnsupportedProjectVersionError(ProjectIOError):
     """The file's `project_format_version` is newer than this app version
-    of Gnovi Studio knows how to read."""
+    of GNOVI Studio knows how to read."""
 
 
 def _dataset_dir(dataset_id: str) -> str:
@@ -129,7 +129,7 @@ def load_project(path: str | Path) -> Project:
                 manifest = _migrate_v1_to_v2(manifest)
             dataset_manager, dataset_lookup = _load_datasets(zf, manifest)
     except zipfile.BadZipFile as exc:
-        raise CorruptProjectError(f"'{path.name}' is not a valid Gnovi Studio project file.") from exc
+        raise CorruptProjectError(f"'{path.name}' is not a valid GNOVI Studio project file.") from exc
 
     graph_library = GraphLibrary.from_dict(manifest.get("graph_library", []), dataset_lookup)
     workbenches = [Workbench.from_dict(w, dataset_lookup) for w in manifest.get("workbenches", [])]
@@ -197,7 +197,7 @@ def _check_format_version(manifest: dict) -> None:
         raise CorruptProjectError(f"Project file has an invalid format version: {version!r}.")
     if version > PROJECT_FORMAT_VERSION:
         raise UnsupportedProjectVersionError(
-            f"This project was saved by a newer version of Gnovi Studio "
+            f"This project was saved by a newer version of GNOVI Studio "
             f"(format version {version}, this app supports up to {PROJECT_FORMAT_VERSION}) "
             "and can't be opened here."
         )

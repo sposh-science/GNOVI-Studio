@@ -1,12 +1,13 @@
 import pandas as pd
+import pytest
 from matplotlib.backend_bases import MouseEvent
 from PySide6.QtCore import QItemSelection, QItemSelectionModel, QRect
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QLabel, QTableView, QToolBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QTableView, QToolBar, QVBoxLayout, QWidget
 
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.data.dataset_manager import DatasetManager
-from gnovi_plot.gui.main_window import MainWindow, compute_initial_geometry
+from gnovi_plot.gui.main_window import MainWindow, compute_drawer_widths, compute_initial_geometry
 from gnovi_plot.gui.styles import PlotTheme
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.gui.widgets.dataset_panel import DatasetPanel
@@ -74,6 +75,156 @@ def test_initial_geometry_respects_nonzero_screen_origin():
     assert geometry.bottom() <= available.bottom()
 
 
+# --- compute_drawer_widths ------------------------------------------------
+
+
+# Realistic (Linux-like) content floors -- comfortably smaller than what
+# each fraction-of-window default would give at any resolution below, so
+# these scenarios never engage the emergency-shrink path.
+_COMFORTABLE_LEFT_MIN = 220
+_COMFORTABLE_RIGHT_MIN = 180
+# Deliberately inflated (Windows-CI-like) content floors -- larger than a
+# platform with more generous text metrics could ever fit at these window
+# widths without the Workbench shrinking. Mirrors the actual PR #2 Windows
+# CI investigation: `_side_drawer_min_width`'s `minimumSizeHint()`-based
+# floor can come out substantially larger on one platform than another for
+# pixel-identical content, even at identical nominal font family/size.
+_INFLATED_LEFT_MIN = 900
+_INFLATED_RIGHT_MIN = 700
+_STRIP = 64  # gui.widgets.tool_drawer.STRIP_WIDTH -- each drawer's true floor
+
+
+@pytest.mark.parametrize("total_width", [1280, 1366, 1600, 1920])
+def test_compute_drawer_widths_comfortable_floors_never_shrink_the_workbench(total_width):
+    """At every common resolution, comfortable (real-world Linux-scale)
+    content floors leave the center Workbench well above its minimum --
+    the emergency-shrink path should never even engage."""
+    left, center, right, left_collapsed, right_collapsed = compute_drawer_widths(
+        total_width,
+        _COMFORTABLE_LEFT_MIN,
+        _COMFORTABLE_RIGHT_MIN,
+        left_floor_width=_STRIP,
+        right_floor_width=_STRIP,
+    )
+    assert left + center + right == total_width
+    assert left >= _COMFORTABLE_LEFT_MIN
+    assert right >= _COMFORTABLE_RIGHT_MIN
+    assert center >= 360  # _MIN_WORKBENCH_WIDTH
+    assert not left_collapsed and not right_collapsed
+
+
+@pytest.mark.parametrize("total_width", [1280, 1366, 1600, 1920])
+def test_compute_drawer_widths_inflated_floors_still_protect_the_workbench(total_width):
+    """Regression test for the PR #2 Windows CI investigation: a platform
+    whose text metrics inflate both drawers' content floors past what the
+    window can comfortably fit must never collapse the center
+    Workbench/PlotCanvas to a tiny residual width (previously observed as
+    low as ~50px) -- it must still get a sensible minimum, provided the
+    window is wide enough for that once both drawers give up content room
+    down to their collapsed strip width."""
+    left, center, right, left_collapsed, right_collapsed = compute_drawer_widths(
+        total_width,
+        _INFLATED_LEFT_MIN,
+        _INFLATED_RIGHT_MIN,
+        left_floor_width=_STRIP,
+        right_floor_width=_STRIP,
+    )
+    assert left + center + right == total_width
+    # Neither drawer is left half-shrunk-and-clipped: each is either at (or
+    # above) its own true minimum, or fully collapsed.
+    assert left_collapsed or left >= _INFLATED_LEFT_MIN
+    assert right_collapsed or right >= _INFLATED_RIGHT_MIN
+    # Never below the true, structural floor (a drawer's own collapsed
+    # strip) -- that would mean negative/overlapping content.
+    assert left >= _STRIP
+    assert right >= _STRIP
+    if total_width - 2 * _STRIP >= 360:  # _MIN_WORKBENCH_WIDTH
+        assert center >= 360
+    else:
+        # Even a maximally narrow window still gets a non-negative center;
+        # `MainWindow.center_splitter`'s own hard `setMinimumWidth(50)` is
+        # the last-resort backstop below this function's own reach.
+        assert center >= 0
+    # The old failure mode this guards against: PlotCanvas collapsing to a
+    # tiny residual width while both drawers keep their full (inflated)
+    # floor untouched.
+    assert center > 150
+
+
+def test_compute_drawer_widths_never_shrinks_a_drawer_below_its_strip_floor():
+    """However extreme the content floors, a drawer's allocated width must
+    never drop below its own collapsed strip width -- going lower would
+    mean negative/overlapping content, not just a cramped page."""
+    left, center, right, left_collapsed, right_collapsed = compute_drawer_widths(
+        900,
+        _INFLATED_LEFT_MIN,
+        _INFLATED_RIGHT_MIN,
+        left_floor_width=_STRIP,
+        right_floor_width=_STRIP,
+    )
+    assert left + center + right == 900
+    assert left >= _STRIP
+    assert right >= _STRIP
+
+
+def test_compute_drawer_widths_already_locked_collapsed_side_is_never_touched():
+    """A side the user already collapsed by hand (`left_locked_collapsed`)
+    stays pinned at its strip width and is never itself re-flagged as a
+    fresh auto-collapse -- only the other, still-open side is a candidate
+    for the emergency reduction."""
+    left, center, right, left_collapsed, right_collapsed = compute_drawer_widths(
+        900,
+        _STRIP,
+        _INFLATED_RIGHT_MIN,
+        left_floor_width=_STRIP,
+        right_floor_width=_STRIP,
+        left_locked_collapsed=True,
+    )
+    assert left == _STRIP
+    assert not left_collapsed  # already collapsed -- nothing *new* to report
+    assert left + center + right == 900
+
+
+def test_compute_drawer_widths_both_locked_collapsed_leaves_everything_to_center():
+    left, center, right, left_collapsed, right_collapsed = compute_drawer_widths(
+        300,
+        _STRIP,
+        _STRIP,
+        left_floor_width=_STRIP,
+        right_floor_width=_STRIP,
+        left_locked_collapsed=True,
+        right_locked_collapsed=True,
+    )
+    assert left == _STRIP
+    assert right == _STRIP
+    assert center == 300 - 2 * _STRIP
+    assert not left_collapsed and not right_collapsed  # already collapsed, nothing new
+
+
+def test_compute_drawer_widths_reclaims_comfort_slack_before_collapsing_either_side():
+    """A drawer sized comfortably above its own content floor (real slack
+    from the fraction-of-window default) should give that slack back first
+    -- shrinking toward, not below, what its content actually needs -- and
+    never collapse at all if that alone is enough."""
+    # total_width/minimums chosen so both fraction defaults exceed their
+    # floors (real slack exists) while center-at-preferred starts just
+    # under the minimum, by an amount fully covered by that slack.
+    left, center, right, left_collapsed, right_collapsed = compute_drawer_widths(
+        540,
+        90,
+        80,
+        left_floor_width=_STRIP,
+        right_floor_width=_STRIP,
+    )
+    assert left + center + right == 540
+    assert center >= 360  # _MIN_WORKBENCH_WIDTH
+    # Slack alone was enough -- neither drawer needed to go below its own
+    # comfortable content floor, and neither collapsed.
+    assert left >= 90
+    assert right >= 80
+    assert not left_collapsed and not right_collapsed
+
+
 def test_main_window_startup_geometry_never_exceeds_screen(qapp):
     window = MainWindow()
     screen = QGuiApplication.primaryScreen()
@@ -116,8 +267,16 @@ def test_view_working_data_action_toggles_the_right_working_drawer(qapp):
 
 
 def test_drawer_opens_the_data_page_by_default_on_startup(qapp):
+    # 1600x900: large enough that both drawers start expanded on every
+    # platform (see the PR #2 Windows CI investigation on why a smaller
+    # size -- including Qt offscreen's own incidental 800x800 default --
+    # isn't a safe assumption for this). This test is about the *default
+    # page* the left drawer opens to, not responsive/auto-collapse policy
+    # -- see the dedicated narrow-window tests below for that.
     window = MainWindow()
     window.show()
+    window.resize(1600, 900)
+    QApplication.instance().processEvents()
 
     assert window.tool_drawer.active_key == "data"
     window.close()
@@ -280,8 +439,12 @@ def test_switching_pages_preserves_dataset_panel_workflow_state(qapp):
 
 
 def test_right_working_data_drawer_exists_with_a_single_working_page(qapp):
+    # See test_drawer_opens_the_data_page_by_default_on_startup for why a
+    # size large enough to guarantee both drawers start expanded is used.
     window = MainWindow()
     window.show()
+    window.resize(1600, 900)
+    QApplication.instance().processEvents()
 
     assert set(window.working_drawer._buttons.keys()) == {"working"}
     assert window.working_drawer.active_key == "working"
@@ -291,6 +454,8 @@ def test_right_working_data_drawer_exists_with_a_single_working_page(qapp):
 def test_working_drawer_hosts_the_data_tools_panel(qapp):
     window = MainWindow()
     window.show()
+    window.resize(1600, 900)
+    QApplication.instance().processEvents()
 
     assert window.data_tools_panel.isVisible() is True
     assert window.working_drawer._pages["working"].isVisible() is True
@@ -300,6 +465,8 @@ def test_working_drawer_hosts_the_data_tools_panel(qapp):
 def test_clicking_the_active_working_button_collapses_the_right_drawer(qapp):
     window = MainWindow()
     window.show()
+    window.resize(1600, 900)
+    QApplication.instance().processEvents()
     drawer = window.working_drawer
     assert drawer.is_collapsed is False  # open by default
 
@@ -332,9 +499,13 @@ def test_working_drawer_collapse_and_reopen_preserves_dataset_selection_state(qa
 
 
 def test_graph_expands_when_the_left_drawer_collapses(qapp):
+    # 1600x900: these next several tests are about manual collapse/reopen
+    # *function*, which requires starting from both drawers genuinely
+    # expanded on every platform -- see
+    # test_drawer_opens_the_data_page_by_default_on_startup.
     window = MainWindow()
     window.show()
-    window.resize(1400, 900)
+    window.resize(1600, 900)
     left_before, center_before, _right_before = window.main_splitter.sizes()
 
     window.tool_drawer._buttons["data"].click()  # collapse (already active)
@@ -349,7 +520,7 @@ def test_graph_expands_when_the_left_drawer_collapses(qapp):
 def test_graph_expands_when_the_right_drawer_collapses(qapp):
     window = MainWindow()
     window.show()
-    window.resize(1400, 900)
+    window.resize(1600, 900)
     left_before, center_before, _right_before = window.main_splitter.sizes()
 
     window.working_drawer._buttons["working"].click()  # collapse (already active)
@@ -364,7 +535,7 @@ def test_graph_expands_when_the_right_drawer_collapses(qapp):
 def test_left_and_right_drawers_collapse_independently(qapp):
     window = MainWindow()
     window.show()
-    window.resize(1400, 900)
+    window.resize(1600, 900)
 
     # Left open + Right open (default) -> collapse only the left.
     window.tool_drawer._buttons["data"].click()
@@ -389,7 +560,7 @@ def test_left_and_right_drawers_collapse_independently(qapp):
 def test_graph_occupies_almost_all_width_when_both_drawers_are_closed(qapp):
     window = MainWindow()
     window.show()
-    window.resize(1400, 900)
+    window.resize(1600, 900)
 
     window.tool_drawer._buttons["data"].click()
     window.working_drawer._buttons["working"].click()
@@ -401,10 +572,148 @@ def test_graph_occupies_almost_all_width_when_both_drawers_are_closed(qapp):
     window.close()
 
 
+# --- Narrow-window auto-collapse (compute_drawer_widths Stage C/D, live) -------
+
+
+def _assert_no_expanded_drawer_is_clipped(window) -> None:
+    for drawer, page_key in (
+        (window.tool_drawer, window.tool_drawer.active_key),
+        (window.working_drawer, window.working_drawer.active_key),
+    ):
+        if drawer.is_collapsed:
+            continue
+        scroll = drawer._pages.get(page_key)
+        content = scroll.widget() if hasattr(scroll, "widget") else None
+        if content is not None:
+            assert scroll.viewport().width() >= content.minimumSizeHint().width(), (
+                f"{page_key!r} page is clipped while its drawer is still expanded"
+            )
+
+
+def test_narrow_window_auto_collapses_a_drawer_instead_of_clipping(qapp):
+    """At a window too narrow for both drawers' true minimums plus a
+    usable Workbench, at least one drawer must auto-collapse -- never left
+    expanded-but-clipped, and the Workbench must never return to the old
+    ~150px collapse."""
+    window = MainWindow()
+    window.show()
+    window.resize(600, 800)
+    QApplication.instance().processEvents()
+
+    left, center, right = window.main_splitter.sizes()
+    assert left >= 0 and center >= 0 and right >= 0
+    assert left + center + right <= window.main_splitter.width()
+    assert window.tool_drawer.is_collapsed or window.working_drawer.is_collapsed
+    _assert_no_expanded_drawer_is_clipped(window)
+    assert window.plot_canvas.width() > 150
+    window.close()
+
+
+def test_widening_after_narrow_reopens_only_the_auto_collapsed_drawer(qapp):
+    """A drawer this window auto-collapsed under width pressure -- not one
+    the user collapsed by hand -- reopens once there's room again."""
+    window = MainWindow()
+    window.show()
+    window.resize(600, 800)
+    QApplication.instance().processEvents()
+    assert window.working_drawer.is_collapsed  # collapse_priority="right" by default
+    assert window._right_auto_collapsed is True
+
+    window.resize(1920, 1080)
+    QApplication.instance().processEvents()
+
+    assert window.working_drawer.is_collapsed is False
+    assert window._right_auto_collapsed is False
+    _assert_no_expanded_drawer_is_clipped(window)
+    window.close()
+
+
+def test_manually_collapsed_drawer_stays_collapsed_when_width_is_restored(qapp):
+    """A drawer the user collapsed by hand must never be auto-reopened by
+    a later resize -- only their own click reopens it."""
+    window = MainWindow()
+    window.show()
+    window.resize(1600, 900)
+    QApplication.instance().processEvents()
+
+    window.tool_drawer._buttons["data"].click()  # manual collapse
+    assert window.tool_drawer.is_collapsed is True
+    assert window._left_auto_collapsed is False  # collapsed by the user, not width pressure
+
+    window.resize(600, 800)  # narrow enough to also auto-collapse the right
+    QApplication.instance().processEvents()
+    assert window.tool_drawer.is_collapsed is True  # still collapsed -- untouched
+
+    window.resize(1920, 1080)  # plenty of room again
+    QApplication.instance().processEvents()
+    assert window.tool_drawer.is_collapsed is True  # manual collapse never auto-reopens
+    assert window._left_auto_collapsed is False
+    window.close()
+
+
+@pytest.mark.parametrize("width,height", [(1280, 720), (1366, 768), (1600, 900), (1920, 1080)])
+def test_center_workbench_never_regresses_to_the_old_tiny_collapse(qapp, width, height):
+    """Focused layout regression for the PR #2 Windows CI investigation.
+
+    This deliberately does NOT assert both drawers start expanded -- a
+    platform whose text metrics inflate the drawers' true minimum width
+    (see that investigation) can validly auto-collapse one at these
+    resolutions; that's the intended policy, not a bug. What must hold on
+    every platform, regardless of which drawers ended up open or
+    auto-collapsed: the three splitter panes always sum to the total width
+    (no overlap/gap), no expanded drawer is left clipped, and the
+    Workbench never regresses to the old ~50-150px collapse this whole
+    investigation was about."""
+    window = MainWindow()
+    window.show()
+    window.resize(width, height)
+
+    left, center, right = window.main_splitter.sizes()
+    # QSplitter.sizes() excludes its own handle widths, so the three panes
+    # sum to slightly less than .width() -- not an overlap/gap bug.
+    assert 0 <= window.main_splitter.width() - (left + center + right) <= 16
+    assert left >= 0 and center >= 0 and right >= 0
+    _assert_no_expanded_drawer_is_clipped(window)
+    assert center > 150  # the old failure mode this guards against
+    # If at least one drawer is still open, the allocator's own protected
+    # minimum should have been reached -- it only accepts collapsing a
+    # single side when that alone gets the Workbench there (see
+    # compute_drawer_widths's Stage C). If *both* ended up collapsed, the
+    # allocator had nothing further to reclaim at this width, and
+    # center_splitter's own hard minimum is the backstop instead.
+    if not (window.tool_drawer.is_collapsed and window.working_drawer.is_collapsed):
+        assert center >= 360  # _MIN_WORKBENCH_WIDTH
+    window.close()
+
+
+@pytest.mark.parametrize("width,height", [(1600, 900), (1920, 1080)])
+def test_center_workbench_grows_when_only_one_drawer_is_open(qapp, width, height):
+    """Manual single-drawer-collapse function -- requires starting from
+    both drawers genuinely expanded, so only tested at sizes confirmed
+    large enough for that on every platform (see
+    test_drawer_opens_the_data_page_by_default_on_startup). Constrained
+    sizes where a drawer may auto-collapse on its own are covered by
+    test_center_workbench_never_regresses_to_the_old_tiny_collapse and the
+    dedicated narrow-window tests instead."""
+    window = MainWindow()
+    window.show()
+    window.resize(width, height)
+    _, center_before, _ = window.main_splitter.sizes()
+
+    window.tool_drawer._buttons["data"].click()  # collapse the left drawer only
+
+    left, center, right = window.main_splitter.sizes()
+    assert left == window.tool_drawer.strip_width
+    assert right > window.working_drawer.strip_width  # untouched, still open
+    assert center > center_before
+    assert 0 <= window.main_splitter.width() - (left + center + right) <= 16
+    window.close()
+
+
 def test_reopening_the_left_drawer_restores_the_previous_width_and_page_state(qapp):
     window = MainWindow()
     window.show()
-    window.resize(1400, 900)
+    window.resize(1600, 900)
     drawer = window.tool_drawer
     drawer._buttons["series"].click()
     open_sizes = window.main_splitter.sizes()
@@ -421,7 +730,7 @@ def test_reopening_the_left_drawer_restores_the_previous_width_and_page_state(qa
 def test_reopening_the_right_drawer_restores_the_previous_width(qapp):
     window = MainWindow()
     window.show()
-    window.resize(1400, 900)
+    window.resize(1600, 900)
     drawer = window.working_drawer
     open_sizes = window.main_splitter.sizes()
 

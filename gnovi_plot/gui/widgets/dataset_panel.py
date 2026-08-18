@@ -119,19 +119,29 @@ class DatasetPanel(QWidget):
         # independent one -- see `_sync_dataset_combo`/`_on_dataset_combo_changed`.
         self.dataset_combo_label = QLabel("Dataset")
         self.active_dataset_combo = QComboBox()
+        # Dataset names are user-chosen and open-ended -- the combo still
+        # shows the full name whenever the drawer is wide enough for it;
+        # this only stops a single long dataset name from forcing the
+        # whole drawer wider. Same pattern as
+        # `figure_size_panel.font_family_combo`.
+        self.active_dataset_combo.setMinimumWidth(90)
 
         self.plot_preset_combo = QComboBox()
         for text, preset in _PLOT_PRESET_OPTIONS:
             self.plot_preset_combo.addItem(text, preset)
+        self.plot_preset_combo.setMinimumWidth(80)
 
         self.plot_type_combo = QComboBox()
         for text, plot_type in _PLOT_TYPE_OPTIONS:
             self.plot_type_combo.addItem(text, plot_type)
+        self.plot_type_combo.setMinimumWidth(80)
 
         self.x_label = QLabel("X column")
         self.x_combo = QComboBox()
+        self.x_combo.setMinimumWidth(90)  # column names are open-ended, same pattern
         self.y_label = QLabel("Y column")
         self.y_combo = QComboBox()
+        self.y_combo.setMinimumWidth(90)
         self.bins_label = QLabel("Bins")
         self.bins_spin = QSpinBox()
         self.bins_spin.setRange(0, 1000)
@@ -142,6 +152,11 @@ class DatasetPanel(QWidget):
         self.plot_mode_combo = QComboBox()
         for text, mode in _PLOT_MODE_OPTIONS:
             self.plot_mode_combo.addItem(text, mode)
+        # "Entire dataset" (the longest configured option) was driving this
+        # combo's own natural minimumSizeHint well past what it needs to
+        # show at once -- see the matching note on
+        # `figure_size_panel.font_family_combo` for the same pattern.
+        self.plot_mode_combo.setMinimumWidth(90)
         self.cycle_status_label = QLabel("")
         self.cycle_status_label.setWordWrap(True)
 
@@ -149,6 +164,8 @@ class DatasetPanel(QWidget):
         self.cycle_source_combo = QComboBox()
         for text, source in _CYCLE_SOURCE_OPTIONS:
             self.cycle_source_combo.addItem(text, source)
+        # Same pattern -- "Auto detect" was driving the natural floor.
+        self.cycle_source_combo.setMinimumWidth(90)
 
         self.manual_cycle_list = QListWidget()
         self.add_cycle_button = QPushButton("Add Cycle from Selection")

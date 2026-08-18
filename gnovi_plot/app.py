@@ -22,7 +22,7 @@ def _install_excepthook() -> None:
         QMessageBox.critical(
             None,
             "Unexpected Error",
-            "Gnovi Studio hit an unexpected error and this action could not "
+            "GNOVI Studio hit an unexpected error and this action could not "
             "complete. Details were logged to the terminal.",
         )
 

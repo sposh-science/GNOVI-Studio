@@ -12,7 +12,7 @@ DEFAULT_PROJECT_NAME = "Untitled Project"
 
 
 class Project:
-    """A Gnovi Studio project (session): datasets + Graph Library + multiple
+    """A GNOVI Studio project (session): datasets + Graph Library + multiple
     Workbenches + per-dataset transformation history, as a single
     reproducible unit saved/loaded via `core.project_io`.
 

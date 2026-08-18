@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  QT_QPA_PLATFORM: offscreen
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install GNOVI + test dependencies
+        run: pip install -e ".[test]"
+
+      - name: Install Qt runtime libraries (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0
+
+      - name: Run tests (Ubuntu, with coverage)
+        if: matrix.os == 'ubuntu-latest'
+        run: pytest --cov=gnovi_plot --cov-report=term-missing --cov-report=xml
+
+      - name: Windows Qt/geometry diagnostics (temporary, PR #2 investigation)
+        if: matrix.os == 'windows-latest'
+        continue-on-error: true
+        run: python scripts/_windows_qt_diagnostics.py
+
+      - name: Windows Qt/geometry diagnostics with offscreen size= override (temporary)
+        if: matrix.os == 'windows-latest'
+        continue-on-error: true
+        env:
+          QT_QPA_PLATFORM: offscreen:size=1920x1080
+        run: python scripts/_windows_qt_diagnostics.py
+
+      - name: Run tests (Windows)
+        if: matrix.os == 'windows-latest'
+        run: pytest
+
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+        # No CODECOV_TOKEN configured yet -- this step is intentionally
+        # non-blocking (fail_ci_if_error: false) so a Codecov upload issue
+        # never fails an otherwise-green pytest run. See PR description for
+        # the external setup step this needs.

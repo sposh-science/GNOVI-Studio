@@ -119,6 +119,12 @@ class FigureSizePanel(QWidget):
 
         self.aspect_combo = QComboBox()
         self.aspect_combo.addItems(list(ASPECT_RATIO_PRESETS))
+        # Same "configured content, not this widget's own layout needs,
+        # inflated the natural floor" pattern as `font_family_combo` below --
+        # here it's "Auto / Fit workspace" (this combo's own longest
+        # preset) driving a ~180px natural minimumSizeHint for a control
+        # that only ever needs to show a handful of characters at once.
+        self.aspect_combo.setMinimumWidth(90)
         # Distinct label/tooltip from Panel Aspect Ratio just below -- this
         # one is the OUTER complete figure/page shape, never per-panel.
         self.aspect_combo.setToolTip(
@@ -136,6 +142,9 @@ class FigureSizePanel(QWidget):
 
         self.publication_combo = QComboBox()
         self.publication_combo.addItems([_NO_PUBLICATION_PRESET] + list(PUBLICATION_PRESETS_MM))
+        # Same pattern -- "Journal double column" (the longest configured
+        # preset name) was driving this combo's natural floor.
+        self.publication_combo.setMinimumWidth(90)
 
         self.unit_combo = QComboBox()
         self.unit_combo.addItems(_UNITS)

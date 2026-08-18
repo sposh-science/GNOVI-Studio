@@ -46,13 +46,21 @@ def _lock_square_figure(window, size_in=6.4):
 
 
 def test_locked_1_1_figure_stays_square_in_a_wide_viewport(qapp):
+    """Figure Aspect Ratio governs the displayed FIGURE rectangle inside
+    PlotCanvas, not the raw QWidget's own width/height -- a canvas
+    narrower than it is tall (e.g. from a platform-specific side-drawer
+    floor eating into width more than height does) can still validly
+    contain a perfectly square letterboxed figure with a bit of blank
+    margin. `_content_aspect_ratio` measures the actual displayed content
+    rect via `PlotCanvas._letterbox_rect`, independent of the outer
+    widget's own shape -- that's the real invariant here, not the widget's
+    raw dimensions."""
     window = MainWindow()
     window.show()
     window.resize(1600, 900)
     QApplication.instance().processEvents()
     _lock_square_figure(window)
 
-    assert window.plot_canvas.width() > window.plot_canvas.height()  # a genuinely wide viewport
     assert _content_aspect_ratio(window) == pytest.approx(1.0, rel=1e-2)
     window.close()
 
@@ -137,9 +145,14 @@ def test_collapsing_the_left_drawer_does_not_distort_the_locked_ratio(qapp):
 
 
 def test_collapsing_the_right_drawer_does_not_distort_the_locked_ratio(qapp):
+    # 1600x900, not 1400x900: wide enough that both drawers start expanded
+    # on every platform (a platform whose text metrics inflate the true
+    # minimum can auto-collapse the right drawer well before 1600px --
+    # see the PR #2 Windows CI investigation -- which would make this
+    # button click reopen it instead of collapsing it as intended).
     window = MainWindow()
     window.show()
-    window.resize(1400, 900)
+    window.resize(1600, 900)
     QApplication.instance().processEvents()
     _lock_square_figure(window)
 

@@ -156,6 +156,10 @@ class PlotSeriesPanel(QWidget):
         self.hist_mode_combo = QComboBox()
         for text, code in _HIST_MODE_OPTIONS:
             self.hist_mode_combo.addItem(text, code)
+        # "Frequency" (the longest configured option) was driving this
+        # combo's own natural minimumSizeHint -- see the matching note on
+        # `figure_size_panel.font_family_combo` for the same pattern.
+        self.hist_mode_combo.setMinimumWidth(80)
 
         list_group = QGroupBox("Plot Series")
         list_layout = QVBoxLayout(list_group)

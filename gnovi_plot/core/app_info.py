@@ -1,4 +1,4 @@
-"""Single authoritative source for Gnovi Studio's product identity.
+"""Single authoritative source for GNOVI Studio's product identity.
 
 `__version__` must stay in sync with `pyproject.toml`'s `[project].version`
 (the packaging build reads the latter; the app reads this module) --
@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-APP_NAME = "Gnovi Studio"
+APP_NAME = "GNOVI Studio"
 APP_TAGLINE = "Scientific Plotting & Visualization"
 
 __version__ = "0.9.0"
