@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 from matplotlib.backend_bases import MouseEvent
 from PySide6.QtCore import QItemSelection, QItemSelectionModel, QRect
 from PySide6.QtGui import QGuiApplication
@@ -6,7 +7,7 @@ from PySide6.QtWidgets import QLabel, QTableView, QToolBar, QVBoxLayout, QWidget
 
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.data.dataset_manager import DatasetManager
-from gnovi_plot.gui.main_window import MainWindow, compute_initial_geometry
+from gnovi_plot.gui.main_window import MainWindow, compute_drawer_widths, compute_initial_geometry
 from gnovi_plot.gui.styles import PlotTheme
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.gui.widgets.dataset_panel import DatasetPanel
@@ -72,6 +73,145 @@ def test_initial_geometry_respects_nonzero_screen_origin():
     assert geometry.top() >= available.top()
     assert geometry.right() <= available.right()
     assert geometry.bottom() <= available.bottom()
+
+
+# --- compute_drawer_widths ------------------------------------------------
+
+
+# Realistic (Linux-like) content floors -- comfortably smaller than what
+# each fraction-of-window default would give at any resolution below, so
+# these scenarios never engage the emergency-shrink path.
+_COMFORTABLE_LEFT_MIN = 220
+_COMFORTABLE_RIGHT_MIN = 180
+# Deliberately inflated (Windows-CI-like) content floors -- larger than a
+# platform with more generous text metrics could ever fit at these window
+# widths without the Workbench shrinking. Mirrors the actual PR #2 Windows
+# CI investigation: `_side_drawer_min_width`'s `minimumSizeHint()`-based
+# floor can come out substantially larger on one platform than another for
+# pixel-identical content, even at identical nominal font family/size.
+_INFLATED_LEFT_MIN = 900
+_INFLATED_RIGHT_MIN = 700
+_STRIP = 64  # gui.widgets.tool_drawer.STRIP_WIDTH -- each drawer's true floor
+
+
+@pytest.mark.parametrize("total_width", [1280, 1366, 1600, 1920])
+def test_compute_drawer_widths_comfortable_floors_never_shrink_the_workbench(total_width):
+    """At every common resolution, comfortable (real-world Linux-scale)
+    content floors leave the center Workbench well above its minimum --
+    the emergency-shrink path should never even engage."""
+    left, center, right = compute_drawer_widths(
+        total_width,
+        _COMFORTABLE_LEFT_MIN,
+        _COMFORTABLE_RIGHT_MIN,
+        left_floor_width=_STRIP,
+        right_floor_width=_STRIP,
+    )
+    assert left + center + right == total_width
+    assert left >= _COMFORTABLE_LEFT_MIN
+    assert right >= _COMFORTABLE_RIGHT_MIN
+    assert center >= 360  # _MIN_WORKBENCH_WIDTH
+
+
+@pytest.mark.parametrize("total_width", [1280, 1366, 1600, 1920])
+def test_compute_drawer_widths_inflated_floors_still_protect_the_workbench(total_width):
+    """Regression test for the PR #2 Windows CI investigation: a platform
+    whose text metrics inflate both drawers' content floors past what the
+    window can comfortably fit must never collapse the center
+    Workbench/PlotCanvas to a tiny residual width (previously observed as
+    low as ~50px) -- it must still get a sensible minimum, provided the
+    window is wide enough for that once both drawers give up content room
+    down to their collapsed strip width."""
+    left, center, right = compute_drawer_widths(
+        total_width,
+        _INFLATED_LEFT_MIN,
+        _INFLATED_RIGHT_MIN,
+        left_floor_width=_STRIP,
+        right_floor_width=_STRIP,
+    )
+    assert left + center + right == total_width
+    # Never below the true, structural floor (a drawer's own collapsed
+    # strip) -- that would mean negative/overlapping content.
+    assert left >= _STRIP
+    assert right >= _STRIP
+    if total_width - 2 * _STRIP >= 360:  # _MIN_WORKBENCH_WIDTH
+        assert center >= 360
+    else:
+        # Even a maximally narrow window still gets a non-negative center;
+        # `MainWindow.center_splitter`'s own hard `setMinimumWidth(50)` is
+        # the last-resort backstop below this function's own reach.
+        assert center >= 0
+    # The old failure mode this guards against: PlotCanvas collapsing to a
+    # tiny residual width while both drawers keep their full (inflated)
+    # floor untouched.
+    assert center > 150
+
+
+def test_compute_drawer_widths_never_shrinks_a_drawer_below_its_strip_floor():
+    """However extreme the content floors, a drawer's allocated width must
+    never drop below its own collapsed strip width -- going lower would
+    mean negative/overlapping content, not just a cramped page."""
+    left, center, right = compute_drawer_widths(
+        900,
+        _INFLATED_LEFT_MIN,
+        _INFLATED_RIGHT_MIN,
+        left_floor_width=_STRIP,
+        right_floor_width=_STRIP,
+    )
+    assert left + center + right == 900
+    assert left >= _STRIP
+    assert right >= _STRIP
+
+
+def test_compute_drawer_widths_one_drawer_already_minimal_only_squeezes_the_other():
+    """A side already at its own floor with zero comfort slack above it
+    (e.g. a collapsed drawer, whose own min/floor is its strip width) must
+    never be shrunk further -- only a side that still has room to give
+    (here, the inflated one) absorbs an emergency reduction."""
+    left, center, right = compute_drawer_widths(
+        300,  # narrow enough that even the left drawer's own fraction
+        _STRIP,  # default lands below its floor -- it's already minimal
+        _INFLATED_RIGHT_MIN,
+        left_floor_width=_STRIP,
+        right_floor_width=_STRIP,
+    )
+    assert left == _STRIP  # untouched: it had no slack to give
+    assert right == _STRIP  # shrunk all the way down to its own floor
+    assert left + center + right == 300
+
+
+def test_compute_drawer_widths_both_drawers_already_minimal_gives_the_rest_to_center():
+    left, center, right = compute_drawer_widths(
+        300,
+        _STRIP,
+        _STRIP,
+        left_floor_width=_STRIP,
+        right_floor_width=_STRIP,
+    )
+    assert left == _STRIP
+    assert right == _STRIP
+    assert center == 300 - 2 * _STRIP
+
+
+def test_compute_drawer_widths_reclaims_comfort_slack_before_touching_either_floor():
+    """A drawer sized comfortably above its own content floor (real slack
+    from the fraction-of-window default) should give that slack back first
+    -- shrinking toward, not below, what its content actually needs --
+    before the emergency strip-floor path ever engages."""
+    # total_width chosen so both fraction defaults exceed their floors
+    # (plenty of slack) while center still starts just under the minimum.
+    left, center, right = compute_drawer_widths(
+        1000,
+        100,
+        100,
+        left_floor_width=_STRIP,
+        right_floor_width=_STRIP,
+    )
+    assert left + center + right == 1000
+    assert center >= 360  # _MIN_WORKBENCH_WIDTH
+    # Slack alone was enough -- neither drawer needed to go below its own
+    # comfortable content floor of 100.
+    assert left >= 100
+    assert right >= 100
 
 
 def test_main_window_startup_geometry_never_exceeds_screen(qapp):
@@ -398,6 +538,44 @@ def test_graph_occupies_almost_all_width_when_both_drawers_are_closed(qapp):
     assert left == window.tool_drawer.strip_width
     assert right == window.working_drawer.strip_width
     assert center / window.width() > 0.8
+    window.close()
+
+
+@pytest.mark.parametrize("width,height", [(1280, 720), (1366, 768), (1600, 900), (1920, 1080)])
+def test_center_workbench_never_collapses_at_common_resolutions_both_drawers_open(qapp, width, height):
+    """Focused layout regression for the PR #2 Windows CI investigation:
+    across every commonly tested resolution, with both side drawers open
+    (the default), `main_splitter`'s three widths must always sum to the
+    total, never overlap, and the center Workbench/PlotCanvas must keep a
+    sensible share of the window rather than being collapsed to a tiny
+    residual width."""
+    window = MainWindow()
+    window.show()
+    window.resize(width, height)
+
+    left, center, right = window.main_splitter.sizes()
+    # QSplitter.sizes() excludes its own handle widths, so the three panes
+    # sum to slightly less than .width() -- not an overlap/gap bug.
+    assert 0 <= window.main_splitter.width() - (left + center + right) <= 16
+    assert left >= 0 and center >= 0 and right >= 0
+    assert center / window.main_splitter.width() > 0.3
+    window.close()
+
+
+@pytest.mark.parametrize("width,height", [(1280, 720), (1366, 768), (1600, 900), (1920, 1080)])
+def test_center_workbench_grows_when_only_one_drawer_is_open(qapp, width, height):
+    window = MainWindow()
+    window.show()
+    window.resize(width, height)
+    _, center_before, _ = window.main_splitter.sizes()
+
+    window.tool_drawer._buttons["data"].click()  # collapse the left drawer only
+
+    left, center, right = window.main_splitter.sizes()
+    assert left == window.tool_drawer.strip_width
+    assert right > window.working_drawer.strip_width  # untouched, still open
+    assert center > center_before
+    assert 0 <= window.main_splitter.width() - (left + center + right) <= 16
     window.close()
 
 

@@ -225,10 +225,27 @@ def _side_drawer_min_width(drawer, content_widgets) -> int:
     return drawer.strip_width + widest_content + _DRAWER_SCROLLBAR_RESERVE + _DRAWER_CONTENT_MARGIN
 
 
-def compute_drawer_widths(total_width: int, left_min_width: int, right_min_width: int) -> tuple[int, int, int]:
+def compute_drawer_widths(
+    total_width: int,
+    left_min_width: int,
+    right_min_width: int,
+    *,
+    left_floor_width: int = 0,
+    right_floor_width: int = 0,
+) -> tuple[int, int, int]:
     """Return `(left_width, center_width, right_width)` for the main
     horizontal splitter, given the window's total content width and each
     side drawer's own real floor (`_side_drawer_min_width`).
+
+    `left_floor_width`/`right_floor_width` are each drawer's *absolute*
+    floor (its collapsed `strip_width`) -- lower than `left_min_width`/
+    `right_min_width`, which is the floor for showing its content
+    *uncropped*. Both floors matter because `left_min_width`/
+    `right_min_width` are computed from real widgets' `minimumSizeHint()`
+    (see `_side_drawer_min_width`), which reflects the *platform's* text
+    metrics for whatever's on that drawer's widest page -- not just the
+    window's own width. Two platforms can legitimately disagree on what
+    that floor is for pixel-identical content.
 
     A pure function (like `compute_initial_geometry` above) so it can be
     exercised directly at specific window widths in tests, independent of
@@ -246,24 +263,50 @@ def compute_drawer_widths(total_width: int, left_min_width: int, right_min_width
     # On any realistic screen (see the responsive test matrix in
     # gui.main_window's own docstring references) both drawer floors and a
     # comfortable center easily coexist -- this only engages on a screen too
-    # small to fit everything at once. The center Workbench is prioritized
-    # over each drawer's full *comfortable* width, but never shrunk below
-    # either drawer's own hard content floor (`left_min_width`/
-    # `right_min_width`, already the size each `max(...)` above guaranteed
-    # at minimum) -- letting the center shrink toward 0 instead doesn't
-    # just look cramped, it makes Matplotlib's own coordinate transforms
-    # singular against a literally-zero-size canvas; but shrinking a
-    # drawer below its floor to buy that room would just trade one broken
-    # region for another (a clipped drawer).
+    # small to fit everything at once, or when a platform's own text
+    # metrics inflate `left_min_width`/`right_min_width` well past what the
+    # window actually has room for. First choice: reclaim whatever
+    # fractional slack sits above each drawer's own *content* floor --
+    # shrinks a comfortably-oversized drawer back toward, not below, what
+    # its content actually needs, so nothing clips yet.
     if center_width < _MIN_WORKBENCH_WIDTH:
         deficit = _MIN_WORKBENCH_WIDTH - center_width
-        side_slack = (left_width - left_min_width) + (right_width - right_min_width)
+        left_slack = left_width - left_min_width
+        right_slack = right_width - right_min_width
+        side_slack = left_slack + right_slack
         if side_slack > 0:
-            left_slack = left_width - left_min_width
-            right_slack = right_width - right_min_width
-            left_width -= round(deficit * left_slack / side_slack)
-            right_width -= round(deficit * right_slack / side_slack)
-        center_width = max(total_width - left_width - right_width, 0)
+            reclaimed = min(deficit, side_slack)
+            left_width -= round(reclaimed * left_slack / side_slack)
+            right_width -= round(reclaimed * right_slack / side_slack)
+            deficit -= reclaimed
+        center_width = total_width - left_width - right_width
+
+        # Both drawers are now already at their own content floor and the
+        # Workbench still doesn't have a sensible minimum -- reclaiming
+        # comfort slack alone wasn't enough (this is what a platform-specific
+        # text-metrics inflation of the content floor itself looks like, not
+        # just a narrow window). Letting the center keep shrinking toward
+        # zero isn't an option (a literally-zero-width PlotCanvas makes
+        # Matplotlib's own coordinate transforms singular), so the two
+        # drawers give up *content* room next, proportionally, down toward
+        # (never below) their collapsed strip width -- the same width
+        # they'd already have if the user collapsed them by hand. A drawer
+        # below its content floor clips its page (`_wrap_scrollable`'s
+        # horizontal scrollbar is deliberately off, so an over-shrunk page
+        # clips rather than scrolls) -- recoverable by widening the window
+        # or dragging the splitter; a PlotCanvas too narrow to render into
+        # is not.
+        if deficit > 0:
+            left_reserve = max(left_width - left_floor_width, 0)
+            right_reserve = max(right_width - right_floor_width, 0)
+            reserve = left_reserve + right_reserve
+            if reserve > 0:
+                reclaimed = min(deficit, reserve)
+                if left_reserve > 0:
+                    left_width -= round(reclaimed * left_reserve / reserve)
+                if right_reserve > 0:
+                    right_width -= round(reclaimed * right_reserve / reserve)
+            center_width = max(total_width - left_width - right_width, 0)
 
     return left_width, center_width, right_width
 
@@ -665,7 +708,11 @@ class MainWindow(QMainWindow):
         self._left_drawer_min_width = _side_drawer_min_width(self.tool_drawer, left_drawer_content_widgets)
         self._right_drawer_min_width = _side_drawer_min_width(self.working_drawer, [self.data_tools_panel])
         left_width, center_width, right_width = compute_drawer_widths(
-            geometry.width(), self._left_drawer_min_width, self._right_drawer_min_width
+            geometry.width(),
+            self._left_drawer_min_width,
+            self._right_drawer_min_width,
+            left_floor_width=self.tool_drawer.strip_width,
+            right_floor_width=self.working_drawer.strip_width,
         )
         main_splitter.setSizes([left_width, center_width, right_width])
         self.main_splitter = main_splitter
@@ -1125,7 +1172,13 @@ class MainWindow(QMainWindow):
         right_min = (
             self.working_drawer.strip_width if self.working_drawer.is_collapsed else self._right_drawer_min_width
         )
-        left_width, center_width, right_width = compute_drawer_widths(total_width, left_min, right_min)
+        left_width, center_width, right_width = compute_drawer_widths(
+            total_width,
+            left_min,
+            right_min,
+            left_floor_width=self.tool_drawer.strip_width,
+            right_floor_width=self.working_drawer.strip_width,
+        )
         main_splitter.setSizes([left_width, center_width, right_width])
 
     def _set_side_drawer_collapsed(self, splitter_index: int, drawer: ToolDrawer, collapsed: bool) -> None:
