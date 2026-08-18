@@ -232,83 +232,133 @@ def compute_drawer_widths(
     *,
     left_floor_width: int = 0,
     right_floor_width: int = 0,
-) -> tuple[int, int, int]:
-    """Return `(left_width, center_width, right_width)` for the main
-    horizontal splitter, given the window's total content width and each
-    side drawer's own real floor (`_side_drawer_min_width`).
+    left_locked_collapsed: bool = False,
+    right_locked_collapsed: bool = False,
+    collapse_priority: str = "right",
+) -> tuple[int, int, int, bool, bool]:
+    """Return `(left_width, center_width, right_width, auto_collapse_left,
+    auto_collapse_right)` for the main horizontal splitter, given the
+    window's total content width and each side drawer's own true minimum
+    (`left_min_width`/`right_min_width`, from `_side_drawer_min_width` --
+    the width below which that drawer's widest page actually clips) and
+    *preferred* width (computed here as a fraction of `total_width`, never
+    below the true minimum).
 
-    `left_floor_width`/`right_floor_width` are each drawer's *absolute*
-    floor (its collapsed `strip_width`) -- lower than `left_min_width`/
-    `right_min_width`, which is the floor for showing its content
-    *uncropped*. Both floors matter because `left_min_width`/
-    `right_min_width` are computed from real widgets' `minimumSizeHint()`
-    (see `_side_drawer_min_width`), which reflects the *platform's* text
-    metrics for whatever's on that drawer's widest page -- not just the
-    window's own width. Two platforms can legitimately disagree on what
-    that floor is for pixel-identical content.
+    `left_floor_width`/`right_floor_width` are each drawer's *collapsed*
+    width (its `strip_width`) -- the only width a drawer is ever given
+    below its own true minimum, and only once it's actually collapsed
+    (page hidden), never while still showing content. `left_min_width`/
+    `right_min_width` reflect the *platform's* text metrics for whatever's
+    on that drawer's widest page (see `_side_drawer_min_width`) -- not just
+    the window's own width, so two platforms can legitimately disagree on
+    what that minimum is for pixel-identical content.
+
+    `left_locked_collapsed`/`right_locked_collapsed` mark a side as already
+    collapsed for a reason this function doesn't get a vote on (typically
+    the user explicitly collapsed it) -- that side is pinned at its own
+    `floor_width` throughout and is never a candidate for auto-collapse
+    (it already is collapsed) or for growing back to fill spare room (see
+    `MainWindow._reflow_side_drawers`'s docstring on why fighting a manual
+    choice like that would be unwelcome).
+
+    Priority under width pressure, in order:
+      1. Both non-locked sides at their preferred width, if the Workbench
+         still gets `_MIN_WORKBENCH_WIDTH` at that size.
+      2. Reclaim comfort slack -- shrink each non-locked side back toward
+         (never below) its own true minimum.
+      3. If the Workbench still doesn't have a sensible minimum even with
+         both non-locked sides already at their true minimum, auto-collapse
+         one side (`collapse_priority` first) rather than shrinking either
+         below what its content needs.
+      4. If collapsing one side still isn't enough, auto-collapse the
+         other too.
+    A drawer is *never* left expanded with less than its own true minimum
+    -- it's either given that minimum (or more) or it's collapsed; an
+    over-shrunk-but-still-"open" drawer clips its content
+    (`_wrap_scrollable`'s horizontal scrollbar is deliberately off), which
+    this priority order exists specifically to avoid.
 
     A pure function (like `compute_initial_geometry` above) so it can be
-    exercised directly at specific window widths in tests, independent of
-    whatever screen size the test's own Qt platform plugin happens to
-    report. Used both at construction and, via `MainWindow.resizeEvent`/
-    `_reflow_side_drawers`, on every subsequent resize -- `QSplitter`'s own
-    default behavior (proportionally rescaling whatever sizes were last
-    set) has no notion of either drawer's real content floor, so relying on
-    it alone across a resize can shrink an expanded drawer below what its
-    page actually needs and clip it."""
-    left_width = max(int(total_width * _LEFT_DRAWER_WIDTH_FRACTION), left_min_width)
-    right_width = max(int(total_width * _RIGHT_DRAWER_WIDTH_FRACTION), right_min_width)
+    exercised directly at specific window widths/states in tests,
+    independent of whatever screen size the test's own Qt platform plugin
+    happens to report. Used both at construction and, via
+    `MainWindow.resizeEvent`/`_reflow_side_drawers`, on every subsequent
+    resize -- `QSplitter`'s own default behavior (proportionally rescaling
+    whatever sizes were last set) has no notion of either drawer's real
+    content floor, so relying on it alone across a resize can shrink an
+    expanded drawer below what its page actually needs and clip it."""
+    if collapse_priority not in ("left", "right"):
+        raise ValueError(f"collapse_priority must be 'left' or 'right', got {collapse_priority!r}")
+
+    # Stage A: preferred widths -- a locked-collapsed side is pinned at its
+    # floor (never grows to fill spare room; see the docstring above).
+    left_width = left_floor_width if left_locked_collapsed else max(
+        int(total_width * _LEFT_DRAWER_WIDTH_FRACTION), left_min_width
+    )
+    right_width = right_floor_width if right_locked_collapsed else max(
+        int(total_width * _RIGHT_DRAWER_WIDTH_FRACTION), right_min_width
+    )
     center_width = total_width - left_width - right_width
+    if center_width >= _MIN_WORKBENCH_WIDTH:
+        return left_width, center_width, right_width, False, False
 
-    # On any realistic screen (see the responsive test matrix in
-    # gui.main_window's own docstring references) both drawer floors and a
-    # comfortable center easily coexist -- this only engages on a screen too
-    # small to fit everything at once, or when a platform's own text
-    # metrics inflate `left_min_width`/`right_min_width` well past what the
-    # window actually has room for. First choice: reclaim whatever
-    # fractional slack sits above each drawer's own *content* floor --
-    # shrinks a comfortably-oversized drawer back toward, not below, what
-    # its content actually needs, so nothing clips yet.
-    if center_width < _MIN_WORKBENCH_WIDTH:
-        deficit = _MIN_WORKBENCH_WIDTH - center_width
-        left_slack = left_width - left_min_width
-        right_slack = right_width - right_min_width
-        side_slack = left_slack + right_slack
-        if side_slack > 0:
-            reclaimed = min(deficit, side_slack)
-            left_width -= round(reclaimed * left_slack / side_slack)
-            right_width -= round(reclaimed * right_slack / side_slack)
-            deficit -= reclaimed
+    # Stage B: reclaim comfort slack -- shrink each non-locked side toward,
+    # never below, its own true minimum.
+    deficit = _MIN_WORKBENCH_WIDTH - center_width
+    left_slack = 0 if left_locked_collapsed else left_width - left_min_width
+    right_slack = 0 if right_locked_collapsed else right_width - right_min_width
+    slack = left_slack + right_slack
+    if slack > 0:
+        reclaimed = min(deficit, slack)
+        if left_slack:
+            left_width -= round(reclaimed * left_slack / slack)
+        if right_slack:
+            right_width -= round(reclaimed * right_slack / slack)
+    center_width = total_width - left_width - right_width
+    if center_width >= _MIN_WORKBENCH_WIDTH:
+        return left_width, center_width, right_width, False, False
+
+    # Stage C: both non-locked sides are now already at their own true
+    # minimum -- shrinking either further would clip its content. Collapse
+    # one side instead: `collapse_priority`'s side unconditionally, unless
+    # it's already collapsed (user-locked), in which case there's nothing
+    # further to gain there and the *other* side is tried instead. The
+    # remaining (still-open) side stays exactly at the true minimum/lock
+    # width Stage B already left it at -- the freed width goes entirely to
+    # the Workbench, not to growing the remaining drawer.
+    collapsed_side: str | None = None
+    for side in (collapse_priority, "left" if collapse_priority == "right" else "right"):
+        if side == "right" and not right_locked_collapsed:
+            right_width = right_floor_width
+            collapsed_side = "right"
+            break
+        if side == "left" and not left_locked_collapsed:
+            left_width = left_floor_width
+            collapsed_side = "left"
+            break
+    center_width = total_width - left_width - right_width
+    if collapsed_side is not None and center_width >= _MIN_WORKBENCH_WIDTH:
+        return left_width, center_width, right_width, collapsed_side == "left", collapsed_side == "right"
+
+    # Stage D: collapsing the one available side still isn't enough --
+    # collapse the other one too, if it's available (unconditionally
+    # accepted as the best remaining option even if the Workbench still
+    # doesn't reach its full minimum at this window width --
+    # `MainWindow.center_splitter`'s own hard minimum-width is the final
+    # backstop below this).
+    if collapsed_side == "right" and not left_locked_collapsed:
+        left_width = left_floor_width
         center_width = total_width - left_width - right_width
+        return left_width, max(center_width, 0), right_width, True, True
+    if collapsed_side == "left" and not right_locked_collapsed:
+        right_width = right_floor_width
+        center_width = total_width - left_width - right_width
+        return left_width, max(center_width, 0), right_width, True, True
 
-        # Both drawers are now already at their own content floor and the
-        # Workbench still doesn't have a sensible minimum -- reclaiming
-        # comfort slack alone wasn't enough (this is what a platform-specific
-        # text-metrics inflation of the content floor itself looks like, not
-        # just a narrow window). Letting the center keep shrinking toward
-        # zero isn't an option (a literally-zero-width PlotCanvas makes
-        # Matplotlib's own coordinate transforms singular), so the two
-        # drawers give up *content* room next, proportionally, down toward
-        # (never below) their collapsed strip width -- the same width
-        # they'd already have if the user collapsed them by hand. A drawer
-        # below its content floor clips its page (`_wrap_scrollable`'s
-        # horizontal scrollbar is deliberately off, so an over-shrunk page
-        # clips rather than scrolls) -- recoverable by widening the window
-        # or dragging the splitter; a PlotCanvas too narrow to render into
-        # is not.
-        if deficit > 0:
-            left_reserve = max(left_width - left_floor_width, 0)
-            right_reserve = max(right_width - right_floor_width, 0)
-            reserve = left_reserve + right_reserve
-            if reserve > 0:
-                reclaimed = min(deficit, reserve)
-                if left_reserve > 0:
-                    left_width -= round(reclaimed * left_reserve / reserve)
-                if right_reserve > 0:
-                    right_width -= round(reclaimed * right_reserve / reserve)
-            center_width = max(total_width - left_width - right_width, 0)
-
-    return left_width, center_width, right_width
+    # Nothing further collapsible (whatever's still open is already
+    # locked, or was the only side available and didn't reach the target
+    # alone) -- return the best true-minimum-respecting widths found.
+    return left_width, max(center_width, 0), right_width, collapsed_side == "left", collapsed_side == "right"
 
 
 def compute_initial_geometry(available: QRect, fraction: float = _STARTUP_SCREEN_FRACTION) -> QRect:
@@ -707,13 +757,24 @@ class MainWindow(QMainWindow):
         # construction (drawer pages are fixed; see `ToolDrawer.add_page`).
         self._left_drawer_min_width = _side_drawer_min_width(self.tool_drawer, left_drawer_content_widgets)
         self._right_drawer_min_width = _side_drawer_min_width(self.working_drawer, [self.data_tools_panel])
-        left_width, center_width, right_width = compute_drawer_widths(
+        # Neither drawer has auto-collapsed anything yet -- see
+        # `_apply_auto_collapse`'s own docstring for why this state is kept
+        # separate from `ToolDrawer.is_collapsed` (which alone can't
+        # distinguish "the user collapsed this" from "width pressure did").
+        self._left_auto_collapsed = False
+        self._right_auto_collapsed = False
+        self._left_auto_collapsed_from_key: str | None = None
+        self._right_auto_collapsed_from_key: str | None = None
+        left_width, center_width, right_width, auto_collapse_left, auto_collapse_right = compute_drawer_widths(
             geometry.width(),
             self._left_drawer_min_width,
             self._right_drawer_min_width,
             left_floor_width=self.tool_drawer.strip_width,
             right_floor_width=self.working_drawer.strip_width,
+            left_locked_collapsed=self.tool_drawer.is_collapsed,
+            right_locked_collapsed=self.working_drawer.is_collapsed,
         )
+        self._apply_auto_collapse(auto_collapse_left, auto_collapse_right)
         main_splitter.setSizes([left_width, center_width, right_width])
         self.main_splitter = main_splitter
 
@@ -1152,11 +1213,14 @@ class MainWindow(QMainWindow):
         `_wrap_scrollable`'s horizontal scrollbar is deliberately off, so
         an over-shrunk page clips rather than scrolls).
 
-        A collapsed drawer's floor is its strip width, not its full content
-        floor -- otherwise reopening a collapsed drawer via a subsequent
-        resize (rather than the tool-strip button) would fight
-        `_set_side_drawer_collapsed`'s own bookkeeping in
-        `_drawer_open_widths`.
+        A side the user collapsed by hand (`is_collapsed` True, but not via
+        `_apply_auto_collapse`) is passed through as locked -- pinned at
+        its strip width, never fought back open just because the window
+        grew. A side *this* window auto-collapsed under width pressure
+        (`_left_auto_collapsed`/`_right_auto_collapsed`) is passed through
+        as still negotiable, so `compute_drawer_widths` is free to hand it
+        back a real width (and `_apply_auto_collapse` reopens it) once
+        there's room again -- see that function's own docstring.
 
         No-ops before `main_splitter` exists -- `QMainWindow.resizeEvent`
         can fire from `setGeometry`/`show()` earlier in `__init__`, before
@@ -1168,18 +1232,52 @@ class MainWindow(QMainWindow):
         total_width = main_splitter.width()
         if total_width <= 0:
             return
-        left_min = self.tool_drawer.strip_width if self.tool_drawer.is_collapsed else self._left_drawer_min_width
-        right_min = (
-            self.working_drawer.strip_width if self.working_drawer.is_collapsed else self._right_drawer_min_width
-        )
-        left_width, center_width, right_width = compute_drawer_widths(
+        left_locked = self.tool_drawer.is_collapsed and not self._left_auto_collapsed
+        right_locked = self.working_drawer.is_collapsed and not self._right_auto_collapsed
+        left_width, center_width, right_width, auto_collapse_left, auto_collapse_right = compute_drawer_widths(
             total_width,
-            left_min,
-            right_min,
+            self._left_drawer_min_width,
+            self._right_drawer_min_width,
             left_floor_width=self.tool_drawer.strip_width,
             right_floor_width=self.working_drawer.strip_width,
+            left_locked_collapsed=left_locked,
+            right_locked_collapsed=right_locked,
         )
+        self._apply_auto_collapse(auto_collapse_left, auto_collapse_right)
         main_splitter.setSizes([left_width, center_width, right_width])
+
+    def _apply_auto_collapse(self, auto_collapse_left: bool, auto_collapse_right: bool) -> None:
+        """Apply `compute_drawer_widths`'s auto-collapse decision for this
+        layout pass, transitioning only what actually changed since the
+        last one.
+
+        Kept as state separate from `ToolDrawer.is_collapsed` (via
+        `_left_auto_collapsed`/`_right_auto_collapsed`) specifically so a
+        side *this* function collapsed under width pressure can be
+        reopened again once the window has room -- while a side the user
+        collapsed by hand (`is_collapsed` True, `_*_auto_collapsed` False)
+        is never touched here at all: `_reflow_side_drawers` always passes
+        that case through as `*_locked_collapsed=True`, so
+        `compute_drawer_widths` never asks to auto-collapse or reopen it in
+        the first place. Restores whichever page was active before an
+        auto-collapse (falling back to each drawer's default page if that
+        somehow isn't available) rather than defaulting to nothing shown.
+        """
+        if auto_collapse_left and not self.tool_drawer.is_collapsed:
+            self._left_auto_collapsed_from_key = self.tool_drawer.active_key
+            self.tool_drawer.collapse()
+            self._left_auto_collapsed = True
+        elif not auto_collapse_left and self._left_auto_collapsed:
+            self.tool_drawer.show_page(self._left_auto_collapsed_from_key or "data")
+            self._left_auto_collapsed = False
+
+        if auto_collapse_right and not self.working_drawer.is_collapsed:
+            self._right_auto_collapsed_from_key = self.working_drawer.active_key
+            self.working_drawer.collapse()
+            self._right_auto_collapsed = True
+        elif not auto_collapse_right and self._right_auto_collapsed:
+            self.working_drawer.show_page(self._right_auto_collapsed_from_key or "working")
+            self._right_auto_collapsed = False
 
     def _set_side_drawer_collapsed(self, splitter_index: int, drawer: ToolDrawer, collapsed: bool) -> None:
         """Reclaim (or return) a side drawer's width for the plot canvas
