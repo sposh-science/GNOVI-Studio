@@ -38,6 +38,18 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: pytest --cov=gnovi_plot --cov-report=term-missing --cov-report=xml
 
+      - name: Windows Qt/geometry diagnostics (temporary, PR #2 investigation)
+        if: matrix.os == 'windows-latest'
+        continue-on-error: true
+        run: python scripts/_windows_qt_diagnostics.py
+
+      - name: Windows Qt/geometry diagnostics with offscreen size= override (temporary)
+        if: matrix.os == 'windows-latest'
+        continue-on-error: true
+        env:
+          QT_QPA_PLATFORM: offscreen:size=1920x1080
+        run: python scripts/_windows_qt_diagnostics.py
+
       - name: Run tests (Windows)
         if: matrix.os == 'windows-latest'
         run: pytest
