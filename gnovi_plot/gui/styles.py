@@ -349,11 +349,14 @@ QLineEdit. None of the four are width-capped: every ordinary left-drawer
 field (QLineEdit/QComboBox/QSpinBox/QDoubleSpinBox alike) expands to fill
 its row via Qt's own default QFormLayout field-growth policy plus each
 widget's own default (non-Fixed) horizontal size policy -- deliberately not
-fought with a `max-width` here. A couple of specific numeric fields whose
-*configured range* (not this shared rule) inflated their natural minimum
-width still get an explicit, narrower `setMinimumWidth` at their own
-construction site -- see `figure_properties_panel._make_limit_spin` and
-`plot_series_panel`'s `offset_spin`/`offset_step_spin`. */
+fought with a `max-width` here. A handful of specific fields whose *configured range/content* (not this
+shared rule) inflated their natural minimum width still get an explicit,
+narrower `setMinimumWidth` at their own construction site -- see
+`figure_properties_panel._make_limit_spin`/`_make_spacing_spin`,
+`plot_series_panel`'s `offset_spin`/`offset_step_spin`/`hist_mode_combo`,
+`figure_properties_panel.legend_loc_combo`,
+`figure_size_panel.font_family_combo`/`aspect_combo`/`publication_combo`,
+and `dataset_panel`'s `plot_mode_combo`/`cycle_source_combo`. */
 QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {{
     background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {bg_recessed}, stop:1 {bg_control});
     border: 1px solid {border};
