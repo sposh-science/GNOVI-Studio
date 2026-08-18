@@ -30,6 +30,10 @@ jobs:
       - name: Install GNOVI + test dependencies
         run: pip install -e ".[test]"
 
+      - name: Install Qt runtime libraries (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0
+
       - name: Run tests (Ubuntu, with coverage)
         if: matrix.os == 'ubuntu-latest'
         run: pytest --cov=gnovi_plot --cov-report=term-missing --cov-report=xml
