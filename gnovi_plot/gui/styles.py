@@ -1,10 +1,10 @@
-"""Centralized QSS styling for Gnovi Studio.
+"""Centralized QSS styling for GNOVI Studio.
 
 Restrained, modern scientific-desktop look using PySide6/QSS only -- no
 additional theme dependency. Deliberately avoids hard-coded font families so
 each platform's native font is used.
 
-Gnovi Studio's own chrome (menus, toolbars, sidebars, bottom panel, data
+GNOVI Studio's own chrome (menus, toolbars, sidebars, bottom panel, data
 table, dialogs, status bar) is always styled with the single light palette
 below -- it is never user-switchable. This is a deliberate, standing design
 decision, not an oversight: the chrome stays one stable, neutral/light
@@ -880,7 +880,7 @@ _THEME_APPLIED_PROPERTY = "_gnovi_studio_theme_applied"
 
 
 def apply_app_theme(app: QApplication) -> None:
-    """Apply Gnovi Studio's one, fixed, light application stylesheet.
+    """Apply GNOVI Studio's one, fixed, light application stylesheet.
 
     Not user-switchable and not affected by `PlotTheme` -- see the module
     docstring for why the app chrome and the plot canvas theme are kept

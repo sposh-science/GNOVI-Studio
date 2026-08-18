@@ -1,4 +1,4 @@
-# GNOVI PLOT
+# GNOVI Studio
 
 [![CI](https://github.com/wavicles/Gnovi-Plot/actions/workflows/ci.yml/badge.svg)](https://github.com/wavicles/Gnovi-Plot/actions/workflows/ci.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)

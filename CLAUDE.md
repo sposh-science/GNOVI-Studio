@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-Gnovi-Plot (GNOVI PLOT) is a cross-platform, open-source Python desktop application for scientific plotting and analysis. It combines experimental data visualization, mathematical equation graphing, 2D/3D visualization, and publication-quality figure creation in a single tool.
+GNOVI Studio (repository: Gnovi-Plot) is a cross-platform, open-source Python desktop application for scientific plotting and analysis. It combines experimental data visualization, mathematical equation graphing, 2D/3D visualization, and publication-quality figure creation in a single tool.
 
 The project is in the pre-code architecture phase: no application code exists yet. This file records the agreed vision and constraints so implementation stays consistent as the codebase grows.
 
