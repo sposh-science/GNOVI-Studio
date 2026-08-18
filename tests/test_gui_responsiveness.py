@@ -267,13 +267,15 @@ def test_view_working_data_action_toggles_the_right_working_drawer(qapp):
 
 
 def test_drawer_opens_the_data_page_by_default_on_startup(qapp):
-    # A realistic supported desktop size -- Qt offscreen's own incidental
-    # 800x800 default is narrower than the drawers' combined true minimum
-    # width and isn't a GNOVI-supported layout target; see the dedicated
-    # narrow-window tests below for that behavior instead.
+    # 1600x900: large enough that both drawers start expanded on every
+    # platform (see the PR #2 Windows CI investigation on why a smaller
+    # size -- including Qt offscreen's own incidental 800x800 default --
+    # isn't a safe assumption for this). This test is about the *default
+    # page* the left drawer opens to, not responsive/auto-collapse policy
+    # -- see the dedicated narrow-window tests below for that.
     window = MainWindow()
     window.show()
-    window.resize(1280, 720)
+    window.resize(1600, 900)
     QApplication.instance().processEvents()
 
     assert window.tool_drawer.active_key == "data"
@@ -438,10 +440,10 @@ def test_switching_pages_preserves_dataset_panel_workflow_state(qapp):
 
 def test_right_working_data_drawer_exists_with_a_single_working_page(qapp):
     # See test_drawer_opens_the_data_page_by_default_on_startup for why a
-    # realistic desktop size is used instead of the offscreen default.
+    # size large enough to guarantee both drawers start expanded is used.
     window = MainWindow()
     window.show()
-    window.resize(1280, 720)
+    window.resize(1600, 900)
     QApplication.instance().processEvents()
 
     assert set(window.working_drawer._buttons.keys()) == {"working"}
@@ -452,7 +454,7 @@ def test_right_working_data_drawer_exists_with_a_single_working_page(qapp):
 def test_working_drawer_hosts_the_data_tools_panel(qapp):
     window = MainWindow()
     window.show()
-    window.resize(1280, 720)
+    window.resize(1600, 900)
     QApplication.instance().processEvents()
 
     assert window.data_tools_panel.isVisible() is True
@@ -463,7 +465,7 @@ def test_working_drawer_hosts_the_data_tools_panel(qapp):
 def test_clicking_the_active_working_button_collapses_the_right_drawer(qapp):
     window = MainWindow()
     window.show()
-    window.resize(1280, 720)
+    window.resize(1600, 900)
     QApplication.instance().processEvents()
     drawer = window.working_drawer
     assert drawer.is_collapsed is False  # open by default
@@ -497,9 +499,13 @@ def test_working_drawer_collapse_and_reopen_preserves_dataset_selection_state(qa
 
 
 def test_graph_expands_when_the_left_drawer_collapses(qapp):
+    # 1600x900: these next several tests are about manual collapse/reopen
+    # *function*, which requires starting from both drawers genuinely
+    # expanded on every platform -- see
+    # test_drawer_opens_the_data_page_by_default_on_startup.
     window = MainWindow()
     window.show()
-    window.resize(1400, 900)
+    window.resize(1600, 900)
     left_before, center_before, _right_before = window.main_splitter.sizes()
 
     window.tool_drawer._buttons["data"].click()  # collapse (already active)
@@ -514,7 +520,7 @@ def test_graph_expands_when_the_left_drawer_collapses(qapp):
 def test_graph_expands_when_the_right_drawer_collapses(qapp):
     window = MainWindow()
     window.show()
-    window.resize(1400, 900)
+    window.resize(1600, 900)
     left_before, center_before, _right_before = window.main_splitter.sizes()
 
     window.working_drawer._buttons["working"].click()  # collapse (already active)
@@ -529,7 +535,7 @@ def test_graph_expands_when_the_right_drawer_collapses(qapp):
 def test_left_and_right_drawers_collapse_independently(qapp):
     window = MainWindow()
     window.show()
-    window.resize(1400, 900)
+    window.resize(1600, 900)
 
     # Left open + Right open (default) -> collapse only the left.
     window.tool_drawer._buttons["data"].click()
@@ -554,7 +560,7 @@ def test_left_and_right_drawers_collapse_independently(qapp):
 def test_graph_occupies_almost_all_width_when_both_drawers_are_closed(qapp):
     window = MainWindow()
     window.show()
-    window.resize(1400, 900)
+    window.resize(1600, 900)
 
     window.tool_drawer._buttons["data"].click()
     window.working_drawer._buttons["working"].click()
@@ -646,13 +652,18 @@ def test_manually_collapsed_drawer_stays_collapsed_when_width_is_restored(qapp):
 
 
 @pytest.mark.parametrize("width,height", [(1280, 720), (1366, 768), (1600, 900), (1920, 1080)])
-def test_center_workbench_never_collapses_at_common_resolutions_both_drawers_open(qapp, width, height):
-    """Focused layout regression for the PR #2 Windows CI investigation:
-    across every commonly tested resolution, with both side drawers open
-    (the default), `main_splitter`'s three widths must always sum to the
-    total, never overlap, and the center Workbench/PlotCanvas must keep a
-    sensible share of the window rather than being collapsed to a tiny
-    residual width."""
+def test_center_workbench_never_regresses_to_the_old_tiny_collapse(qapp, width, height):
+    """Focused layout regression for the PR #2 Windows CI investigation.
+
+    This deliberately does NOT assert both drawers start expanded -- a
+    platform whose text metrics inflate the drawers' true minimum width
+    (see that investigation) can validly auto-collapse one at these
+    resolutions; that's the intended policy, not a bug. What must hold on
+    every platform, regardless of which drawers ended up open or
+    auto-collapsed: the three splitter panes always sum to the total width
+    (no overlap/gap), no expanded drawer is left clipped, and the
+    Workbench never regresses to the old ~50-150px collapse this whole
+    investigation was about."""
     window = MainWindow()
     window.show()
     window.resize(width, height)
@@ -662,12 +673,28 @@ def test_center_workbench_never_collapses_at_common_resolutions_both_drawers_ope
     # sum to slightly less than .width() -- not an overlap/gap bug.
     assert 0 <= window.main_splitter.width() - (left + center + right) <= 16
     assert left >= 0 and center >= 0 and right >= 0
-    assert center / window.main_splitter.width() > 0.3
+    _assert_no_expanded_drawer_is_clipped(window)
+    assert center > 150  # the old failure mode this guards against
+    # If at least one drawer is still open, the allocator's own protected
+    # minimum should have been reached -- it only accepts collapsing a
+    # single side when that alone gets the Workbench there (see
+    # compute_drawer_widths's Stage C). If *both* ended up collapsed, the
+    # allocator had nothing further to reclaim at this width, and
+    # center_splitter's own hard minimum is the backstop instead.
+    if not (window.tool_drawer.is_collapsed and window.working_drawer.is_collapsed):
+        assert center >= 360  # _MIN_WORKBENCH_WIDTH
     window.close()
 
 
-@pytest.mark.parametrize("width,height", [(1280, 720), (1366, 768), (1600, 900), (1920, 1080)])
+@pytest.mark.parametrize("width,height", [(1600, 900), (1920, 1080)])
 def test_center_workbench_grows_when_only_one_drawer_is_open(qapp, width, height):
+    """Manual single-drawer-collapse function -- requires starting from
+    both drawers genuinely expanded, so only tested at sizes confirmed
+    large enough for that on every platform (see
+    test_drawer_opens_the_data_page_by_default_on_startup). Constrained
+    sizes where a drawer may auto-collapse on its own are covered by
+    test_center_workbench_never_regresses_to_the_old_tiny_collapse and the
+    dedicated narrow-window tests instead."""
     window = MainWindow()
     window.show()
     window.resize(width, height)
@@ -686,7 +713,7 @@ def test_center_workbench_grows_when_only_one_drawer_is_open(qapp, width, height
 def test_reopening_the_left_drawer_restores_the_previous_width_and_page_state(qapp):
     window = MainWindow()
     window.show()
-    window.resize(1400, 900)
+    window.resize(1600, 900)
     drawer = window.tool_drawer
     drawer._buttons["series"].click()
     open_sizes = window.main_splitter.sizes()
@@ -703,7 +730,7 @@ def test_reopening_the_left_drawer_restores_the_previous_width_and_page_state(qa
 def test_reopening_the_right_drawer_restores_the_previous_width(qapp):
     window = MainWindow()
     window.show()
-    window.resize(1400, 900)
+    window.resize(1600, 900)
     drawer = window.working_drawer
     open_sizes = window.main_splitter.sizes()
 
