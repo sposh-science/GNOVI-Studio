@@ -10,6 +10,8 @@ from gnovi_plot.analysis.fitting import (
     POLYNOMIAL,
     FitError,
     FitResult,
+    ResidualData,
+    compute_residuals,
     evaluate_fit,
     fit_curve,
     sample_fit_curve,
@@ -300,3 +302,244 @@ def test_sample_fit_curve_rejects_too_few_points():
 
     with pytest.raises(FitError):
         sample_fit_curve(result, 0.0, 10.0, num_points=1)
+
+
+# --- Descriptive provenance snapshot (dataset name / series label) --------
+
+
+def test_fit_time_dataset_name_is_retained():
+    x = np.linspace(0, 10, 10)
+    y = 2.0 * x
+
+    result = fit_curve(
+        x, y, LINEAR, source_dataset_name="Ferricyanide 50 mV/s", **_PROVENANCE
+    )
+
+    assert result.source_dataset_name == "Ferricyanide 50 mV/s"
+
+
+def test_fit_time_series_label_is_retained():
+    x = np.linspace(0, 10, 10)
+    y = 2.0 * x
+
+    result = fit_curve(
+        x, y, LINEAR, source_series_label="Current vs Potential", **_PROVENANCE
+    )
+
+    assert result.source_series_label == "Current vs Potential"
+
+
+def test_stable_ids_remain_retained_alongside_names():
+    x = np.linspace(0, 10, 10)
+    y = 2.0 * x
+
+    result = fit_curve(
+        x,
+        y,
+        LINEAR,
+        source_dataset_id="dataset-abc",
+        source_dataset_name="Ferricyanide 50 mV/s",
+        source_series_id="series-xyz",
+        source_series_label="Current vs Potential",
+        x_column="x",
+        y_column="y",
+    )
+
+    assert result.source_dataset_id == "dataset-abc"
+    assert result.source_series_id == "series-xyz"
+    assert result.source_dataset_name == "Ferricyanide 50 mV/s"
+    assert result.source_series_label == "Current vs Potential"
+
+
+def test_name_fields_default_to_none_when_not_supplied():
+    """Older/degenerate call sites that don't pass names must still work
+    -- names are optional, ids stay the required, authoritative link."""
+    x = np.linspace(0, 10, 10)
+    y = 2.0 * x
+
+    result = fit_curve(x, y, LINEAR, **_PROVENANCE)
+
+    assert result.source_dataset_name is None
+    assert result.source_series_label is None
+    assert result.source_dataset_id == "dataset-abc"
+
+
+def test_names_are_json_safe_in_to_dict():
+    import json
+
+    x = np.linspace(0, 10, 10)
+    y = 2.0 * x
+    result = fit_curve(
+        x, y, LINEAR, source_dataset_name="Ferricyanide 50 mV/s", **_PROVENANCE
+    )
+
+    data = result.to_dict()
+    assert data["source_dataset_name"] == "Ferricyanide 50 mV/s"
+    assert data["source_series_label"] is None
+    json.dumps(data)
+
+
+# --- Fit-quality metrics: RMSE / RSS / n_points / adjusted R² -------------
+
+
+def test_rmse_and_rss_are_zero_for_an_exact_fit():
+    x = np.linspace(0, 10, 25)
+    y = 3.0 * x + 2.0
+
+    result = fit_curve(x, y, LINEAR, **_PROVENANCE)
+
+    assert result.residual_sum_of_squares == pytest.approx(0.0, abs=1e-9)
+    assert result.rmse == pytest.approx(0.0, abs=1e-9)
+    assert result.n_points == 25
+
+
+def test_rmse_matches_manually_computed_residuals():
+    rng = np.random.default_rng(2)
+    x = np.linspace(0, 10, 40)
+    y = 3.0 * x + 2.0 + rng.normal(scale=0.7, size=x.shape)
+
+    result = fit_curve(x, y, LINEAR, **_PROVENANCE)
+
+    fitted = result.params["a"] * x + result.params["b"]
+    expected_rss = float(np.sum((y - fitted) ** 2))
+    expected_rmse = float(np.sqrt(expected_rss / len(x)))
+
+    assert result.residual_sum_of_squares == pytest.approx(expected_rss, rel=1e-6)
+    assert result.rmse == pytest.approx(expected_rmse, rel=1e-6)
+    # RMSE/RSS/n_points must always agree with each other.
+    assert result.rmse == pytest.approx(
+        (result.residual_sum_of_squares / result.n_points) ** 0.5, rel=1e-9
+    )
+
+
+def test_n_points_reflects_cleaned_data_not_raw_input_length():
+    x = np.linspace(0, 10, 25)
+    y = 3.0 * x + 2.0
+    y_with_gaps = y.copy()
+    y_with_gaps[[3, 7, 12]] = np.nan
+
+    result = fit_curve(x, y_with_gaps, LINEAR, **_PROVENANCE)
+
+    assert result.n_points == 22  # 25 - 3 dropped NaNs
+
+
+def test_adjusted_r_squared_is_defined_with_enough_points():
+    x = np.linspace(0, 10, 40)
+    rng = np.random.default_rng(3)
+    y = 3.0 * x + 2.0 + rng.normal(scale=0.5, size=x.shape)
+
+    result = fit_curve(x, y, LINEAR, **_PROVENANCE)
+    adjusted = result.adjusted_r_squared()
+
+    n, p = result.n_points, len(result.params)
+    expected = 1.0 - (1.0 - result.r_squared) * (n - 1) / (n - p - 1)
+    assert adjusted == pytest.approx(expected)
+    assert adjusted <= result.r_squared + 1e-9  # adjustment never inflates R²
+
+
+def test_adjusted_r_squared_is_none_when_barely_enough_points_to_fit():
+    # LINEAR needs >= 3 points to fit at all (_min_points); with exactly 3,
+    # n - p - 1 == 0, so adjusted R² is undefined.
+    x = np.array([0.0, 1.0, 2.0])
+    y = np.array([2.0, 5.0, 8.0])
+
+    result = fit_curve(x, y, LINEAR, **_PROVENANCE)
+
+    assert result.n_points == 3
+    assert result.adjusted_r_squared() is None
+
+
+def test_details_includes_adjusted_r_squared_only_when_defined():
+    x = np.linspace(0, 10, 40)
+    result = fit_curve(x, 3.0 * x + 2.0, LINEAR, **_PROVENANCE)
+    assert any(label == "R² (adjusted)" for label, _ in result.details())
+
+    x_small = np.array([0.0, 1.0, 2.0])
+    y_small = np.array([2.0, 5.0, 8.0])
+    result_small = fit_curve(x_small, y_small, LINEAR, **_PROVENANCE)
+    assert not any(label == "R² (adjusted)" for label, _ in result_small.details())
+
+
+def test_details_includes_rmse_and_rss_but_not_provenance_ids():
+    x = np.linspace(0, 10, 25)
+    result = fit_curve(x, 3.0 * x + 2.0, LINEAR, **_PROVENANCE)
+    detail_labels = dict(result.details())
+
+    assert "RMSE" in detail_labels
+    assert "RSS" in detail_labels
+    # Provenance moved to provenance_details() -- details() is metrics-only.
+    assert "Source dataset" not in detail_labels
+    assert "Source series" not in detail_labels
+    assert "Columns" not in detail_labels
+
+
+def test_provenance_details_has_the_ids_and_columns_instead():
+    x = np.linspace(0, 10, 25)
+    result = fit_curve(x, 3.0 * x + 2.0, LINEAR, row_range=(0, 25), **_PROVENANCE)
+    provenance = dict(result.provenance_details())
+
+    assert provenance["Source dataset ID"] == "dataset-abc"
+    assert provenance["Source series ID"] == "series-xyz"
+    assert provenance["Columns"] == "x → y"
+    assert provenance["Row range"] == "0–25"
+
+
+def test_to_dict_includes_new_metric_fields():
+    import json
+
+    x = np.linspace(0, 10, 25)
+    result = fit_curve(x, 3.0 * x + 2.0, LINEAR, **_PROVENANCE)
+    data = result.to_dict()
+
+    assert data["rmse"] == pytest.approx(0.0, abs=1e-9)
+    assert data["residual_sum_of_squares"] == pytest.approx(0.0, abs=1e-9)
+    assert data["n_points"] == 25
+    json.dumps(data)  # still JSON-safe (native floats/ints, not numpy scalars)
+
+
+# --- Residuals -------------------------------------------------------------
+
+
+def test_fit_result_supports_residuals():
+    x = np.linspace(0, 10, 10)
+    result = fit_curve(x, 2.0 * x, LINEAR, **_PROVENANCE)
+    assert result.supports_residuals() is True
+
+
+def test_compute_residuals_uses_observed_minus_fitted_sign_convention():
+    x = np.linspace(0, 10, 10)
+    result = fit_curve(x, 2.0 * x, LINEAR, **_PROVENANCE)
+
+    # Perturb one observed point above the fitted line, one below.
+    y_observed = 2.0 * x
+    y_observed[0] += 5.0
+    y_observed[1] -= 3.0
+
+    residual_data = compute_residuals(result, x, y_observed)
+
+    assert isinstance(residual_data, ResidualData)
+    assert residual_data.residuals[0] == pytest.approx(5.0, abs=1e-6)
+    assert residual_data.residuals[1] == pytest.approx(-3.0, abs=1e-6)
+    assert residual_data.observed[0] == pytest.approx(y_observed[0])
+    assert residual_data.fitted[0] == pytest.approx(2.0 * x[0])
+
+
+def test_compute_residuals_is_near_zero_for_an_exact_fit():
+    x = np.linspace(0, 10, 25)
+    y = 3.0 * x + 2.0
+    result = fit_curve(x, y, LINEAR, **_PROVENANCE)
+
+    residual_data = compute_residuals(result, x, y)
+
+    assert residual_data.residuals == pytest.approx(np.zeros_like(x), abs=1e-6)
+
+
+def test_result_compute_residuals_method_delegates_to_free_function():
+    x = np.linspace(0, 10, 10)
+    y = 2.0 * x
+    result = fit_curve(x, y, LINEAR, **_PROVENANCE)
+
+    via_method = result.compute_residuals(x, y)
+    via_function = compute_residuals(result, x, y)
+
+    assert via_method.residuals == pytest.approx(via_function.residuals)

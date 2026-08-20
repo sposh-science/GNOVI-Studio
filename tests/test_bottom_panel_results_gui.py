@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QLabel
 
+from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.gui.widgets.analysis_result_view import AnalysisResultView
 from gnovi_plot.gui.widgets.bottom_panel import BottomPanel
+from gnovi_plot.plotting.figure import GnoviFigure
 
 
 def _results_tab_index(panel: BottomPanel) -> int:
@@ -24,7 +26,7 @@ def test_results_tab_exists_and_starts_empty(qapp):
 
 def test_set_results_widget_places_widget_in_results_tab(qapp):
     panel = BottomPanel()
-    view = AnalysisResultView()
+    view = AnalysisResultView(GnoviFigure(), DatasetManager())
 
     panel.set_results_widget(view)
 

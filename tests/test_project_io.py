@@ -195,6 +195,103 @@ def test_saved_manifest_contains_the_current_format_version(tmp_path):
     assert "app_version" in manifest
 
 
+# --- Fit-derived Dataset metadata (PR 5: descriptive provenance snapshot + --
+# --- RMSE/RSS/n_points, on top of PR 4's model/params/r_squared) -----------
+
+
+def test_fit_derived_dataset_round_trips_with_no_format_version_bump(tmp_path):
+    """A derived fit Dataset's metadata is ordinary free-form
+    Dataset.metadata -- round-trips through save/load exactly like any
+    other metadata, with no project_format_version change."""
+    from gnovi_plot.analysis.fitting import LINEAR, fit_curve, sample_fit_curve
+
+    source = _simple_dataset(name="source")
+    x = source.dataframe["x"].to_numpy(dtype=float)
+    y = source.dataframe["y"].to_numpy(dtype=float)
+    result = fit_curve(
+        x,
+        y,
+        LINEAR,
+        source_dataset_id=source.id,
+        source_dataset_name=source.name,
+        x_column="x",
+        y_column="y",
+    )
+    x_smooth, y_smooth = sample_fit_curve(result, float(x.min()), float(x.max()), num_points=20)
+    metadata = result.to_dict()
+    metadata["x_min"] = float(x.min())
+    metadata["x_max"] = float(x.max())
+    metadata["num_points"] = len(x_smooth)
+    fit_dataset = Dataset(
+        name="Fit: linear",
+        dataframe=pd.DataFrame({"x": x_smooth, "y": y_smooth}),
+        metadata=metadata,
+    )
+
+    project = Project.new()
+    project.dataset_manager.add(source)
+    project.dataset_manager.add(fit_dataset)
+    project.workbenches[0].figure.add_series(PlotSeries.line(source, "x", "y"))
+    project.workbenches[0].figure.add_series(PlotSeries.line(fit_dataset, "x", "y"))
+
+    out_path = save_project(project, tmp_path / "proj.gnovi")
+
+    with zipfile.ZipFile(out_path) as zf:
+        manifest = json.loads(zf.read("project.json"))
+    assert manifest["project_format_version"] == PROJECT_FORMAT_VERSION == 2
+
+    reloaded = load_project(out_path)
+    reloaded_fit = next(d for d in reloaded.dataset_manager.datasets if d.metadata.get("kind") == "fit")
+
+    assert reloaded_fit.metadata["source_dataset_name"] == "source"
+    assert reloaded_fit.metadata["rmse"] == pytest.approx(metadata["rmse"])
+    assert reloaded_fit.metadata["residual_sum_of_squares"] == pytest.approx(metadata["residual_sum_of_squares"])
+    assert reloaded_fit.metadata["n_points"] == metadata["n_points"]
+    pdt.assert_frame_equal(
+        reloaded_fit.dataframe.reset_index(drop=True), fit_dataset.dataframe.reset_index(drop=True)
+    )
+
+
+def test_old_style_fit_metadata_without_new_fields_still_loads(tmp_path):
+    """A `.gnovi` saved before PR 5 has fit metadata missing
+    source_dataset_name/source_series_label/rmse/residual_sum_of_squares/
+    n_points entirely -- the free-form metadata dict simply lacks those
+    keys. Loading must not choke on their absence."""
+    old_style_metadata = {
+        "kind": "fit",
+        "source_dataset_id": "some-id",
+        "source_series_id": None,
+        "x_column": "x",
+        "y_column": "y",
+        "row_range": None,
+        "model": "linear",
+        "params": {"a": 2.0, "b": 1.0},
+        "param_errors": None,
+        "r_squared": 0.99,
+        "formula": "y = a·x + b",
+        "x_min": 0.0,
+        "x_max": 10.0,
+        "num_points": 20,
+        # No source_dataset_name/source_series_label/rmse/
+        # residual_sum_of_squares/n_points -- pre-PR5 shape.
+    }
+    fit_dataset = Dataset(
+        name="Fit: linear",
+        dataframe=pd.DataFrame({"x": [0.0, 5.0, 10.0], "y": [1.0, 11.0, 21.0]}),
+        metadata=old_style_metadata,
+    )
+    project = Project.new()
+    project.dataset_manager.add(fit_dataset)
+
+    out_path = save_project(project, tmp_path / "proj.gnovi")
+    reloaded = load_project(out_path)
+
+    reloaded_fit = reloaded.dataset_manager.datasets[0]
+    assert reloaded_fit.metadata["kind"] == "fit"
+    assert reloaded_fit.metadata.get("rmse") is None  # simply absent, no crash
+    assert reloaded_fit.metadata.get("source_dataset_name") is None
+
+
 # --- v1 -> v2 migration: figures/active_figure_index -> workbenches -----------
 
 

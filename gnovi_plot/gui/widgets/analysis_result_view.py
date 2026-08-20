@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFormLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import QFormLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from gnovi_plot.analysis.results import AnalysisResult
+from gnovi_plot.data.dataset_manager import DatasetManager
+from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
+from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
+from gnovi_plot.gui.widgets.residual_plot import ResidualPlotWidget
+from gnovi_plot.plotting.figure import GnoviFigure
 
 _EMPTY_STATE_TEXT = (
     "No results yet.\n\n"
@@ -12,29 +17,50 @@ _EMPTY_STATE_TEXT = (
     "output here."
 )
 
+_RESIDUALS_UNAVAILABLE_TEXT = "Residuals unavailable -- the source dataset/series no longer exists."
+
 
 class AnalysisResultView(QWidget):
     """Read-only display for the most recently produced `AnalysisResult`.
 
-    Renders any `AnalysisResult` through its `summary()`/`details()`
-    contract only -- never imports or references `FitResult` or any other
-    concrete subclass. Adding a new analysis tool (statistics, peak
-    analysis, FFT, smoothing, a domain-specific module) only ever means
-    giving it its own `AnalysisResult` subclass; this view does not change.
+    Renders any `AnalysisResult` through its `summary()`/`details()`/
+    `provenance_details()`/`supports_residuals()`/`compute_residuals()`/
+    `report_text()` contract only -- never imports or references
+    `FitResult` or any other concrete subclass. Adding a new analysis tool
+    (statistics, peak analysis, FFT, smoothing, a domain-specific module)
+    only ever means giving it its own `AnalysisResult` subclass; this view
+    does not change.
+
+    Holds `figure`/`dataset_manager` references (mirrors `AnalysisPanel`'s
+    own `set_figure`/`set_manager` pattern) for two purposes only, both
+    read-only:
+      - Resolving a friendly dataset/series *name* when the result's own
+        stored snapshot (`source_dataset_name`/`source_series_label`) is
+        missing -- e.g. an older result. The stored snapshot is always
+        preferred; this is a fallback, not the primary path.
+      - Resolving the *live* (x, y) data needed to compute residuals on
+        demand (never persisted -- recomputed fresh each time "Show
+        Residuals" is toggled on).
 
     Shows a single result at a time (the most recent), plus its own empty
     state when nothing has been shown yet -- there is no history list in
     this milestone.
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, figure: GnoviFigure, dataset_manager: DatasetManager, parent=None):
         super().__init__(parent)
 
+        self._figure = figure
+        self._manager = dataset_manager
         self._result: AnalysisResult | None = None
 
         self._empty_label = QLabel(_EMPTY_STATE_TEXT)
-        self._empty_label.setAlignment(Qt.AlignCenter)
         self._empty_label.setWordWrap(True)
+
+        self._dataset_label = QLabel()
+        self._dataset_label.setWordWrap(True)
+        self._series_label = QLabel()
+        self._series_label.setWordWrap(True)
 
         self._summary_label = QLabel()
         self._summary_label.setWordWrap(True)
@@ -44,16 +70,44 @@ class AnalysisResultView(QWidget):
         self._details_form = QFormLayout(self._details_widget)
         self._details_form.setContentsMargins(0, 0, 0, 0)
 
+        self._provenance_widget = QWidget()
+        self._provenance_form = QFormLayout(self._provenance_widget)
+        self._provenance_form.setContentsMargins(0, 0, 0, 0)
+        self._provenance_section = CollapsibleSection("Provenance", self._provenance_widget, expanded=False)
+
+        self._show_residuals_button = QPushButton("Show Residuals")
+        self._show_residuals_button.setCheckable(True)
+        self._copy_summary_button = QPushButton("Copy Fit Summary")
+
+        button_row = QHBoxLayout()
+        button_row.addWidget(self._show_residuals_button)
+        button_row.addWidget(self._copy_summary_button)
+        button_row.addStretch(1)
+
+        self._residuals_unavailable_label = QLabel(_RESIDUALS_UNAVAILABLE_TEXT)
+        self._residuals_unavailable_label.setWordWrap(True)
+
+        self._residual_plot = ResidualPlotWidget()
+
         self._content = QWidget()
         content_layout = QVBoxLayout(self._content)
         content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.addWidget(self._dataset_label)
+        content_layout.addWidget(self._series_label)
         content_layout.addWidget(self._summary_label)
         content_layout.addWidget(self._details_widget)
+        content_layout.addWidget(self._provenance_section)
+        content_layout.addLayout(button_row)
+        content_layout.addWidget(self._residuals_unavailable_label)
+        content_layout.addWidget(self._residual_plot)
         content_layout.addStretch(1)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._empty_label)
         layout.addWidget(self._content)
+
+        self._show_residuals_button.toggled.connect(self._on_show_residuals_toggled)
+        self._copy_summary_button.clicked.connect(self._on_copy_summary_clicked)
 
         self.clear()
 
@@ -62,24 +116,134 @@ class AnalysisResultView(QWidget):
         """The result currently shown, or `None` in the empty state."""
         return self._result
 
+    def set_figure(self, figure: GnoviFigure) -> None:
+        """Repoint at a different `GnoviFigure` (e.g. a Workbench switch)
+        -- only affects series-label/residual-data resolution, never the
+        currently-shown result itself."""
+        self._figure = figure
+
+    def set_manager(self, dataset_manager: DatasetManager) -> None:
+        """Repoint at a different `DatasetManager` (Open/New Project) --
+        only affects dataset-name/residual-data resolution."""
+        self._manager = dataset_manager
+
     def show_result(self, result: AnalysisResult) -> None:
         """Display `result`, replacing whatever was shown before."""
         self._result = result
+
+        dataset_name = self._resolve_dataset_name(result)
+        self._dataset_label.setText(f"Dataset: {dataset_name or result.source_dataset_id}")
+
+        series_label = self._resolve_series_label(result)
+        self._series_label.setVisible(result.source_series_id is not None)
+        if result.source_series_id is not None:
+            self._series_label.setText(f"Series: {series_label or result.source_series_id}")
+
         self._summary_label.setText(result.summary())
-        self._rebuild_details(result.details())
+        self._rebuild_form(self._details_form, result.details())
+        self._rebuild_form(self._provenance_form, result.provenance_details())
+        self._provenance_section.set_expanded(False)
+
+        self._show_residuals_button.setVisible(result.supports_residuals())
+        self._show_residuals_button.setChecked(False)  # reset per-result -- never auto-shown
+        self._residual_plot.setVisible(False)
+        self._residuals_unavailable_label.setVisible(False)
+
         self._empty_label.setVisible(False)
         self._content.setVisible(True)
 
     def clear(self) -> None:
         """Return to the empty state -- no result shown."""
         self._result = None
+        self._dataset_label.clear()
+        self._series_label.clear()
         self._summary_label.clear()
-        self._rebuild_details([])
+        self._rebuild_form(self._details_form, [])
+        self._rebuild_form(self._provenance_form, [])
+        self._show_residuals_button.setChecked(False)
+        self._show_residuals_button.setVisible(False)
+        self._residual_plot.setVisible(False)
+        self._residuals_unavailable_label.setVisible(False)
         self._empty_label.setVisible(True)
         self._content.setVisible(False)
 
-    def _rebuild_details(self, rows: list[tuple[str, str]]) -> None:
-        while self._details_form.rowCount():
-            self._details_form.removeRow(0)
+    def _rebuild_form(self, form: QFormLayout, rows: list[tuple[str, str]]) -> None:
+        while form.rowCount():
+            form.removeRow(0)
         for label, value in rows:
-            self._details_form.addRow(f"{label}:", QLabel(value))
+            form.addRow(f"{label}:", QLabel(value))
+
+    def _resolve_dataset_name(self, result: AnalysisResult) -> str | None:
+        """A genuine friendly name, preferring the result's own stored
+        snapshot over live lookup -- `None` (never a raw id) if nothing
+        resolves, so callers can each decide their own id-fallback
+        behavior (the on-screen label shows the id; the copy summary
+        omits the line instead, per "don't make ids prominent there")."""
+        if result.source_dataset_name:
+            return result.source_dataset_name
+        dataset = self._manager.get(result.source_dataset_id) if self._manager is not None else None
+        return dataset.name if dataset is not None else None
+
+    def _resolve_series_label(self, result: AnalysisResult) -> str | None:
+        if result.source_series_id is None:
+            return None
+        if result.source_series_label:
+            return result.source_series_label
+        series = self._figure.get_series(result.source_series_id) if self._figure is not None else None
+        return series.label if series is not None else None
+
+    def _resolve_live_xy(self, result: AnalysisResult):
+        """The source series'/dataset's *current* numeric (x, y) data, for
+        on-demand residual computation -- `None` if nothing resolves any
+        more (dataset/series removed) or the data isn't numeric."""
+        series = None
+        if result.source_series_id is not None and self._figure is not None:
+            series = self._figure.get_series(result.source_series_id)
+
+        if series is not None:
+            dataframe = series.dataframe
+        else:
+            dataset = self._manager.get(result.source_dataset_id) if self._manager is not None else None
+            if dataset is None:
+                return None
+            dataframe = dataset.dataframe
+            if result.row_range is not None:
+                start, end = result.row_range
+                dataframe = dataframe.iloc[start:end]
+
+        try:
+            return numeric_xy(dataframe, result.x_column, result.y_column)
+        except (KeyError, InsufficientNumericDataError):
+            return None
+
+    def _on_show_residuals_toggled(self, checked: bool) -> None:
+        self._show_residuals_button.setText("Hide Residuals" if checked else "Show Residuals")
+        if not checked or self._result is None:
+            self._residual_plot.setVisible(False)
+            self._residuals_unavailable_label.setVisible(False)
+            return
+
+        xy = self._resolve_live_xy(self._result)
+        if xy is None:
+            self._residual_plot.setVisible(False)
+            self._residuals_unavailable_label.setVisible(True)
+            return
+
+        x, y = xy
+        residual_data = self._result.compute_residuals(x.to_numpy(), y.to_numpy())
+        self._residual_plot.plot_residuals(
+            residual_data,
+            x_label=self._result.x_column,
+            y_label=f"Residual ({self._result.y_column})",
+        )
+        self._residuals_unavailable_label.setVisible(False)
+        self._residual_plot.setVisible(True)
+
+    def _on_copy_summary_clicked(self) -> None:
+        if self._result is None:
+            return
+        text = self._result.report_text(
+            dataset_name=self._resolve_dataset_name(self._result),
+            series_label=self._resolve_series_label(self._result),
+        )
+        QGuiApplication.clipboard().setText(text)

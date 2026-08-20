@@ -127,6 +127,10 @@ class AnalysisPanel(QWidget):
         self.add_fit_curve_button = QPushButton("Add Fit Curve to Plot")
         self.add_fit_curve_button.setEnabled(False)
 
+        self.added_feedback_label = QLabel("")
+        self.added_feedback_label.setWordWrap(True)
+        self.added_feedback_label.setVisible(False)
+
         fit_group = QGroupBox("Curve Fitting")
         fit_layout = QVBoxLayout(fit_group)
         fit_layout.addWidget(self.active_panel_label)
@@ -140,6 +144,7 @@ class AnalysisPanel(QWidget):
         fit_layout.addWidget(self.run_fit_button)
         fit_layout.addWidget(self.pending_fit_label)
         fit_layout.addWidget(self.add_fit_curve_button)
+        fit_layout.addWidget(self.added_feedback_label)
 
         self.fit_section = CollapsibleSection("Curve Fitting", fit_group)
 
@@ -209,18 +214,25 @@ class AnalysisPanel(QWidget):
         self.degree_spin.setVisible(is_polynomial)
 
     def _invalidate_pending_fit(self) -> None:
-        """Clear a pending (not-yet-added) fit result -- called whenever
-        the source series or model selection changes, so a fit for one
-        series/model can never be added to the plot under a different
-        one's name. A degree change or a re-run that fails does *not*
-        invalidate an already-successful pending fit -- it's still a
-        genuine, self-consistent result for the series/model it was run
-        against."""
+        """Clear a pending fit result -- called whenever the source series
+        or model selection changes, so a fit for one series/model can
+        never be added to the plot under a different one's name. A degree
+        change or a re-run that fails does *not* invalidate an
+        already-successful pending fit -- it's still a genuine,
+        self-consistent result for the series/model it was run against.
+
+        Note this clears the fit even if it was already successfully
+        added to the plot once -- that's correct: the *pending* fit
+        (what "Add Fit Curve to Plot" would add right now) is tied to the
+        current source/model selection, independent of whether a copy of
+        it is already on the canvas."""
         self._pending_fit = None
         self._pending_fit_x_range = None
         self.pending_fit_label.clear()
         self.pending_fit_label.setVisible(False)
         self.add_fit_curve_button.setEnabled(False)
+        self.added_feedback_label.clear()
+        self.added_feedback_label.setVisible(False)
 
     def _on_run_fit_clicked(self) -> None:
         series = self._current_source_series()
@@ -241,7 +253,9 @@ class AnalysisPanel(QWidget):
                 y.to_numpy(),
                 model,
                 source_dataset_id=series.dataset.id,
+                source_dataset_name=series.dataset.name,
                 source_series_id=series.id,
+                source_series_label=series.label,
                 x_column=series.x_column,
                 y_column=series.y_column,
                 row_range=series.row_range,
@@ -256,6 +270,10 @@ class AnalysisPanel(QWidget):
         self.pending_fit_label.setText(f"Ready to add: {result.summary()}")
         self.pending_fit_label.setVisible(True)
         self.add_fit_curve_button.setEnabled(True)
+        # A fresh fit hasn't been added yet -- any "Added to plot: ..."
+        # feedback from a previous fit no longer describes this one.
+        self.added_feedback_label.clear()
+        self.added_feedback_label.setVisible(False)
 
         self.analysis_result_ready.emit(result)
 
@@ -279,5 +297,10 @@ class AnalysisPanel(QWidget):
         )
         self._manager.add(fit_dataset)
 
+        # The pending fit stays valid and addable again (e.g. the user
+        # wants a second copy to style differently) -- it's only cleared
+        # by an actual source/model change, not by having been added.
         series = PlotSeries.line(fit_dataset, result.x_column, result.y_column)
+        self.added_feedback_label.setText(f"Added to plot: {series.label}")
+        self.added_feedback_label.setVisible(True)
         self.add_to_plot_requested.emit([series])

@@ -101,3 +101,37 @@ def test_undo_removes_the_fit_series_but_the_derived_dataset_stays_registered(qa
 
     assert len(window.dataset_manager.datasets) == dataset_count_after_add
     window.close()
+
+
+def test_add_fit_curve_stays_usable_after_a_successful_add(qapp):
+    """Do NOT permanently disable "Add Fit Curve to Plot" merely because
+    the current fit has already been added once -- driven end-to-end
+    through the real _on_add_to_plot path this time (contrast with the
+    isolated-panel version of this test in test_analysis_panel_gui.py)."""
+    window = MainWindow()
+    window._on_add_to_plot([PlotSeries.line(_make_dataset(), "x", "y", label="Original curve")])
+    window.tool_drawer._buttons["analysis"].click()
+    window.analysis_panel.run_fit_button.click()
+
+    window.analysis_panel.add_fit_curve_button.click()
+    assert window.analysis_panel.add_fit_curve_button.isEnabled()
+    assert len(window.figure_model.series) == 2
+
+    window.analysis_panel.add_fit_curve_button.click()  # add the same fit again
+
+    assert len(window.figure_model.series) == 3
+    assert len(window.dataset_manager.datasets) == 2  # one derived Dataset per add
+    window.close()
+
+
+def test_added_to_plot_feedback_is_shown_after_a_successful_add(qapp):
+    window = MainWindow()
+    window._on_add_to_plot([PlotSeries.line(_make_dataset(), "x", "y", label="Original curve")])
+    window.tool_drawer._buttons["analysis"].click()
+    window.analysis_panel.run_fit_button.click()
+
+    window.analysis_panel.add_fit_curve_button.click()
+
+    assert window.analysis_panel.added_feedback_label.isVisibleTo(window.analysis_panel)
+    assert "Added to plot: Fit: linear — y" == window.analysis_panel.added_feedback_label.text()
+    window.close()

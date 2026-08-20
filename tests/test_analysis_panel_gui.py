@@ -509,3 +509,111 @@ def test_add_fit_curve_emits_a_normal_styleable_line_series(qapp):
     assert series.color is None
     assert series.color_is_manual is False
     assert series.visible is True
+
+
+# --- Fit-time descriptive provenance snapshot ------------------------------
+
+
+def test_run_fit_passes_the_live_dataset_name_and_series_label_to_fit_curve(qapp):
+    figure = GnoviFigure()
+    ds = _dataset(name="Ferricyanide 50 mV/s")
+    series = PlotSeries.line(ds, "x", "y", label="Current vs Potential")
+    figure.add_series(series)
+    panel = AnalysisPanel(figure, DatasetManager())
+
+    panel.run_fit_button.click()
+
+    assert panel._pending_fit.source_dataset_name == "Ferricyanide 50 mV/s"
+    assert panel._pending_fit.source_series_label == "Current vs Potential"
+
+
+# --- Add Fit Curve to Plot: stays usable, clear feedback (corrected PR5) --
+
+
+def test_add_fit_curve_button_remains_enabled_after_a_successful_add(qapp):
+    """Do NOT permanently disable the button merely because the current
+    fit has already been added once -- the same fit may be added again
+    while it's still valid (e.g. a second copy to style differently)."""
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(_dataset(), "x", "y", label="A"))
+    manager = DatasetManager()
+    panel = AnalysisPanel(figure, manager)
+    added = []
+    panel.add_to_plot_requested.connect(lambda series_list: added.extend(series_list))
+
+    panel.run_fit_button.click()
+    panel.add_fit_curve_button.click()
+
+    assert panel.add_fit_curve_button.isEnabled()
+
+    panel.add_fit_curve_button.click()  # adding again must work, not be a no-op
+
+    assert len(manager.datasets) == 2
+    assert len(added) == 2  # two separate add_to_plot_requested emissions
+
+
+def test_added_feedback_shown_after_a_successful_add(qapp):
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(_dataset(), "x", "y", label="A"))
+    panel = AnalysisPanel(figure, DatasetManager())
+
+    panel.run_fit_button.click()
+    assert not panel.added_feedback_label.isVisibleTo(panel)
+
+    panel.add_fit_curve_button.click()
+
+    assert panel.added_feedback_label.isVisibleTo(panel)
+    assert panel.added_feedback_label.text() == "Added to plot: Fit: linear — y"
+
+
+def test_added_feedback_clears_when_a_new_fit_is_run(qapp):
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(_dataset(), "x", "y", label="A"))
+    panel = AnalysisPanel(figure, DatasetManager())
+
+    panel.run_fit_button.click()
+    panel.add_fit_curve_button.click()
+    assert panel.added_feedback_label.isVisibleTo(panel)
+
+    panel.run_fit_button.click()  # a fresh fit hasn't been added yet
+
+    assert not panel.added_feedback_label.isVisibleTo(panel)
+
+
+def test_meaningful_source_change_still_invalidates_after_a_successful_add(qapp):
+    """Existing stale-fit invalidation on Source/Model changes must
+    continue to work exactly as before, even once the current fit has
+    already been added to the plot."""
+    figure = GnoviFigure()
+    ds = _dataset()
+    figure.add_series(PlotSeries.line(ds, "x", "y", label="First"))
+    figure.add_series(PlotSeries.line(ds, "x", "y", label="Second"))
+    panel = AnalysisPanel(figure, DatasetManager())
+
+    panel.source_combo.setCurrentIndex(0)
+    panel.run_fit_button.click()
+    panel.add_fit_curve_button.click()
+    assert panel.add_fit_curve_button.isEnabled()
+    assert panel.added_feedback_label.isVisibleTo(panel)
+
+    panel.source_combo.setCurrentIndex(1)  # meaningful Source change
+
+    assert not panel.add_fit_curve_button.isEnabled()
+    assert not panel.added_feedback_label.isVisibleTo(panel)
+    assert not panel.pending_fit_label.isVisibleTo(panel)
+
+
+def test_meaningful_model_change_still_invalidates_after_a_successful_add(qapp):
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(_dataset(), "x", "y", label="A"))
+    panel = AnalysisPanel(figure, DatasetManager())
+
+    panel.model_combo.setCurrentIndex(panel.model_combo.findData(LINEAR))
+    panel.run_fit_button.click()
+    panel.add_fit_curve_button.click()
+    assert panel.add_fit_curve_button.isEnabled()
+
+    panel.model_combo.setCurrentIndex(panel.model_combo.findData(POLYNOMIAL))
+
+    assert not panel.add_fit_curve_button.isEnabled()
+    assert not panel.added_feedback_label.isVisibleTo(panel)
