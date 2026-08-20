@@ -244,14 +244,7 @@ def test_provenance_section_is_collapsed_by_default(qapp):
 # --- Residuals ---------------------------------------------------------------
 
 
-def test_show_residuals_button_hidden_for_a_result_without_residual_support(qapp):
-    view = _make_view()
-    view.show_result(_make_dummy())
-
-    assert not view._show_residuals_button.isVisibleTo(view)
-
-
-def test_show_residuals_button_visible_and_plots_for_a_resolvable_fit(qapp):
+def _view_with_resolvable_fit(model=LINEAR):
     ds = _make_dataset()
     series = PlotSeries.line(ds, "x", "y", label="my series")
     figure = GnoviFigure()
@@ -263,25 +256,69 @@ def test_show_residuals_button_visible_and_plots_for_a_resolvable_fit(qapp):
     result = fit_curve(
         ds.dataframe["x"].to_numpy(),
         ds.dataframe["y"].to_numpy(),
-        LINEAR,
+        model,
         source_dataset_id=ds.id,
         source_series_id=series.id,
         x_column="x",
         y_column="y",
     )
+    return view, result
+
+
+def test_view_residuals_button_hidden_for_a_result_without_residual_support(qapp):
+    view = _make_view()
+    view.show_result(_make_dummy())
+
+    assert not view._view_residuals_button.isVisibleTo(view)
+
+
+def test_analysis_result_view_no_longer_embeds_a_residual_canvas(qapp):
+    """Results panel stays compact -- residual diagnostics live only in
+    the dedicated ResidualWindow, never embedded here."""
+    view = _make_view()
+    assert not hasattr(view, "_residual_plot")
+
+
+def test_view_residuals_click_opens_window_with_correct_data_and_title(qapp):
+    view, result = _view_with_resolvable_fit()
     view.show_result(result)
-    assert view._show_residuals_button.isVisibleTo(view)
-    assert not view._residual_plot.isVisibleTo(view)  # never auto-shown
+    assert view._view_residuals_button.isVisibleTo(view)
+    assert view._residual_window is None  # not created until first click
 
-    view._show_residuals_button.setChecked(True)
+    view._view_residuals_button.click()
 
-    assert view._residual_plot.isVisibleTo(view)
+    window = view._residual_window
+    assert window is not None
+    assert window.isVisible()
     assert not view._residuals_unavailable_label.isVisibleTo(view)
-    assert view._show_residuals_button.text() == "Hide Residuals"
+    assert window.windowTitle() == "Residuals — linear fit — my series"
 
-    view._show_residuals_button.setChecked(False)
-    assert not view._residual_plot.isVisibleTo(view)
-    assert view._show_residuals_button.text() == "Show Residuals"
+
+def test_repeated_clicks_reuse_the_same_residual_window_instance(qapp):
+    view, result = _view_with_resolvable_fit()
+    view.show_result(result)
+
+    view._view_residuals_button.click()
+    first_window = view._residual_window
+    view._view_residuals_button.click()
+    view._view_residuals_button.click()
+
+    assert view._residual_window is first_window
+
+
+def test_closing_and_reopening_the_residual_window_reuses_the_instance(qapp):
+    view, result = _view_with_resolvable_fit()
+    view.show_result(result)
+
+    view._view_residuals_button.click()
+    window = view._residual_window
+    window.close()
+    assert not window.isVisible()
+
+    view._view_residuals_button.click()
+
+    assert view._residual_window is window
+    assert window.isVisible()
 
 
 def test_show_residuals_reports_unavailable_when_source_cannot_be_resolved(qapp):
@@ -289,38 +326,78 @@ def test_show_residuals_reports_unavailable_when_source_cannot_be_resolved(qapp)
     result = _make_fit_result(source_dataset_id="gone", source_series_id="also-gone")
     view.show_result(result)
 
-    view._show_residuals_button.setChecked(True)
+    view._view_residuals_button.click()
 
-    assert not view._residual_plot.isVisibleTo(view)
+    assert view._residual_window is None  # never created with nothing to show
     assert view._residuals_unavailable_label.isVisibleTo(view)
 
 
-def test_residuals_reset_to_hidden_for_each_new_result(qapp):
-    ds = _make_dataset()
-    series = PlotSeries.line(ds, "x", "y", label="s")
-    figure = GnoviFigure()
-    figure.add_series(series)
-    manager = DatasetManager()
-    manager.add(ds)
-    view = _make_view(figure=figure, manager=manager)
+def test_open_residual_window_updates_in_place_for_a_new_valid_fit(qapp):
+    view, result = _view_with_resolvable_fit()
+    view.show_result(result)
+    view._view_residuals_button.click()
+    window = view._residual_window
+    first_title = window.windowTitle()
 
-    result = fit_curve(
-        ds.dataframe["x"].to_numpy(),
-        ds.dataframe["y"].to_numpy(),
+    ds2 = _make_dataset(name="d2", y=[3.0 * v - 1.0 for v in range(10)])
+    series2 = PlotSeries.line(ds2, "x", "y", label="second series")
+    view._figure.add_series(series2)
+    view._manager.add(ds2)
+    second_result = fit_curve(
+        ds2.dataframe["x"].to_numpy(),
+        ds2.dataframe["y"].to_numpy(),
         LINEAR,
-        source_dataset_id=ds.id,
-        source_series_id=series.id,
+        source_dataset_id=ds2.id,
+        source_series_id=series2.id,
         x_column="x",
         y_column="y",
     )
+
+    view.show_result(second_result)
+
+    assert view._residual_window is window  # same instance, updated in place
+    assert window.isVisible()
+    assert window.windowTitle() != first_title
+    assert window.windowTitle() == "Residuals — linear fit — second series"
+
+
+def test_open_residual_window_hides_when_new_result_does_not_support_residuals(qapp):
+    view, result = _view_with_resolvable_fit()
     view.show_result(result)
-    view._show_residuals_button.setChecked(True)
-    assert view._residual_plot.isVisibleTo(view)
+    view._view_residuals_button.click()
+    window = view._residual_window
+    assert window.isVisible()
 
-    view.show_result(result)  # a "new" result, even if the same object
+    view.show_result(_make_dummy())
 
-    assert not view._show_residuals_button.isChecked()
-    assert not view._residual_plot.isVisibleTo(view)
+    assert view._residual_window is window  # kept alive for later reuse
+    assert not window.isVisible()
+
+
+def test_open_residual_window_hides_when_new_result_source_cannot_resolve(qapp):
+    view, result = _view_with_resolvable_fit()
+    view.show_result(result)
+    view._view_residuals_button.click()
+    window = view._residual_window
+    assert window.isVisible()
+
+    unresolvable = _make_fit_result(source_dataset_id="gone", source_series_id="also-gone")
+    view.show_result(unresolvable)
+
+    assert view._residual_window is window  # kept alive for later reuse
+    assert not window.isVisible()
+    assert view._residuals_unavailable_label.isVisibleTo(view)
+
+
+def test_residual_window_hidden_on_clear(qapp):
+    view, result = _view_with_resolvable_fit()
+    view.show_result(result)
+    view._view_residuals_button.click()
+    window = view._residual_window
+
+    view.clear()
+
+    assert not window.isVisible()
 
 
 # --- Copy Fit Summary ---------------------------------------------------------

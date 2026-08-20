@@ -7,7 +7,7 @@ from gnovi_plot.analysis.results import AnalysisResult
 from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
-from gnovi_plot.gui.widgets.residual_plot import ResidualPlotWidget
+from gnovi_plot.gui.widgets.residual_window import ResidualWindow
 from gnovi_plot.plotting.figure import GnoviFigure
 
 _EMPTY_STATE_TEXT = (
@@ -39,8 +39,19 @@ class AnalysisResultView(QWidget):
         missing -- e.g. an older result. The stored snapshot is always
         preferred; this is a fallback, not the primary path.
       - Resolving the *live* (x, y) data needed to compute residuals on
-        demand (never persisted -- recomputed fresh each time "Show
-        Residuals" is toggled on).
+        demand (never persisted -- recomputed fresh each time "View
+        Residuals..." is clicked, or an already-open residual window is
+        refreshed for a new result).
+
+    Residual diagnostics are never embedded here -- they display in a
+    single reusable `ResidualWindow` (a non-modal, independently
+    resizable top-level window; see that class), created lazily on first
+    use and kept alive for this view's whole lifetime so repeated clicks
+    or successive fits reuse one window instead of accumulating them. If
+    that window is open when a *new* result is shown and the new result
+    doesn't support residuals or its source can no longer be resolved,
+    the window is hidden (never left showing stale diagnostics) but the
+    instance itself is kept for later reuse.
 
     Shows a single result at a time (the most recent), plus its own empty
     state when nothing has been shown yet -- there is no history list in
@@ -53,6 +64,7 @@ class AnalysisResultView(QWidget):
         self._figure = figure
         self._manager = dataset_manager
         self._result: AnalysisResult | None = None
+        self._residual_window: ResidualWindow | None = None
 
         self._empty_label = QLabel(_EMPTY_STATE_TEXT)
         self._empty_label.setWordWrap(True)
@@ -75,19 +87,17 @@ class AnalysisResultView(QWidget):
         self._provenance_form.setContentsMargins(0, 0, 0, 0)
         self._provenance_section = CollapsibleSection("Provenance", self._provenance_widget, expanded=False)
 
-        self._show_residuals_button = QPushButton("Show Residuals")
-        self._show_residuals_button.setCheckable(True)
+        self._view_residuals_button = QPushButton("View Residuals…")
         self._copy_summary_button = QPushButton("Copy Fit Summary")
 
         button_row = QHBoxLayout()
-        button_row.addWidget(self._show_residuals_button)
+        button_row.addWidget(self._view_residuals_button)
         button_row.addWidget(self._copy_summary_button)
         button_row.addStretch(1)
 
         self._residuals_unavailable_label = QLabel(_RESIDUALS_UNAVAILABLE_TEXT)
         self._residuals_unavailable_label.setWordWrap(True)
-
-        self._residual_plot = ResidualPlotWidget()
+        self._residuals_unavailable_label.setVisible(False)
 
         self._content = QWidget()
         content_layout = QVBoxLayout(self._content)
@@ -99,14 +109,13 @@ class AnalysisResultView(QWidget):
         content_layout.addWidget(self._provenance_section)
         content_layout.addLayout(button_row)
         content_layout.addWidget(self._residuals_unavailable_label)
-        content_layout.addWidget(self._residual_plot)
         content_layout.addStretch(1)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._empty_label)
         layout.addWidget(self._content)
 
-        self._show_residuals_button.toggled.connect(self._on_show_residuals_toggled)
+        self._view_residuals_button.clicked.connect(self._on_view_residuals_clicked)
         self._copy_summary_button.clicked.connect(self._on_copy_summary_clicked)
 
         self.clear()
@@ -144,10 +153,19 @@ class AnalysisResultView(QWidget):
         self._rebuild_form(self._provenance_form, result.provenance_details())
         self._provenance_section.set_expanded(False)
 
-        self._show_residuals_button.setVisible(result.supports_residuals())
-        self._show_residuals_button.setChecked(False)  # reset per-result -- never auto-shown
-        self._residual_plot.setVisible(False)
+        self._view_residuals_button.setVisible(result.supports_residuals())
         self._residuals_unavailable_label.setVisible(False)
+
+        # If a residual window from a previous fit is currently open,
+        # update it in place for this (new) result rather than leaving it
+        # showing stale diagnostics -- see class docstring. A closed/hidden
+        # window is left alone; its content is recomputed lazily on the
+        # next "View Residuals..." click.
+        if self._residual_window is not None and self._residual_window.isVisible():
+            if result.supports_residuals():
+                self._show_residuals_for(result)
+            else:
+                self._residual_window.hide()
 
         self._empty_label.setVisible(False)
         self._content.setVisible(True)
@@ -160,10 +178,10 @@ class AnalysisResultView(QWidget):
         self._summary_label.clear()
         self._rebuild_form(self._details_form, [])
         self._rebuild_form(self._provenance_form, [])
-        self._show_residuals_button.setChecked(False)
-        self._show_residuals_button.setVisible(False)
-        self._residual_plot.setVisible(False)
+        self._view_residuals_button.setVisible(False)
         self._residuals_unavailable_label.setVisible(False)
+        if self._residual_window is not None:
+            self._residual_window.hide()
         self._empty_label.setVisible(True)
         self._content.setVisible(False)
 
@@ -216,28 +234,41 @@ class AnalysisResultView(QWidget):
         except (KeyError, InsufficientNumericDataError):
             return None
 
-    def _on_show_residuals_toggled(self, checked: bool) -> None:
-        self._show_residuals_button.setText("Hide Residuals" if checked else "Show Residuals")
-        if not checked or self._result is None:
-            self._residual_plot.setVisible(False)
-            self._residuals_unavailable_label.setVisible(False)
-            return
+    def _on_view_residuals_clicked(self) -> None:
+        if self._result is not None:
+            self._show_residuals_for(self._result)
 
-        xy = self._resolve_live_xy(self._result)
+    def _show_residuals_for(self, result: AnalysisResult) -> None:
+        """Compute `result`'s residuals from current live data and display
+        them in the reusable `ResidualWindow`, creating it on first use.
+        If the source can no longer be resolved, hides any open window
+        (without destroying it) and shows the inline unavailable message
+        instead -- never opens a window with nothing to show."""
+        xy = self._resolve_live_xy(result)
         if xy is None:
-            self._residual_plot.setVisible(False)
             self._residuals_unavailable_label.setVisible(True)
+            if self._residual_window is not None:
+                self._residual_window.hide()
             return
 
-        x, y = xy
-        residual_data = self._result.compute_residuals(x.to_numpy(), y.to_numpy())
-        self._residual_plot.plot_residuals(
-            residual_data,
-            x_label=self._result.x_column,
-            y_label=f"Residual ({self._result.y_column})",
-        )
         self._residuals_unavailable_label.setVisible(False)
-        self._residual_plot.setVisible(True)
+        x, y = xy
+        residual_data = result.compute_residuals(x.to_numpy(), y.to_numpy())
+        if self._residual_window is None:
+            self._residual_window = ResidualWindow(self)
+        self._residual_window.show_residuals(
+            residual_data,
+            x_label=result.x_column,
+            y_label=f"Residual ({result.y_column})",
+            title=self._residual_window_title(result),
+        )
+
+    def _residual_window_title(self, result: AnalysisResult) -> str:
+        series_label = self._resolve_series_label(result)
+        subtitle = result.residual_window_subtitle()
+        if series_label:
+            return f"Residuals — {subtitle} — {series_label}"
+        return f"Residuals — {subtitle}"
 
     def _on_copy_summary_clicked(self) -> None:
         if self._result is None:

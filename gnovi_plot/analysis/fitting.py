@@ -95,6 +95,9 @@ class FitResult(AnalysisResult):
     def compute_residuals(self, x, y) -> "ResidualData":
         return compute_residuals(self, x, y)
 
+    def residual_window_subtitle(self) -> str:
+        return f"{self.model} fit"
+
     def to_dict(self) -> dict:
         data = super().to_dict()
         data.update(
