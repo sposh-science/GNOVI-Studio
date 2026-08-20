@@ -43,6 +43,8 @@ from gnovi_plot.gui.dialogs.export_figure_dialog import ExportFigureDialog
 from gnovi_plot.gui.styles import PlotTheme, apply_app_theme
 from gnovi_plot.gui.undo_manager import UndoManager, snapshot_figure
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
+from gnovi_plot.gui.widgets.analysis_panel import AnalysisPanel
+from gnovi_plot.gui.widgets.analysis_result_view import AnalysisResultView
 from gnovi_plot.gui.widgets.bottom_panel import BottomPanel
 from gnovi_plot.gui.widgets.data_tools_panel import DataToolsPanel
 from gnovi_plot.gui.widgets.dataframe_table_model import DataFrameTableModel
@@ -560,6 +562,7 @@ class MainWindow(QMainWindow):
         self.properties_panel = FigurePropertiesPanel(self.figure_model, get_graph_library=get_graph_library)
         self.figure_size_panel = FigureSizePanel(self.figure_model, get_graph_library=get_graph_library)
         self.figure_layout_panel = FigureLayoutPanel(self.figure_model, get_graph_library=get_graph_library)
+        self.analysis_panel = AnalysisPanel(self.figure_model, self.dataset_manager)
         self.data_tools_panel = DataToolsPanel(self.preview_table)
         # `get_figure`/`get_dataset_manager` are re-invoked on every Graph
         # Library action rather than captured once, so this panel always
@@ -620,6 +623,7 @@ class MainWindow(QMainWindow):
             self.figure_size_panel,
             self.figure_layout_panel,
             self.properties_panel,
+            self.analysis_panel,
         ]
 
         self.tool_drawer = ToolDrawer(side="left")
@@ -662,6 +666,14 @@ class MainWindow(QMainWindow):
             "axes",
             _wrap_scrollable(self.properties_panel),
         )
+        self.tool_drawer.add_page(
+            "analysis",
+            "Analysis",
+            "Curve fitting and (as they're added) other analysis tools, run against "
+            "the active panel's plotted series.",
+            "analysis",
+            _wrap_scrollable(self.analysis_panel),
+        )
         self.tool_drawer.show_page("data")
 
         # RIGHT: a dedicated Working Data drawer -- "how do I derive/filter/
@@ -683,12 +695,15 @@ class MainWindow(QMainWindow):
         self.working_drawer.show_page("working")
 
         # BOTTOM: collapsible/resizable Data / Transformations / Results /
-        # Messages tabs -- reusable container for future analysis output,
-        # deliberately inert (Results) beyond that this milestone.
+        # Messages tabs. Results shows the most recent AnalysisResult from
+        # any analysis tool (curve fitting today; nothing produces one yet
+        # this milestone, so it stays in its own empty state).
         self.bottom_panel = BottomPanel()
         self.bottom_panel.set_data_widget(self.preview_table)
         self.bottom_panel.set_graphs_widget(self.graph_library_panel)
         self.bottom_panel.set_transformations_widget(self.data_tools_panel.history_group)
+        self.analysis_result_view = AnalysisResultView()
+        self.bottom_panel.set_results_widget(self.analysis_result_view)
         self._bottom_panel_sizes: list[int] | None = None
 
         # CENTER: the plot canvas stays the dominant workspace -- the
@@ -813,6 +828,8 @@ class MainWindow(QMainWindow):
         self.data_tools_panel.transformation_applied.connect(self._on_transformation_applied)
         self.data_tools_panel.plot_selected_rows_requested.connect(self._on_plot_selected_rows)
         self.figure_size_panel.panel_labels_check.toggled.connect(self._sync_panel_labels_action)
+        self.analysis_panel.analysis_result_ready.connect(self._on_analysis_result_ready)
+        self.analysis_panel.add_to_plot_requested.connect(self._on_add_to_plot)
 
         self.workbench_tab_bar.workbench_selected.connect(self._on_workbench_tab_selected)
         self.workbench_tab_bar.new_workbench_requested.connect(self._on_new_workbench_requested)
@@ -1391,6 +1408,18 @@ class MainWindow(QMainWindow):
             self._bottom_panel_sizes = self.center_splitter.sizes()
             self.bottom_panel.setVisible(False)
 
+    def _on_analysis_result_ready(self, result) -> None:
+        """An analysis tool (curve fitting today; any later tool the same
+        way) produced a result -- show it immediately rather than making
+        the scientist go find and open Results themselves. Reuses the
+        Bottom Panel visibility toggle's own restore-last-size logic
+        (`_on_toggle_bottom_panel`) instead of duplicating it, by driving
+        the same action the View menu entry drives."""
+        self.analysis_result_view.show_result(result)
+        if not self.toggle_bottom_panel_action.isChecked():
+            self.toggle_bottom_panel_action.setChecked(True)
+        self.bottom_panel.show_results_tab()
+
     def _on_mouse_move(self, event) -> None:
         if event.inaxes is None or event.xdata is None or event.ydata is None:
             self.coord_label.setText("")
@@ -1508,6 +1537,7 @@ class MainWindow(QMainWindow):
         self.series_panel.refresh()
         self.properties_panel.refresh()
         self.figure_layout_panel.refresh()
+        self.analysis_panel.refresh()
         self._refresh_active_panel_context()
         self._sync_toolbar_panel_controls()
         self._rerender()
@@ -1554,6 +1584,7 @@ class MainWindow(QMainWindow):
         self._set_dirty(True)
         self._rerender()
         self._refresh_active_panel_context()
+        self.analysis_panel.refresh()
 
     def _commit_undo_checkpoint(self) -> None:
         """Push the snapshot captured just before this change (i.e. the
@@ -1619,6 +1650,7 @@ class MainWindow(QMainWindow):
         self.properties_panel.refresh()
         self.figure_size_panel.refresh()
         self.figure_layout_panel.refresh()
+        self.analysis_panel.refresh()
         self._refresh_active_panel_context()
         self._sync_toolbar_panel_controls()
         self._sync_theme_controls()
@@ -1768,6 +1800,7 @@ class MainWindow(QMainWindow):
         self.properties_panel.set_figure(self.figure_model)
         self.figure_size_panel.set_figure(self.figure_model)
         self.figure_layout_panel.set_figure(self.figure_model)
+        self.analysis_panel.set_figure(self.figure_model)
 
         self._sync_undo_redo_actions()
         self._refresh_active_panel_context()
@@ -1787,6 +1820,7 @@ class MainWindow(QMainWindow):
         self.dataset_manager = project.dataset_manager
 
         self.dataset_panel.set_manager(self.dataset_manager)
+        self.analysis_panel.set_manager(self.dataset_manager)
         self.graph_library_panel.set_library(project.graph_library)
 
         self._undo_managers = {}

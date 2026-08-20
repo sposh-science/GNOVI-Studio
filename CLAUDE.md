@@ -42,6 +42,39 @@ These constraints were established deliberately and should guide all design and 
 - **Don't implement roadmap items early just because they're planned.** Only build what's needed for the current step. As of now this still applies to: `z = f(x,y)` equation support, an interactive 3D/`mplot3d`/PyVista backend, `EquationSeries` on the same graph as data, `code_export.py`, SciPy-based curve fitting, and the `modules/` package (e.g. cyclic voltammetry) — none of these are built yet and shouldn't be started without being explicitly taken on.
 - **Discuss before major architectural changes or new major dependencies.** Don't introduce a new core dependency or restructure module boundaries without raising it first.
 
+## Scientific Python Library Policy
+
+GNOVI Studio should use modern, actively maintained, stable Python scientific libraries wherever appropriate rather than reimplementing established numerical or scientific algorithms.
+
+Prefer the current stable, mutually compatible releases of:
+
+- **NumPy** for numerical arrays and fundamental numerical operations
+- **SciPy** for optimization, curve fitting, signal processing, interpolation, statistics, and other scientific algorithms
+- **pandas** for tabular scientific data handling
+- **Matplotlib** for publication-quality scientific plotting and vector/raster export
+- **PySide6** / modern Qt APIs for the desktop GUI
+
+For future scientific capabilities such as XRD, Raman, UV–Vis, CV, spectroscopy, peak analysis, smoothing, baseline correction, and SEM/TEM image analysis, first evaluate established actively maintained Python libraries before implementing algorithms from scratch.
+
+Do not add a dependency merely because it exists. A new dependency should provide a meaningful scientific, numerical, performance, reliability, or maintenance advantage.
+
+Use **latest stable and compatible**, not blindly latest. Before introducing or upgrading a major dependency, verify:
+
+- Python-version compatibility
+- Linux compatibility
+- Windows compatibility
+- macOS compatibility
+- availability of binary wheels where relevant
+- compatibility with the existing GNOVI dependency stack
+- licensing compatibility with GNOVI Studio
+- suitability for future application packaging
+
+Avoid obsolete, abandoned, or unnecessarily niche libraries when a well-maintained scientific-Python alternative exists.
+
+Keep numerical/scientific logic separated from the Qt GUI so scientific algorithms can be independently tested and replaced or upgraded without redesigning the user interface — this is already how `analysis/`/`equations/` are structured relative to `gui/` (see "Current implementation status" below), and new analysis tools should keep following that split.
+
+Do not change any existing working dependency solely to satisfy this policy. Apply it to new development and evaluate dependency upgrades separately.
+
 ## Current implementation status
 
 The package layout below reflects the repository as it exists now (not a plan to scaffold). Top-level packages under `gnovi_plot/`:

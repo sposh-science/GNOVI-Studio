@@ -2,15 +2,8 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtWidgets import QLabel, QPlainTextEdit, QTabWidget, QVBoxLayout, QWidget
-
-_RESULTS_PLACEHOLDER_TEXT = (
-    "No results yet.\n\n"
-    "This tab is a reusable container for future analysis output -- curve "
-    "fits, peak tables, FFT results, and other reports -- once those "
-    "analyses are implemented."
-)
+from PySide6.QtCore import QObject, Signal
+from PySide6.QtWidgets import QPlainTextEdit, QTabWidget, QVBoxLayout, QWidget
 
 
 class _QtLogHandler(logging.Handler, QObject):
@@ -40,17 +33,17 @@ class BottomPanel(QTabWidget):
     Graphs (the project-local Graph Library, e.g.
     `gui.widgets.graph_library_panel.GraphLibraryPanel`), Transformations (a
     list supplied by the owner, e.g. Working Data history), Results (an
-    inert placeholder -- the reusable home for future fit/peak/FFT output,
-    deliberately empty this milestone), and Messages (a live application
-    log).
+    `analysis_result_view.AnalysisResultView` supplied by the owner --
+    generic across every analysis tool, not just curve fitting), and
+    Messages (a live application log).
 
     This widget only owns the tab *container*; tab content for Data/Graphs/
-    Transformations is handed in by the owner via `set_data_widget`/
-    `set_graphs_widget`/`set_transformations_widget` so this panel has no
-    dependency on DatasetPanel/GraphLibraryPanel/DataToolsPanel internals.
-    `QTabWidget` never destroys/rebuilds a tab's content widget when
-    switching tabs, so widget identity (and state) survives tab switching
-    and show/hide.
+    Transformations/Results is handed in by the owner via `set_data_widget`/
+    `set_graphs_widget`/`set_transformations_widget`/`set_results_widget` so
+    this panel has no dependency on DatasetPanel/GraphLibraryPanel/
+    DataToolsPanel/AnalysisResultView internals. `QTabWidget` never
+    destroys/rebuilds a tab's content widget when switching tabs, so widget
+    identity (and state) survives tab switching and show/hide.
     """
 
     def __init__(self, parent=None):
@@ -68,10 +61,9 @@ class BottomPanel(QTabWidget):
         QVBoxLayout(self._transformations_tab).setContentsMargins(0, 0, 0, 0)
         self.addTab(self._transformations_tab, "Transformations")
 
-        results_placeholder = QLabel(_RESULTS_PLACEHOLDER_TEXT)
-        results_placeholder.setAlignment(Qt.AlignCenter)
-        results_placeholder.setWordWrap(True)
-        self.addTab(results_placeholder, "Results")
+        self._results_tab = QWidget()
+        QVBoxLayout(self._results_tab).setContentsMargins(0, 0, 0, 0)
+        self.addTab(self._results_tab, "Results")
 
         self.messages_view = QPlainTextEdit()
         self.messages_view.setReadOnly(True)
@@ -95,6 +87,20 @@ class BottomPanel(QTabWidget):
         """Place `widget` (e.g. the Working Data transformation history)
         into the Transformations tab."""
         self._transformations_tab.layout().addWidget(widget)
+
+    def set_results_widget(self, widget: QWidget) -> None:
+        """Place `widget` (e.g. an `AnalysisResultView`) into the Results
+        tab. Reparents `widget` -- Qt moves it, it is not copied."""
+        self._results_tab.layout().addWidget(widget)
+
+    def show_results_tab(self) -> None:
+        """Switch to the Results tab -- e.g. right after an analysis tool
+        produces a result, so it's immediately visible without the user
+        having to find and click the tab themselves. Does not change
+        whether the bottom panel itself is shown/hidden -- see
+        `MainWindow._on_analysis_result_ready` for pairing this with
+        making the panel visible if it's currently collapsed."""
+        self.setCurrentWidget(self._results_tab)
 
     def install_logging(self, logger_name: str = "gnovi_plot") -> None:
         """Start mirroring `logger_name` into the Messages tab. Call this
