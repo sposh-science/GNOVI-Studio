@@ -89,6 +89,14 @@ class AnalysisResult:
         a dependency back onto a subclass's own module."""
         raise NotImplementedError
 
+    def residual_window_subtitle(self) -> str:
+        """Short '<model> fit'-style label for a residual diagnostic
+        window's title (see `gui.widgets.residual_window.ResidualWindow`).
+        Only meaningful when `supports_residuals()` is `True`; the default
+        (`self.kind`) is never actually shown today since no subclass
+        without residual support opens a residual window."""
+        return self.kind
+
     def report_text(self, *, dataset_name: str | None = None, series_label: str | None = None) -> str:
         """Concise, human-readable text for clipboard/export -- names
         only, never raw ids (see `provenance_details()` for those).
