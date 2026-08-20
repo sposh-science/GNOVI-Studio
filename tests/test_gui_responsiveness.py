@@ -9,6 +9,7 @@ from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.gui.main_window import MainWindow, compute_drawer_widths, compute_initial_geometry
 from gnovi_plot.gui.styles import PlotTheme
+from gnovi_plot.gui.widgets.analysis_result_view import AnalysisResultView
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.gui.widgets.dataset_panel import DatasetPanel
 from gnovi_plot.gui.widgets.figure_size_panel import LAYOUT_PRESETS
@@ -368,8 +369,8 @@ def test_figure_menu_shortcuts_open_the_figure_and_axes_drawer_pages(qapp):
 
 def test_working_is_not_a_page_in_the_left_tool_drawer(qapp):
     """Working Data moved to its own RIGHT drawer -- the LEFT drawer only
-    covers "what data/series/figure/layout/axes do I want to
-    plot/configure?" (Data/Plot/Series/Figure/Layout/Axes)."""
+    covers "what data/series/figure/layout/axes/analysis do I want to
+    plot/configure/run?" (Data/Plot/Series/Figure/Layout/Axes/Analysis)."""
     window = MainWindow()
     window.show()
 
@@ -380,6 +381,7 @@ def test_working_is_not_a_page_in_the_left_tool_drawer(qapp):
         "figure",
         "layout",
         "axes",
+        "analysis",
     }
     assert "working" not in window.tool_drawer._pages
     window.close()
@@ -900,13 +902,19 @@ def test_bottom_panel_hosts_the_data_preview_table_and_transformation_history(qa
     window.close()
 
 
-def test_results_tab_is_an_inert_placeholder(qapp):
-    """No fabricated analysis output -- just confirms the tab exists as a
-    plain, non-interactive placeholder widget (no buttons/inputs)."""
+def test_results_tab_hosts_the_analysis_result_view(qapp):
+    """The Results tab was originally an inert QLabel placeholder; it now
+    hosts the real, reusable `AnalysisResultView` (see
+    `BottomPanel.set_results_widget`), generic across every analysis tool
+    (curve fitting today) -- confirm it's that container, not the old
+    placeholder, and that it starts in its own empty state (no fabricated
+    analysis output before any analysis has actually been run)."""
     window = MainWindow()
     results_tab = window.bottom_panel.widget(3)
-    assert isinstance(results_tab, QLabel)
-    assert results_tab.findChildren(QWidget) == []
+
+    assert not isinstance(results_tab, QLabel)
+    assert window.analysis_result_view in results_tab.findChildren(AnalysisResultView)
+    assert window.analysis_result_view.result is None
     window.close()
 
 

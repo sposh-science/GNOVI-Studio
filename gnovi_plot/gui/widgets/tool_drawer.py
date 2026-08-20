@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QStackedWidget, QToolButton, QVBoxLayout, QWidget
@@ -66,6 +68,21 @@ def _make_icon(kind: str) -> QIcon:
         while y < size - m:
             painter.drawLine(m, y, m + 2, y)
             y += 5
+    elif kind == "analysis":
+        # A baseline with a smooth curve fitted over it -- distinct from
+        # "plot"'s jagged zigzag, since this glyph means "a curve fitted
+        # to data", not "raw data plotted".
+        painter.drawLine(m, size - m, size - m, size - m)
+        points = []
+        steps = 10
+        for i in range(steps + 1):
+            t = i / steps
+            x = m + t * (size - 2 * m)
+            bump = math.exp(-((t - 0.5) ** 2) / (2 * 0.15**2))
+            y = (size - m) - bump * (size - 2 * m) * 0.7
+            points.append((x, y))
+        for (x1, y1), (x2, y2) in zip(points, points[1:]):
+            painter.drawLine(int(x1), int(y1), int(x2), int(y2))
     painter.end()
     return QIcon(pixmap)
 
