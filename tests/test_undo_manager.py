@@ -48,6 +48,21 @@ def test_snapshot_reuses_the_live_dataset_object_by_identity():
     assert snapshot.panels[0].series[0].dataset is dataset
 
 
+def test_snapshot_preserves_panel_id():
+    """A snapshot represents the SAME panel at an earlier point in time, so
+    `Panel.id` must survive the deep copy unchanged -- unlike a true clone
+    (see `plotting.graph.clone_panel_with_shared_datasets`/
+    `clone_figure_with_shared_datasets`, which deliberately assign a fresh
+    id instead)."""
+    manager = DatasetManager()
+    figure = GnoviFigure()
+    original_id = figure.active_panel.id
+
+    snapshot = snapshot_figure(figure, manager)
+
+    assert snapshot.active_panel.id == original_id
+
+
 def test_mutating_the_live_figure_after_snapshotting_does_not_affect_the_snapshot():
     manager = DatasetManager()
     dataset = _make_dataset()

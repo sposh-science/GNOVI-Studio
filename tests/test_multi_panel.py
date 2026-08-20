@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 
 from gnovi_plot.data.dataset import Dataset
-from gnovi_plot.plotting.figure import GnoviFigure
+from gnovi_plot.plotting.figure import GnoviFigure, Panel
 from gnovi_plot.plotting.series import PlotSeries
 
 
@@ -199,3 +199,91 @@ def test_get_series_and_remove_series_search_across_panels():
 
     figure.remove_series(series_a.id)
     assert figure.panels[0].series == []
+
+
+# --- Panel.id: stable identity ----------------------------------------------
+
+
+def test_a_fresh_panel_has_a_non_empty_id():
+    figure = GnoviFigure()
+    assert figure.active_panel.id
+    assert isinstance(figure.active_panel.id, str)
+
+
+def test_two_fresh_panels_get_different_ids():
+    assert Panel().id != Panel().id
+
+
+def test_every_panel_in_a_multi_panel_layout_has_a_unique_id():
+    figure = GnoviFigure()
+    figure.set_layout(2, 2)
+
+    ids = [p.id for p in figure.panels]
+    assert len(set(ids)) == len(ids) == 4
+
+
+def test_set_layout_growth_preserves_the_existing_panels_own_id():
+    figure = GnoviFigure()
+    original_id = figure.active_panel.id
+
+    figure.set_layout(1, 2)
+
+    assert figure.panels[0].id == original_id
+
+
+def test_set_layout_shrink_then_regrow_never_reuses_a_dropped_panel_id():
+    figure = GnoviFigure()
+    figure.set_layout(2, 2)
+    dropped_ids = {p.id for p in figure.panels[1:]}
+
+    figure.set_layout(1, 1)
+    figure.set_layout(2, 2)
+
+    regrown_ids = {p.id for p in figure.panels[1:]}
+    assert regrown_ids.isdisjoint(dropped_ids)
+
+
+def test_switching_active_panel_never_changes_any_panel_id():
+    figure = GnoviFigure()
+    figure.set_layout(1, 2)
+    ids_before = [p.id for p in figure.panels]
+
+    figure.set_active_panel(1)
+    figure.set_active_panel(0)
+
+    assert [p.id for p in figure.panels] == ids_before
+
+
+# --- Panel.id: to_dict/from_dict round trip ---------------------------------
+
+
+def test_panel_id_round_trips_through_to_dict_from_dict():
+    panel = Panel()
+    restored = Panel.from_dict(panel.to_dict(), {})
+
+    assert restored.id == panel.id
+
+
+def test_panel_from_dict_generates_a_fresh_id_when_the_key_is_missing():
+    """A project saved before `Panel.id` existed has no `"id"` key in its
+    panel dicts at all -- loading it must not crash, and must not leave
+    the reconstructed panel with a falsy/missing id."""
+    data = Panel().to_dict()
+    del data["id"]
+
+    restored = Panel.from_dict(data, {})
+
+    assert restored.id
+    assert isinstance(restored.id, str)
+
+
+def test_panels_missing_ids_each_get_a_different_generated_id():
+    data_a = Panel().to_dict()
+    data_b = Panel().to_dict()
+    del data_a["id"]
+    del data_b["id"]
+
+    restored_a = Panel.from_dict(data_a, {})
+    restored_b = Panel.from_dict(data_b, {})
+
+    assert restored_a.id != restored_b.id

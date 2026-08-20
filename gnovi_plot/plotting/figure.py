@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -190,6 +191,19 @@ class Panel:
     # user explicitly loads a different Graph.
     source_graph_id: str | None = None
 
+    # Stable identity, same convention as `Dataset.id`/`PlotSeries.id`/
+    # `core.workbench.Workbench.id`/`plotting.graph.Graph.id`. Survives a
+    # plain edit, a Reset Panel to Defaults (see
+    # `gui.widgets.figure_properties_panel._PANEL_SNAPSHOT_EXCLUDED_FIELDS`),
+    # and a same-panel undo/redo snapshot (`gui.undo_manager.snapshot_figure`
+    # plain-`copy.deepcopy`s a Panel, which copies this field's value like
+    # any other). A TRUE independent clone/duplicate -- Graph Library
+    # save/load-into-panel, Workbench duplication -- must get a *fresh* id
+    # instead of carrying this one over; see
+    # `plotting.graph.clone_panel_with_shared_datasets`/
+    # `clone_figure_with_shared_datasets`, the only two places that happens.
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
     series: list[PlotSeries] = field(default_factory=list)
     _next_color_index: int = field(default=0, repr=False)
 
@@ -288,6 +302,7 @@ class Panel:
             "spine_linewidth": self.spine_linewidth,
             "panel_label": self.panel_label,
             "source_graph_id": self.source_graph_id,
+            "id": self.id,
             "next_color_index": self._next_color_index,
             "series": [s.to_dict() for s in self.series],
         }
@@ -297,10 +312,20 @@ class Panel:
         """Reconstruct from `to_dict`'s output. `dataset_lookup` resolves
         each series' `dataset_id` (see `PlotSeries.from_dict`); a series
         whose id isn't in the lookup is silently dropped, not an error --
-        see `core.project_io.load_project` for why."""
+        see `core.project_io.load_project` for why.
+
+        `id` is read from `data` when present; a project saved before
+        `Panel.id` existed simply has no `"id"` key, so `data.get("id")`
+        is `None` and a fresh one is generated instead -- exactly the same
+        "synthesize an id for pre-existing data that never had one" move
+        `core.project_io._migrate_v1_to_v2` already makes for old
+        Workbenches. No `PROJECT_FORMAT_VERSION` bump is needed for this:
+        it's a purely additive, `.get()`-defaulted key, the case that
+        version's own docstring exempts."""
         xlim = data.get("xlim")
         ylim = data.get("ylim")
         panel = cls(
+            id=data.get("id") or uuid.uuid4().hex,
             title=data.get("title", ""),
             xlabel=data.get("xlabel", ""),
             ylabel=data.get("ylabel", ""),

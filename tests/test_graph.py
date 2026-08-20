@@ -98,6 +98,22 @@ def test_save_current_panel_as_graph_adds_an_independent_snapshot():
     assert graph.panel.series[0].dataset is dataset  # but shares the live Dataset
 
 
+def test_save_current_panel_as_graph_gives_the_stored_panel_a_new_id():
+    """The stored Graph.panel is an independent clone, so it must not share
+    `Panel.id` with the live active panel it was saved from."""
+    dataset = _make_dataset()
+    manager = _manager_with(dataset)
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(dataset, "x", "y"))
+    live_panel_id = figure.active_panel.id
+
+    library = GraphLibrary()
+    graph = library.save_panel_as_graph(figure, "Graph 1", manager)
+
+    assert graph.panel.id != live_panel_id
+    assert figure.active_panel.id == live_panel_id  # live panel's own id is untouched
+
+
 def test_editing_the_live_panel_after_save_does_not_affect_the_stored_graph():
     dataset = _make_dataset()
     manager = _manager_with(dataset)
@@ -155,6 +171,18 @@ def test_duplicate_graph_produces_an_independent_copy_with_a_new_id():
     assert graph.panel.title == "Base"  # original untouched
 
 
+def test_duplicate_graph_gives_the_copied_panel_a_new_id():
+    dataset = _make_dataset()
+    manager = _manager_with(dataset)
+    figure = GnoviFigure()
+    library = GraphLibrary()
+    graph = library.save_panel_as_graph(figure, "Base Graph", manager)
+
+    copy_graph = library.duplicate(graph.id, manager)
+
+    assert copy_graph.panel.id != graph.panel.id
+
+
 def test_duplicate_unknown_graph_returns_none():
     library = GraphLibrary()
     manager = DatasetManager()
@@ -197,6 +225,31 @@ def test_load_graph_into_active_panel_replaces_it_with_an_independent_copy():
     assert target_figure.active_panel.title == "Saved"
     assert target_figure.active_panel.series[0].dataset is dataset
     assert target_figure.active_panel.series[0].color == "#123456"
+
+
+def test_load_graph_into_active_panel_gives_the_new_panel_a_new_id():
+    """Loading a graph into a panel replaces its content entirely -- the
+    architecture treats this as constructing a genuinely new panel (see
+    `clone_panel_with_shared_datasets`), so it must get a fresh id, never
+    reuse the panel slot's previous id nor the stored Graph's own panel
+    id (loading the same Graph into two different panels must not leave
+    them sharing an id either)."""
+    dataset = _make_dataset()
+    manager = _manager_with(dataset)
+    source_figure = GnoviFigure()
+    library = GraphLibrary()
+    graph = library.save_panel_as_graph(source_figure, "G", manager)
+
+    target_figure = GnoviFigure()
+    previous_panel_id = target_figure.active_panel.id
+    library.load_graph_into_panel(graph.id, target_figure, manager)
+
+    assert target_figure.active_panel.id != previous_panel_id
+    assert target_figure.active_panel.id != graph.panel.id
+
+    second_target = GnoviFigure()
+    library.load_graph_into_panel(graph.id, second_target, manager)
+    assert second_target.active_panel.id != target_figure.active_panel.id
 
 
 def test_load_graph_into_active_panel_returns_false_for_unknown_graph_id():
@@ -509,3 +562,57 @@ def test_update_graph_from_panel_returns_false_for_unknown_graph_id():
     figure = GnoviFigure()
 
     assert GraphLibrary().update_graph_from_panel("nope", figure, manager) is False
+
+
+def test_update_graph_from_panel_reclones_the_stored_panel_with_a_new_id():
+    """`update_graph_from_panel` replaces `graph.panel` with a fresh
+    `clone_panel_with_shared_datasets(...)` of the live active panel --
+    a genuinely new independent copy each time, so its id changes on every
+    Update, same as any other true clone (see `Graph.id`, not `Panel.id`,
+    is this Graph's stable identity across updates -- already covered by
+    `test_update_graph_from_panel_replaces_the_stored_snapshot`)."""
+    dataset = _make_dataset()
+    manager = _manager_with(dataset)
+    figure = GnoviFigure()
+    library = GraphLibrary()
+    graph = library.save_panel_as_graph(figure, "G1", manager)
+    stored_panel_id = library.get(graph.id).panel.id
+
+    figure.active_panel.title = "Updated"
+    library.update_graph_from_panel(graph.id, figure, manager)
+
+    assert library.get(graph.id).panel.id != stored_panel_id
+    assert library.get(graph.id).id == graph.id  # Graph identity itself is unaffected
+
+
+# --- clone_figure_with_shared_datasets: whole-figure independent copies -------
+
+
+def test_clone_figure_with_shared_datasets_gives_every_panel_a_new_id():
+    from gnovi_plot.plotting.graph import clone_figure_with_shared_datasets
+
+    dataset = _make_dataset()
+    manager = _manager_with(dataset)
+    figure = GnoviFigure()
+    figure.set_layout(2, 2)
+    original_ids = [p.id for p in figure.panels]
+
+    cloned = clone_figure_with_shared_datasets(figure, manager)
+    cloned_ids = [p.id for p in cloned.panels]
+
+    assert len(cloned_ids) == len(original_ids)
+    assert set(cloned_ids).isdisjoint(original_ids)
+    assert len(set(cloned_ids)) == len(cloned_ids)  # no collisions among the clones themselves
+
+
+def test_clone_figure_with_shared_datasets_still_shares_live_datasets():
+    from gnovi_plot.plotting.graph import clone_figure_with_shared_datasets
+
+    dataset = _make_dataset()
+    manager = _manager_with(dataset)
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(dataset, "x", "y"))
+
+    cloned = clone_figure_with_shared_datasets(figure, manager)
+
+    assert cloned.active_panel.series[0].dataset is dataset

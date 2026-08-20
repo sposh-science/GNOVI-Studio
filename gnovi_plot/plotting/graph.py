@@ -63,8 +63,20 @@ def dataset_identity_memo(dataset_manager) -> dict:
 def clone_panel_with_shared_datasets(panel: Panel, dataset_manager) -> Panel:
     """Deep-copy `panel` (series/styling/everything) while keeping every
     `PlotSeries.dataset` pointed at the same live `Dataset` instance from
-    `dataset_manager` -- see `dataset_identity_memo`."""
-    return copy.deepcopy(panel, dataset_identity_memo(dataset_manager))
+    `dataset_manager` -- see `dataset_identity_memo`.
+
+    Assigns the clone a *fresh* `Panel.id` -- this produces a genuinely
+    independent panel (Graph Library save/load-into-panel is its only
+    caller today), never "the same panel at a different point in time"
+    (that's `gui.undo_manager.snapshot_figure`'s plain `copy.deepcopy`
+    instead, which deliberately preserves `id`). Without this, e.g.
+    loading two different Graphs into two different panels that started
+    from the same stored `Graph.panel` would leave them sharing an id --
+    letting one panel's analysis-result history appear to belong to the
+    other."""
+    cloned = copy.deepcopy(panel, dataset_identity_memo(dataset_manager))
+    cloned.id = uuid.uuid4().hex
+    return cloned
 
 
 def clone_figure_with_shared_datasets(figure: GnoviFigure, dataset_manager) -> GnoviFigure:
@@ -76,5 +88,12 @@ def clone_figure_with_shared_datasets(figure: GnoviFigure, dataset_manager) -> G
     duplication (`core.project.Project.duplicate_workbench`) to produce an
     independent working copy of an entire Workbench's Figure -- every
     `Panel.source_graph_id` (Graph Library provenance) is preserved
-    automatically, since it's just another field in the copied tree."""
-    return copy.deepcopy(figure, dataset_identity_memo(dataset_manager))
+    automatically, since it's just another field in the copied tree.
+
+    Every cloned panel gets a *fresh* `Panel.id`, same reasoning as
+    `clone_panel_with_shared_datasets`: a duplicated Workbench must never
+    share panel identity with the Workbench it was duplicated from."""
+    cloned = copy.deepcopy(figure, dataset_identity_memo(dataset_manager))
+    for cloned_panel in cloned.panels:
+        cloned_panel.id = uuid.uuid4().hex
+    return cloned
