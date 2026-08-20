@@ -502,6 +502,96 @@ def test_active_workbench_id_not_matching_any_workbench_falls_back_to_first(tmp_
     assert loaded.active_workbench_id == loaded.workbenches[0].id
 
 
+# --- Panel.id: stable identity through save/load -------------------------------
+
+
+def test_panel_id_round_trips_through_save_and_load(tmp_path):
+    project, _dataset = _basic_project()
+    original_id = project.workbenches[0].figure.active_panel.id
+
+    out_path = save_project(project, tmp_path / "proj.gnovi")
+    loaded = load_project(out_path)
+
+    assert loaded.workbenches[0].figure.active_panel.id == original_id
+
+
+def test_loading_a_project_with_no_panel_id_generates_one(tmp_path):
+    """A `.gnovi` saved before `Panel.id` existed has no `"id"` key in its
+    panel dicts at all -- loading it must not crash, and must not leave
+    the reconstructed panel with a falsy/missing id. No
+    `PROJECT_FORMAT_VERSION` bump needed for this -- see `Panel.from_dict`."""
+    project, _dataset = _basic_project()
+    out_path = save_project(project, tmp_path / "proj.gnovi")
+    with zipfile.ZipFile(out_path) as zf:
+        manifest = json.loads(zf.read("project.json"))
+    del manifest["workbenches"][0]["figure"]["panels"][0]["id"]
+    stripped_path = _rewrite_manifest(out_path, tmp_path, manifest, out_name="no_panel_id.gnovi")
+
+    loaded = load_project(stripped_path)
+
+    panel = loaded.workbenches[0].figure.active_panel
+    assert panel.id
+    assert isinstance(panel.id, str)
+    # The rest of that panel's content loaded fine alongside the missing id.
+    assert len(loaded.workbenches[0].figure.series) == 1
+
+
+def test_panels_missing_ids_in_the_same_project_each_get_a_different_generated_id(tmp_path):
+    project, _dataset = _basic_project()
+    project.workbenches[0].figure.set_layout(1, 2)
+    out_path = save_project(project, tmp_path / "proj.gnovi")
+    with zipfile.ZipFile(out_path) as zf:
+        manifest = json.loads(zf.read("project.json"))
+    for panel_data in manifest["workbenches"][0]["figure"]["panels"]:
+        del panel_data["id"]
+    stripped_path = _rewrite_manifest(out_path, tmp_path, manifest, out_name="no_panel_ids.gnovi")
+
+    loaded = load_project(stripped_path)
+
+    ids = [p.id for p in loaded.workbenches[0].figure.panels]
+    assert len(ids) == 2
+    assert len(set(ids)) == 2  # no collision between the two generated ids
+
+
+def test_no_duplicate_panel_ids_across_a_multi_panel_multi_workbench_project(tmp_path):
+    project, _dataset = _basic_project()
+    project.workbenches[0].figure.set_layout(2, 2)
+    from gnovi_plot.core.workbench import Workbench
+
+    second_figure = GnoviFigure()
+    second_figure.set_layout(1, 2)
+    project.add_workbench(Workbench(name="Second", figure=second_figure))
+
+    out_path = save_project(project, tmp_path / "proj.gnovi")
+    loaded = load_project(out_path)
+
+    all_ids = [p.id for w in loaded.workbenches for p in w.figure.panels]
+    assert len(all_ids) == 6
+    assert len(set(all_ids)) == 6
+
+
+def test_existing_gnovi_file_saved_before_panel_id_still_loads_end_to_end(tmp_path):
+    """A realistic old-style file: format version 2, panels with no `id`
+    key at all (as every `.gnovi` saved before this change would be) --
+    the whole project must still load with all content intact, not just
+    the one touched panel."""
+    project, dataset = _basic_project()
+    project.workbenches[0].figure.active_panel.title = "Legacy Panel"
+    out_path = save_project(project, tmp_path / "proj.gnovi")
+    with zipfile.ZipFile(out_path) as zf:
+        manifest = json.loads(zf.read("project.json"))
+    assert manifest["project_format_version"] == PROJECT_FORMAT_VERSION
+    del manifest["workbenches"][0]["figure"]["panels"][0]["id"]
+    legacy_path = _rewrite_manifest(out_path, tmp_path, manifest, out_name="legacy.gnovi")
+
+    loaded = load_project(legacy_path)
+
+    assert loaded.workbenches[0].figure.active_panel.title == "Legacy Panel"
+    assert loaded.workbenches[0].figure.active_panel.id
+    assert loaded.dataset_manager.datasets[0].id == dataset.id
+    assert len(loaded.workbenches[0].figure.series) == 1
+
+
 # --- Multi-workbench v2 round trip ---------------------------------------------
 
 

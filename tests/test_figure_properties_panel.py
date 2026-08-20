@@ -156,3 +156,31 @@ def test_reset_to_defaults_resets_panel_and_figure_wide_grid_fields(qapp):
     defaults = GnoviFigure()
     assert figure.active_panel.title == ""
     assert figure.grid_alpha == pytest.approx(defaults.grid_alpha)
+
+
+def test_reset_to_defaults_preserves_the_active_panels_id(qapp):
+    """Reset Panel to Defaults must never reassign `Panel.id` -- doing so
+    would silently orphan that panel's own analysis-result history for a
+    completely unrelated "reset formatting" action."""
+    figure = GnoviFigure()
+    panel = FigurePropertiesPanel(figure)
+    original_id = figure.active_panel.id
+    panel.title_edit.setText("Changed")
+    panel._apply_title()
+
+    panel.reset_all_button.click()
+
+    assert figure.active_panel.id == original_id
+
+
+def test_capture_and_restore_state_preserves_the_panels_id(qapp):
+    figure = GnoviFigure()
+    panel = FigurePropertiesPanel(figure)
+    original_id = figure.active_panel.id
+    snapshot = panel.capture_state()
+
+    panel.title_edit.setText("Changed")
+    panel._apply_title()
+    panel.restore_state(snapshot)
+
+    assert figure.active_panel.id == original_id

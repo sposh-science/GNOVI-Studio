@@ -27,11 +27,14 @@ from gnovi_plot.plotting.graph_library import GraphLibrary
 # Panel dataclass fields excluded from Apply/Cancel/Reset snapshots: `series`
 # and `_next_color_index` are content, not display settings (Cancel/Reset
 # here must never drop plotted series), `panel_label` is auto-managed by
-# GnoviFigure, never user-edited, and `source_graph_id` is Graph Library
+# GnoviFigure, never user-edited, `source_graph_id` is Graph Library
 # provenance (see `Panel.source_graph_id`), never a display setting either --
 # Cancel/Reset here must never make a working copy forget which saved Graph
-# it originated from.
-_PANEL_SNAPSHOT_EXCLUDED_FIELDS = {"series", "_next_color_index", "panel_label", "source_graph_id"}
+# it originated from -- and `id` is stable panel identity (see `Panel.id`):
+# Reset Panel to Defaults must never reassign it, or a panel's own
+# analysis-result history would be silently orphaned by an unrelated
+# "reset formatting" action.
+_PANEL_SNAPSHOT_EXCLUDED_FIELDS = {"series", "_next_color_index", "panel_label", "source_graph_id", "id"}
 
 _LEGEND_LOCATIONS = [
     "best",

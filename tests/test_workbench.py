@@ -156,6 +156,22 @@ def test_duplicate_workbench_shares_datasets_but_not_figure_panel_series_state()
     assert len(original.figure.series) == 1
 
 
+def test_duplicate_workbench_gives_the_cloned_panel_a_new_id():
+    """A duplicated Workbench must never share `Panel.id` with the
+    Workbench it was duplicated from -- otherwise a fit run on one would
+    silently appear to belong to the other's structurally-identical panel
+    (see `plotting.graph.clone_figure_with_shared_datasets`)."""
+    dataset = _make_dataset()
+    project = Project.new()
+    project.dataset_manager.add(dataset)
+    original = project.workbenches[0]
+    original_panel_id = original.figure.active_panel.id
+
+    copy_workbench = project.duplicate_workbench(original.id)
+
+    assert copy_workbench.figure.active_panel.id != original_panel_id
+
+
 def test_duplicate_workbench_preserves_panel_source_graph_id():
     """Graph-origin metadata (Panel.source_graph_id) survives duplication --
     the duplicate still identifies the same origin Graph as the original."""
