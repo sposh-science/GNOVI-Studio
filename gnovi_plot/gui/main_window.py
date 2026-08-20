@@ -702,7 +702,7 @@ class MainWindow(QMainWindow):
         self.bottom_panel.set_data_widget(self.preview_table)
         self.bottom_panel.set_graphs_widget(self.graph_library_panel)
         self.bottom_panel.set_transformations_widget(self.data_tools_panel.history_group)
-        self.analysis_result_view = AnalysisResultView()
+        self.analysis_result_view = AnalysisResultView(self.figure_model, self.dataset_manager)
         self.bottom_panel.set_results_widget(self.analysis_result_view)
         self._bottom_panel_sizes: list[int] | None = None
 
@@ -1801,6 +1801,7 @@ class MainWindow(QMainWindow):
         self.figure_size_panel.set_figure(self.figure_model)
         self.figure_layout_panel.set_figure(self.figure_model)
         self.analysis_panel.set_figure(self.figure_model)
+        self.analysis_result_view.set_figure(self.figure_model)
 
         self._sync_undo_redo_actions()
         self._refresh_active_panel_context()
@@ -1821,6 +1822,7 @@ class MainWindow(QMainWindow):
 
         self.dataset_panel.set_manager(self.dataset_manager)
         self.analysis_panel.set_manager(self.dataset_manager)
+        self.analysis_result_view.set_manager(self.dataset_manager)
         self.graph_library_panel.set_library(project.graph_library)
 
         self._undo_managers = {}

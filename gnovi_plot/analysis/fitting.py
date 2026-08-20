@@ -33,8 +33,18 @@ class FitError(Exception):
 class FitResult(AnalysisResult):
     """The fitting-specific `AnalysisResult`: a model identifier, its
     fitted parameter values (and uncertainties, where the solver could
-    estimate them), goodness of fit, and a human-readable formula template
-    for the model itself (not the fitted numbers -- those are `params`).
+    estimate them), goodness-of-fit metrics, and a human-readable formula
+    template for the model itself (not the fitted numbers -- those are
+    `params`).
+
+    `residual_sum_of_squares`/`rmse`/`n_points` are computed once, at fit
+    time, from the exact data that was fit -- small, meaningful summary
+    scalars, stored alongside `r_squared` for the same reason it already
+    is. Full per-point residuals are deliberately *not* stored here (see
+    `compute_residuals`/`ResidualData`): they're exactly as large as the
+    source data, fully reconstructible from `model`/`params` plus the
+    source series' current data, so storing them would only be a
+    redundant, potentially-stale copy.
     """
 
     kind: ClassVar[str] = "fit"
@@ -44,6 +54,9 @@ class FitResult(AnalysisResult):
     param_errors: dict[str, float] | None
     r_squared: float
     formula: str
+    residual_sum_of_squares: float
+    rmse: float
+    n_points: int
 
     def summary(self) -> str:
         param_str = ", ".join(f"{name}={value:.4g}" for name, value in self.params.items())
@@ -56,13 +69,31 @@ class FitResult(AnalysisResult):
             value_text = f"{value:.6g} ± {error:.2g}" if error is not None else f"{value:.6g}"
             rows.append((name, value_text))
         rows.append(("R²", f"{self.r_squared:.6f}"))
-        rows.append(("Source dataset", self.source_dataset_id))
-        if self.source_series_id is not None:
-            rows.append(("Source series", self.source_series_id))
-        rows.append(("Columns", f"{self.x_column} → {self.y_column}"))
-        if self.row_range is not None:
-            rows.append(("Row range", f"{self.row_range[0]}–{self.row_range[1]}"))
+        adjusted = self.adjusted_r_squared()
+        if adjusted is not None:
+            rows.append(("R² (adjusted)", f"{adjusted:.6f}"))
+        rows.append(("RMSE", f"{self.rmse:.6g}"))
+        rows.append(("RSS", f"{self.residual_sum_of_squares:.6g}"))
         return rows
+
+    def adjusted_r_squared(self) -> float | None:
+        """R² adjusted for the number of fitted parameters -- `None` when
+        undefined: needs at least one residual degree of freedom beyond
+        fitting (`n_points > len(params) + 1`), the same condition
+        `fit_curve`'s own `_min_points` enforces for the *un-adjusted*
+        R²/RMSE to be meaningful in the first place, so this can only be
+        `None` for a fit that only just barely cleared that bar."""
+        n, p = self.n_points, len(self.params)
+        denominator = n - p - 1
+        if denominator <= 0:
+            return None
+        return 1.0 - (1.0 - self.r_squared) * (n - 1) / denominator
+
+    def supports_residuals(self) -> bool:
+        return True
+
+    def compute_residuals(self, x, y) -> "ResidualData":
+        return compute_residuals(self, x, y)
 
     def to_dict(self) -> dict:
         data = super().to_dict()
@@ -73,6 +104,9 @@ class FitResult(AnalysisResult):
                 "param_errors": dict(self.param_errors) if self.param_errors is not None else None,
                 "r_squared": self.r_squared,
                 "formula": self.formula,
+                "residual_sum_of_squares": self.residual_sum_of_squares,
+                "rmse": self.rmse,
+                "n_points": self.n_points,
             }
         )
         return data
@@ -88,17 +122,24 @@ def _min_points(model: str, degree: int) -> int:
     return _PARAM_COUNT[model] + 1
 
 
-def _r_squared(y: np.ndarray, y_pred: np.ndarray) -> float:
+def _fit_quality(y: np.ndarray, y_pred: np.ndarray) -> tuple[float, float, float]:
+    """`(r_squared, residual_sum_of_squares, rmse)` for `y` vs. `y_pred` --
+    one pass over the residuals for every scalar goodness-of-fit metric
+    `FitResult` stores, so they can never silently disagree with each
+    other."""
     residual = y - y_pred
     ss_res = float(np.sum(residual**2))
+    rmse = float(np.sqrt(ss_res / len(y))) if len(y) else 0.0
     ss_tot = float(np.sum((y - np.mean(y)) ** 2))
     if ss_tot == 0.0:
         # Constant y: any nonzero ss_tot-relative residual is a real miss,
         # but a solver's floating-point noise on an exact fit (e.g.
         # ~1e-27 from np.polyfit on flat data) must not read as one.
         scale = float(np.sum(y**2)) or 1.0
-        return 1.0 if ss_res <= 1e-9 * scale else 0.0
-    return 1.0 - ss_res / ss_tot
+        r_squared = 1.0 if ss_res <= 1e-9 * scale else 0.0
+    else:
+        r_squared = 1.0 - ss_res / ss_tot
+    return r_squared, ss_res, rmse
 
 
 def _errors_from_covariance(cov: np.ndarray, param_names: Sequence[str]) -> dict[str, float] | None:
@@ -189,7 +230,9 @@ def fit_curve(
     source_dataset_id: str,
     x_column: str,
     y_column: str,
+    source_dataset_name: str | None = None,
     source_series_id: str | None = None,
+    source_series_label: str | None = None,
     row_range: tuple[int, int] | None = None,
     degree: int = 2,
     initial_guess: Sequence[float] | None = None,
@@ -197,11 +240,15 @@ def fit_curve(
     """Fit `model` to `(x, y)` and return a `FitResult`.
 
     Pure numerical code: `x`/`y` are plain arrays, and `source_dataset_id`/
-    `source_series_id`/`x_column`/`y_column`/`row_range` are opaque
-    provenance values threaded straight into the returned `FitResult` --
-    this function never imports `Dataset`, Qt, or anything from
-    `gnovi_plot.plotting`. The caller (the GUI layer) is responsible for
-    supplying real ids.
+    `source_dataset_name`/`source_series_id`/`source_series_label`/
+    `x_column`/`y_column`/`row_range` are opaque provenance values
+    threaded straight into the returned `FitResult` -- this function never
+    imports `Dataset`, Qt, or anything from `gnovi_plot.plotting`. The
+    caller (the GUI layer) is responsible for supplying real ids/names.
+    `source_dataset_name`/`source_series_label` are a descriptive snapshot
+    of what was fitted, captured now because the caller has it live --
+    display code prefers this snapshot over re-resolving the id later
+    (see `AnalysisResult`'s docstring).
 
     `degree` only applies to `POLYNOMIAL` (default 2, i.e. quadratic).
     `initial_guess` only applies to `EXPONENTIAL`/`GAUSSIAN`, whose solver
@@ -249,11 +296,13 @@ def fit_curve(
     except Exception as exc:  # RuntimeError (no convergence), ValueError, LinAlgError, ...
         raise FitError(f"Fitting a {model} model failed: {exc}") from exc
 
-    r_squared = _r_squared(y_arr, y_pred)
+    r_squared, ss_res, rmse = _fit_quality(y_arr, y_pred)
 
     return FitResult(
         source_dataset_id=source_dataset_id,
+        source_dataset_name=source_dataset_name,
         source_series_id=source_series_id,
+        source_series_label=source_series_label,
         x_column=x_column,
         y_column=y_column,
         row_range=row_range,
@@ -262,6 +311,9 @@ def fit_curve(
         param_errors=errors,
         r_squared=r_squared,
         formula=formula,
+        residual_sum_of_squares=ss_res,
+        rmse=rmse,
+        n_points=len(x_arr),
     )
 
 
@@ -304,3 +356,32 @@ def sample_fit_curve(
         raise FitError(f"num_points must be at least 2 (got {num_points})")
     x = np.linspace(x_min, x_max, num_points)
     return x, evaluate_fit(result, x)
+
+
+@dataclass
+class ResidualData:
+    """Per-point residuals for a fit -- observed minus fitted, at whatever
+    `(x, y)` the caller supplies (typically the source series' *current*
+    data, re-extracted fresh; see `compute_residuals`). Never persisted:
+    fully reconstructible from a `FitResult`'s stored `model`/`params`
+    plus the source data, so storing it separately would only be a
+    redundant, potentially-stale copy (see `FitResult`'s own docstring).
+    """
+
+    x: np.ndarray
+    observed: np.ndarray
+    fitted: np.ndarray
+    residuals: np.ndarray  # observed - fitted
+
+
+def compute_residuals(result: FitResult, x: Sequence[float] | np.ndarray, y: Sequence[float] | np.ndarray) -> ResidualData:
+    """`observed - fitted` at `(x, y)`, using `result`'s fitted model via
+    `evaluate_fit` -- the same model-evaluation code `sample_fit_curve`
+    uses, so residuals can never disagree with what "Add Fit Curve to
+    Plot" actually drew. Pure: no Qt, no Dataset -- the caller resolves
+    `x`/`y` (e.g. from the live source series' current data).
+    """
+    x_arr = np.asarray(x, dtype=float)
+    y_arr = np.asarray(y, dtype=float)
+    fitted = evaluate_fit(result, x_arr)
+    return ResidualData(x=x_arr, observed=y_arr, fitted=fitted, residuals=y_arr - fitted)
