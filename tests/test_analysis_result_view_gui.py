@@ -42,6 +42,8 @@ def _make_dummy(**overrides) -> _DummyResult:
         x_column="x",
         y_column="y",
         row_range=None,
+        source_panel_id=None,
+        result_id="dummy-result-1",
         note="hello",
     )
     defaults.update(overrides)

@@ -830,6 +830,8 @@ class MainWindow(QMainWindow):
         self.figure_size_panel.panel_labels_check.toggled.connect(self._sync_panel_labels_action)
         self.analysis_panel.analysis_result_ready.connect(self._on_analysis_result_ready)
         self.analysis_panel.add_to_plot_requested.connect(self._on_add_to_plot)
+        self.analysis_panel.remove_fit_curve_requested.connect(self._on_remove_fit_curve)
+        self.analysis_panel.history_result_selected.connect(self._on_history_result_selected)
 
         self.workbench_tab_bar.workbench_selected.connect(self._on_workbench_tab_selected)
         self.workbench_tab_bar.new_workbench_requested.connect(self._on_new_workbench_requested)
@@ -1410,15 +1412,46 @@ class MainWindow(QMainWindow):
 
     def _on_analysis_result_ready(self, result) -> None:
         """An analysis tool (curve fitting today; any later tool the same
-        way) produced a result -- show it immediately rather than making
-        the scientist go find and open Results themselves. Reuses the
-        Bottom Panel visibility toggle's own restore-last-size logic
+        way) produced a result -- record it in the active Workbench's own
+        panel-scoped history (see `core.workbench.Workbench.
+        analysis_results`) and show it immediately rather than making the
+        scientist go find and open Results themselves. Reuses the Bottom
+        Panel visibility toggle's own restore-last-size logic
         (`_on_toggle_bottom_panel`) instead of duplicating it, by driving
-        the same action the View menu entry drives."""
+        the same action the View menu entry drives.
+
+        `analysis_results` is persisted project state (see that field's
+        own docstring) -- adding to it is a genuine content change, so
+        this marks the project dirty, same as any other edit that will
+        be saved. Merely *displaying* an existing result (panel switch,
+        Workbench switch, undo/redo -- see `_sync_results_to_active_panel`)
+        never does."""
+        if result.source_panel_id is not None:
+            self._project.active_workbench.analysis_results.add(result.source_panel_id, result)
+            self._set_dirty(True)
         self.analysis_result_view.show_result(result)
+        self.analysis_panel.sync_history(
+            self._project.active_workbench.analysis_results.all(self.figure_model.active_panel.id),
+            result,
+        )
         if not self.toggle_bottom_panel_action.isChecked():
             self.toggle_bottom_panel_action.setChecked(True)
         self.bottom_panel.show_results_tab()
+
+    def _on_history_result_selected(self, result) -> None:
+        """The scientist picked a different entry in the Analysis
+        History list (see `AnalysisPanel.history_result_selected`) --
+        record it as the active panel's new current result and show it,
+        without rerunning anything. `current_result_id` is persisted
+        project state (see `Workbench.analysis_results`), so this marks
+        the project dirty, same as `_on_analysis_result_ready`; no undo
+        checkpoint (selection isn't part of the figure/series undo
+        snapshot, same as any other display-only sync)."""
+        self._project.active_workbench.analysis_results.set_current(
+            self.figure_model.active_panel.id, result.result_id
+        )
+        self.analysis_result_view.show_result(result)
+        self._set_dirty(True)
 
     def _on_mouse_move(self, event) -> None:
         if event.inaxes is None or event.xdata is None or event.ydata is None:
@@ -1521,6 +1554,19 @@ class MainWindow(QMainWindow):
         self.series_panel.refresh(select_id=last_id)
         self._on_figure_content_changed()
 
+    def _on_remove_fit_curve(self, series_ids: list[str]) -> None:
+        """"Remove Fit Curve from Plot" -- removes only the derived
+        PlotSeries (see `AnalysisPanel.remove_fit_curve_requested`),
+        through the exact same removal path `PlotSeriesPanel`'s own
+        delete action uses, so it participates in Undo/Redo and dirty-
+        marking identically to any other series removal. Never touches
+        `FitResult`/history/Results/residuals -- those are untouched by
+        what's plotted (see `Workbench.analysis_results`)."""
+        for series_id in series_ids:
+            self.figure_model.remove_series(series_id)
+        self.series_panel.refresh()
+        self._on_figure_content_changed()
+
     def _on_clear_plot(self):
         self.figure_model.clear_series()
         self.series_panel.refresh()
@@ -1540,7 +1586,34 @@ class MainWindow(QMainWindow):
         self.analysis_panel.refresh()
         self._refresh_active_panel_context()
         self._sync_toolbar_panel_controls()
+        self._sync_results_to_active_panel()
         self._rerender()
+
+    def _sync_results_to_active_panel(self) -> None:
+        """Restore Results to whatever the *active* Workbench's *active*
+        panel's own analysis history says it should show -- never rerun
+        an analysis, never create a new result, purely display
+        restoration (see `core.workbench.Workbench.analysis_results`).
+
+        Call after anything that can change which panel/Workbench is
+        active: panel switch, layout change (both fire `panel_switched`,
+        see `_on_panel_switched`), Workbench switch/create/duplicate/
+        delete and New/Open Project (all funnel through
+        `_activate_workbench`), and undo/redo (`_restore_figure_snapshot`,
+        which can change `active_panel_index`/the panel set). Also prunes
+        the active Workbench's history to the panels that currently exist
+        in its figure -- cheap and idempotent, so running it on every
+        call needs no separate "did a layout change actually happen"
+        signal (see `Workbench.analysis_results.prune_to`)."""
+        workbench = self._project.active_workbench
+        workbench.analysis_results.prune_to({p.id for p in self.figure_model.panels})
+        panel_id = self.figure_model.active_panel.id
+        result = workbench.analysis_results.current(panel_id)
+        if result is not None:
+            self.analysis_result_view.show_result(result)
+        else:
+            self.analysis_result_view.clear()
+        self.analysis_panel.sync_history(workbench.analysis_results.all(panel_id), result)
 
     def _refresh_active_panel_context(self) -> None:
         """Refresh every page's "Active panel / Graph / Data" context line
@@ -1585,6 +1658,12 @@ class MainWindow(QMainWindow):
         self._rerender()
         self._refresh_active_panel_context()
         self.analysis_panel.refresh()
+        # Any series add/remove (via Analysis's own Add/Remove Fit Curve,
+        # or a plain delete on the Series page) can change whether a fit
+        # curve exists for the active panel's current result -- recompute
+        # Add/Remove Fit Curve state fresh rather than trusting whatever
+        # it was before this change.
+        self._sync_results_to_active_panel()
 
     def _commit_undo_checkpoint(self) -> None:
         """Push the snapshot captured just before this change (i.e. the
@@ -1655,6 +1734,7 @@ class MainWindow(QMainWindow):
         self._sync_toolbar_panel_controls()
         self._sync_theme_controls()
         self._sync_undo_redo_actions()
+        self._sync_results_to_active_panel()  # display sync only -- not itself an undo/redo step
         self._set_dirty(True)
         self._rerender()
 
@@ -1807,6 +1887,7 @@ class MainWindow(QMainWindow):
         self._refresh_active_panel_context()
         self._sync_toolbar_panel_controls()
         self._sync_theme_controls()  # the newly-active Workbench may have a different Plot Theme
+        self._sync_results_to_active_panel()  # never leak a previous Workbench's result into this one
         self._rerender()
 
     def _load_project_into_window(self, project: Project) -> None:

@@ -38,6 +38,18 @@ def test_two_workbenches_get_distinct_ids():
     assert a.id != b.id
 
 
+def test_fresh_workbench_has_empty_analysis_result_history():
+    workbench = Workbench(name="A", figure=GnoviFigure())
+    assert workbench.analysis_results.current(workbench.figure.active_panel.id) is None
+    assert workbench.analysis_results.all(workbench.figure.active_panel.id) == []
+
+
+def test_two_fresh_workbenches_get_independent_analysis_result_history_objects():
+    a = Workbench(name="A", figure=GnoviFigure())
+    b = Workbench(name="B", figure=GnoviFigure())
+    assert a.analysis_results is not b.analysis_results
+
+
 def test_workbench_does_not_duplicate_active_panel_state():
     """GnoviFigure.active_panel_index remains the sole owner of active-panel
     state -- Workbench never shadows it."""
@@ -69,6 +81,53 @@ def test_workbench_from_dict_missing_name_falls_back_to_a_default():
     data = {"id": "abc", "figure": GnoviFigure().to_dict()}
     restored = Workbench.from_dict(data, {})
     assert restored.name
+
+
+# --- Workbench: analysis_results persistence ----------------------------------
+
+
+def test_workbench_to_dict_from_dict_round_trips_analysis_results():
+    from gnovi_plot.analysis.fitting import LINEAR, POLYNOMIAL, fit_curve
+
+    dataset = _make_dataset()
+    figure = GnoviFigure()
+    figure.set_layout(1, 2)
+    panel_1_id = figure.panels[0].id
+    panel_2_id = figure.panels[1].id
+    workbench = Workbench(name="W", figure=figure)
+
+    linear = fit_curve(
+        [1.0, 2.0, 3.0], [2.0, 4.0, 6.0], LINEAR, source_dataset_id=dataset.id, x_column="x", y_column="y",
+        source_panel_id=panel_1_id,
+    )
+    polynomial = fit_curve(
+        [1.0, 2.0, 3.0, 4.0], [1.0, 4.0, 9.0, 16.0], POLYNOMIAL,
+        source_dataset_id=dataset.id, x_column="x", y_column="y", source_panel_id=panel_2_id,
+    )
+    workbench.analysis_results.add(panel_1_id, linear)
+    workbench.analysis_results.add(panel_2_id, polynomial)
+
+    data = workbench.to_dict()
+    restored = Workbench.from_dict(data, {dataset.id: dataset})
+
+    restored_linear = restored.analysis_results.current(panel_1_id)
+    restored_polynomial = restored.analysis_results.current(panel_2_id)
+    assert restored_linear.model == LINEAR
+    assert restored_linear.result_id == linear.result_id
+    assert restored_polynomial.model == POLYNOMIAL
+    assert restored_polynomial.result_id == polynomial.result_id
+
+
+def test_workbench_from_dict_with_no_analysis_results_key_gets_empty_history():
+    """A project saved before analysis-result persistence existed has no
+    `"analysis_results"` key at all -- must load with empty history, same
+    as New Project, not raise."""
+    figure = GnoviFigure()
+    data = {"id": "abc", "name": "Old Project Workbench", "figure": figure.to_dict()}
+
+    restored = Workbench.from_dict(data, {})
+
+    assert restored.analysis_results.current(restored.figure.active_panel.id) is None
 
 
 # --- Project: Workbench collection management --------------------------------
@@ -170,6 +229,40 @@ def test_duplicate_workbench_gives_the_cloned_panel_a_new_id():
     copy_workbench = project.duplicate_workbench(original.id)
 
     assert copy_workbench.figure.active_panel.id != original_panel_id
+
+
+def test_duplicate_workbench_does_not_inherit_the_originals_analysis_history():
+    """Runtime-only in this milestone: a duplicate must start with an
+    empty PanelResultHistory, never a copy of the original's -- even
+    though the panels are structurally identical, they have fresh ids
+    (see `test_duplicate_workbench_gives_the_cloned_panel_a_new_id`), so
+    there is nothing to correctly remap anyway."""
+    from gnovi_plot.analysis.results import AnalysisResult
+
+    dataset = _make_dataset()
+    project = Project.new()
+    project.dataset_manager.add(dataset)
+    original = project.workbenches[0]
+    original_panel_id = original.figure.active_panel.id
+    result = AnalysisResult(
+        source_dataset_id=dataset.id,
+        source_dataset_name=None,
+        source_series_id=None,
+        source_series_label=None,
+        x_column="x",
+        y_column="y",
+        row_range=None,
+        source_panel_id=original_panel_id,
+        result_id="result-1",
+    )
+    original.analysis_results.add(original_panel_id, result)
+
+    copy_workbench = project.duplicate_workbench(original.id)
+
+    assert copy_workbench.analysis_results.current(copy_workbench.figure.active_panel.id) is None
+    assert copy_workbench.analysis_results.all(copy_workbench.figure.active_panel.id) == []
+    # The original's own history is untouched by the duplication.
+    assert original.analysis_results.current(original_panel_id) is result
 
 
 def test_duplicate_workbench_preserves_panel_source_graph_id():

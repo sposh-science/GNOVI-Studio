@@ -204,20 +204,207 @@ def test_source_series_id_optional_and_row_range_optional():
     assert result.row_range is None
 
 
+def test_result_carries_source_panel_id_alongside_dataset_and_series_ids():
+    x = np.linspace(0, 10, 10)
+    y = 2.0 * x
+
+    result = fit_curve(
+        x,
+        y,
+        LINEAR,
+        source_dataset_id="dataset-abc",
+        source_series_id="series-xyz",
+        source_panel_id="panel-123",
+        x_column="x",
+        y_column="y",
+    )
+
+    assert result.source_panel_id == "panel-123"
+    assert result.source_series_id == "series-xyz"
+    assert result.source_dataset_id == "dataset-abc"
+
+
+def test_source_panel_id_defaults_to_none_when_not_supplied():
+    x = np.linspace(0, 10, 10)
+    y = 2.0 * x
+
+    result = fit_curve(x, y, LINEAR, source_dataset_id="dataset-abc", x_column="x", y_column="y")
+
+    assert result.source_panel_id is None
+
+
 def test_to_dict_is_json_safe_round_trip_shape():
     import json
 
     x = np.linspace(0, 10, 25)
     y = 3.0 * x + 2.0
 
-    result = fit_curve(x, y, LINEAR, row_range=(0, 25), **_PROVENANCE)
+    result = fit_curve(x, y, LINEAR, row_range=(0, 25), source_panel_id="panel-123", **_PROVENANCE)
     data = result.to_dict()
 
     assert data["kind"] == "fit"
     assert data["model"] == LINEAR
     assert data["row_range"] == [0, 25]
+    assert data["source_panel_id"] == "panel-123"
     assert isinstance(data["params"], dict)
     json.dumps(data)  # must not raise
+
+
+# --- result_id: stable identity, survives persistence -------------------------
+
+
+def test_every_fit_gets_a_fresh_result_id():
+    x = np.linspace(0, 10, 10)
+    y = 2.0 * x
+
+    a = fit_curve(x, y, LINEAR, source_dataset_id="d", x_column="x", y_column="y")
+    b = fit_curve(x, y, LINEAR, source_dataset_id="d", x_column="x", y_column="y")
+
+    assert a.result_id
+    assert b.result_id
+    assert a.result_id != b.result_id
+
+
+def test_result_id_is_not_a_caller_supplied_parameter():
+    """fit_curve() never accepts a result_id kwarg -- every call is a
+    genuinely new scientific result, always freshly generated."""
+    import inspect
+
+    assert "result_id" not in inspect.signature(fit_curve).parameters
+
+
+# --- FitResult.to_dict() / from_dict(): polymorphic persistence round trip ---
+
+
+def test_fit_result_to_dict_from_dict_round_trip_preserves_everything():
+    from gnovi_plot.analysis.results import result_from_dict
+
+    x = np.linspace(0, 10, 25)
+    y = 3.0 * x + 2.0 + np.array([0.0] * 24 + [0.3])  # tiny noise -> real param_errors
+    result = fit_curve(
+        x,
+        y,
+        LINEAR,
+        source_dataset_id="dataset-abc",
+        source_dataset_name="My Dataset",
+        source_series_id="series-xyz",
+        source_series_label="My Series",
+        x_column="voltage",
+        y_column="current",
+        row_range=(0, 25),
+        source_panel_id="panel-123",
+    )
+
+    restored = result_from_dict(result.to_dict())
+
+    assert isinstance(restored, FitResult)
+    assert restored.result_id == result.result_id
+    assert restored.source_panel_id == "panel-123"
+    assert restored.source_dataset_id == "dataset-abc"
+    assert restored.source_dataset_name == "My Dataset"
+    assert restored.source_series_id == "series-xyz"
+    assert restored.source_series_label == "My Series"
+    assert restored.x_column == "voltage"
+    assert restored.y_column == "current"
+    assert restored.row_range == (0, 25)
+    assert restored.model == result.model
+    assert restored.params == result.params
+    assert restored.param_errors == result.param_errors
+    assert restored.r_squared == result.r_squared
+    assert restored.formula == result.formula
+    assert restored.residual_sum_of_squares == result.residual_sum_of_squares
+    assert restored.rmse == result.rmse
+    assert restored.n_points == result.n_points
+    # Adjusted R^2 is derived (n_points/params/r_squared), never a stored
+    # field -- reproducing correctly is proof those inputs round-tripped.
+    assert restored.adjusted_r_squared() == result.adjusted_r_squared()
+
+
+def test_fit_curve_stamps_the_curve_sampling_range_from_the_fitted_data():
+    """`curve_x_min`/`curve_x_max`/`curve_num_points` are captured at fit
+    time, from the exact (x, y) fitted -- so "Add Fit Curve to Plot" can
+    later regenerate this exact curve without needing the source data's
+    *current* range (see `FitResult`'s own docstring)."""
+    from gnovi_plot.analysis.fitting import DEFAULT_CURVE_SAMPLES
+
+    x = np.linspace(-3.0, 7.0, 25)
+    y = 3.0 * x + 2.0
+
+    result = fit_curve(x, y, LINEAR, **_PROVENANCE)
+
+    assert result.curve_x_min == pytest.approx(-3.0)
+    assert result.curve_x_max == pytest.approx(7.0)
+    assert result.curve_num_points == DEFAULT_CURVE_SAMPLES
+
+
+def test_curve_sampling_range_round_trips_through_to_dict_from_dict():
+    from gnovi_plot.analysis.results import result_from_dict
+
+    x = np.linspace(0, 10, 25)
+    y = 3.0 * x + 2.0
+    result = fit_curve(x, y, LINEAR, **_PROVENANCE)
+
+    restored = result_from_dict(result.to_dict())
+
+    assert restored.curve_x_min == result.curve_x_min
+    assert restored.curve_x_max == result.curve_x_max
+    assert restored.curve_num_points == result.curve_num_points
+
+
+def test_from_dict_defaults_curve_sampling_range_to_none_when_absent():
+    """A `FitResult` persisted before this field existed lacks the key
+    entirely -- must load as `None`, not raise, so callers can fall back
+    to resolving the source's current live data range."""
+    from gnovi_plot.analysis.results import result_from_dict
+
+    x = np.linspace(0, 10, 10)
+    y = 2.0 * x
+    result = fit_curve(x, y, LINEAR, source_dataset_id="d", x_column="x", y_column="y")
+    data = result.to_dict()
+    del data["curve_x_min"]
+    del data["curve_x_max"]
+    del data["curve_num_points"]
+
+    restored = result_from_dict(data)
+
+    assert restored.curve_x_min is None
+    assert restored.curve_x_max is None
+    assert restored.curve_num_points is None
+
+
+def test_fit_result_from_dict_residuals_recompute_from_restored_fields():
+    """No residual arrays are ever persisted -- compute_residuals() on a
+    restored FitResult must still work, using the caller's live (x, y)."""
+    from gnovi_plot.analysis.results import result_from_dict
+
+    x = np.linspace(0, 10, 10)
+    y = 2.0 * x + 1.0
+    result = fit_curve(x, y, LINEAR, source_dataset_id="d", x_column="x", y_column="y")
+
+    restored = result_from_dict(result.to_dict())
+    residuals = restored.compute_residuals(x, y)
+
+    assert np.allclose(residuals.residuals, 0.0, atol=1e-9)
+
+
+def test_fit_result_from_dict_generates_a_result_id_when_absent():
+    """Defensive backward compatibility for a hypothetical file saved
+    between this field's introduction and its first real release --
+    mirrors Panel.id's own generate-on-load fallback."""
+    x = np.linspace(0, 10, 10)
+    y = 2.0 * x
+    data = fit_curve(x, y, LINEAR, source_dataset_id="d", x_column="x", y_column="y").to_dict()
+    del data["result_id"]
+
+    restored = FitResult.from_dict(data)
+
+    assert restored.result_id
+
+
+def test_fit_result_is_registered_for_polymorphic_dispatch():
+    from gnovi_plot.analysis.results import _RESULT_KIND_REGISTRY
+
+    assert _RESULT_KIND_REGISTRY["fit"] is FitResult
 
 
 def test_details_reports_parameter_uncertainty_when_available():

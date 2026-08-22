@@ -103,24 +103,27 @@ def test_undo_removes_the_fit_series_but_the_derived_dataset_stays_registered(qa
     window.close()
 
 
-def test_add_fit_curve_stays_usable_after_a_successful_add(qapp):
-    """Do NOT permanently disable "Add Fit Curve to Plot" merely because
-    the current fit has already been added once -- driven end-to-end
-    through the real _on_add_to_plot path this time (contrast with the
-    isolated-panel version of this test in test_analysis_panel_gui.py)."""
+def test_add_fit_curve_disables_after_a_successful_add_and_blocks_a_second_add(qapp):
+    """One FitResult.result_id maps to at most one generated PlotSeries in
+    its panel -- "Add Fit Curve to Plot" disables itself after a
+    successful add and a second click creates no second curve, driven
+    end-to-end through the real _on_add_to_plot path this time (contrast
+    with the isolated-panel version of this test in
+    test_analysis_panel_gui.py). See test_main_window_analysis_workflow_
+    gui.py for the full Add/Remove Fit Curve regression coverage."""
     window = MainWindow()
     window._on_add_to_plot([PlotSeries.line(_make_dataset(), "x", "y", label="Original curve")])
     window.tool_drawer._buttons["analysis"].click()
     window.analysis_panel.run_fit_button.click()
 
     window.analysis_panel.add_fit_curve_button.click()
-    assert window.analysis_panel.add_fit_curve_button.isEnabled()
+    assert not window.analysis_panel.add_fit_curve_button.isEnabled()
     assert len(window.figure_model.series) == 2
 
-    window.analysis_panel.add_fit_curve_button.click()  # add the same fit again
+    window.analysis_panel.add_fit_curve_button.click()  # disabled -- Qt no-op
 
-    assert len(window.figure_model.series) == 3
-    assert len(window.dataset_manager.datasets) == 2  # one derived Dataset per add
+    assert len(window.figure_model.series) == 2
+    assert len(window.dataset_manager.datasets) == 1  # no second derived Dataset
     window.close()
 
 
