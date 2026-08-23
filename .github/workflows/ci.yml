@@ -78,7 +78,7 @@ jobs:
       # also introducing an untested Python version at the same time.
       - name: Install Python 3.12 and Qt runtime libraries (Fedora)
         run: |
-          dnf install -y python3.12 mesa-libEGL mesa-libGL libxkbcommon
+          dnf install -y python3.12 mesa-libEGL mesa-libGL libxkbcommon fontconfig
 
       - name: Install GNOVI + test dependencies
         run: |
