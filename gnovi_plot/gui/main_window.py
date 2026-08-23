@@ -3,7 +3,7 @@ from pathlib import Path
 
 from matplotlib.backends import backend_qt
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
-from PySide6.QtCore import QPointF, QRect, QRectF, QSettings, Qt
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSettings, Qt
 from PySide6.QtGui import (
     QActionGroup,
     QColor,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QScrollArea,
     QSplitter,
@@ -542,6 +543,7 @@ class MainWindow(QMainWindow):
         self.plot_canvas.mpl_connect("motion_notify_event", self._on_mouse_move)
         self.plot_canvas.mpl_connect("figure_leave_event", self._on_mouse_leave)
         self.plot_canvas.mpl_connect("button_press_event", self._on_canvas_click)
+        self.plot_canvas.mpl_connect("button_press_event", self._on_canvas_context_menu)
         self.plot_canvas.set_cursor_mode(self._cursor_mode)
 
         self.preview_table = QTableView()
@@ -968,7 +970,7 @@ class MainWindow(QMainWindow):
         self.duplicate_workbench_action.triggered.connect(
             lambda: self._on_duplicate_workbench_requested(self._project.active_workbench_id)
         )
-        self.delete_workbench_action = self.workbench_menu.addAction("Delete Workbench")
+        self.delete_workbench_action = self.workbench_menu.addAction("Close Workbench")
         self.delete_workbench_action.triggered.connect(
             lambda: self._on_delete_workbench_requested(self._project.active_workbench_id)
         )
@@ -1480,6 +1482,60 @@ class MainWindow(QMainWindow):
             return
         self._set_active_panel(index)
 
+    def _on_canvas_context_menu(self, event) -> None:
+        """Right-click inside a Panel's Axes opens a context menu targeting
+        that Panel. Connected alongside (never instead of) `_on_canvas_click`
+        -- both are separate `mpl_connect("button_press_event", ...)`
+        callbacks, so a right-click still runs `_on_canvas_click`'s own
+        activate-on-click logic first, exactly like a left-click would (it
+        doesn't check `event.button` at all). This handler only adds what a
+        plain click doesn't already do: activate the clicked Panel even if
+        it's already active (a plain click's early-return would otherwise
+        skip that -- right-clicking an already-active Panel must still
+        target it), then show the menu.
+
+        Menu actions call the exact same handlers the Panels menu uses
+        (e.g. `_on_extract_panel_requested`, which reads
+        `self.figure_model.active_panel`) -- never a second extraction
+        implementation -- so activating the clicked Panel first is what
+        makes "the actually right-clicked Panel" and "the active Panel"
+        the same thing by the time the action runs."""
+        if event.button != 3 or event.inaxes is None:
+            return
+        index = self.plot_canvas.panel_index_for_axes(event.inaxes)
+        if index is None:
+            return
+        if index != self.figure_model.active_panel_index:
+            self._set_active_panel(index)
+        self._show_panel_context_menu(self._canvas_event_global_pos(event))
+
+    def _canvas_event_global_pos(self, event) -> QPoint:
+        """`event`'s canvas-pixel position (Matplotlib's `x`/`y`, origin
+        bottom-left) converted to a global screen position for `QMenu.exec`
+        -- the same bottom-left-to-top-left y flip `PlotCanvas.
+        _update_active_panel_badge` already uses for the active-panel
+        badge's own canvas-relative positioning."""
+        local = QPoint(round(event.x), round(self.plot_canvas.height() - event.y))
+        return self.plot_canvas.mapToGlobal(local)
+
+    def _show_panel_context_menu(self, global_pos) -> None:
+        """The right-clicked Panel's context menu -- for this PR, just
+        "Extract Panel to New Workbench", invoking the exact same
+        `_on_extract_panel_requested` handler as "Panels -> Extract Active
+        Panel to New Workbench" (see that method's own docstring): the
+        clicked Panel is already active by the time this runs (see
+        `_on_canvas_context_menu`), so both entry points act on the same
+        `self.figure_model.active_panel` through the same domain operation,
+        `core.project.Project.extract_panel_to_workbench`. Focus/Maximize
+        and Export are deliberately not offered here yet -- they arrive
+        with their own implementations in later PRs, not as dead menu
+        items."""
+        menu = QMenu(self)
+        extract_action = menu.addAction("Extract Panel to New Workbench")
+        chosen = menu.exec(global_pos)
+        if chosen is extract_action:
+            self._on_extract_panel_requested()
+
     def _on_dataset_selected(self, dataset):
         self.preview_model.set_dataframe(dataset.dataframe if dataset is not None else None)
         self.data_tools_panel.set_dataset(dataset)
@@ -1920,10 +1976,10 @@ class MainWindow(QMainWindow):
         self.data_tools_panel.set_dataset(None)
         self._set_dirty(False)
 
-    # --- Workbenches (switch/create/rename/duplicate/delete) ---------------
+    # --- Workbenches (switch/create/rename/duplicate/close) ----------------
 
     def _sync_workbench_menu_state(self) -> None:
-        """Delete Workbench must be disabled whenever exactly one Workbench
+        """Close Workbench must be disabled whenever exactly one Workbench
         remains -- a `Project` always keeps at least one (see
         `Project.remove_workbench`)."""
         self.delete_workbench_action.setEnabled(len(self._project.workbenches) > 1)
@@ -2008,8 +2064,8 @@ class MainWindow(QMainWindow):
             return
         response = QMessageBox.warning(
             self,
-            "Delete Workbench",
-            f'Delete Workbench "{workbench.name}"? This cannot be undone.',
+            "Close Workbench",
+            f'Close Workbench "{workbench.name}"? This cannot be undone.',
             QMessageBox.Yes | QMessageBox.Cancel,
             QMessageBox.Cancel,
         )
@@ -2018,7 +2074,7 @@ class MainWindow(QMainWindow):
         removed = self._project.remove_workbench(workbench_id)
         if not removed:
             return
-        # Drop the deleted Workbench's runtime Undo/Redo state -- it can
+        # Drop the closed Workbench's runtime Undo/Redo state -- it can
         # never be switched back to.
         self._undo_managers.pop(workbench_id, None)
         self._pending_snapshots.pop(workbench_id, None)

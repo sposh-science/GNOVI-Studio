@@ -771,7 +771,7 @@ def test_workbench_menu_has_new_rename_duplicate_delete_actions(qapp):
     assert window.new_workbench_action.text() == "New Workbench"
     assert window.rename_workbench_action.text() == "Rename Workbench"
     assert window.duplicate_workbench_action.text() == "Duplicate Workbench"
-    assert window.delete_workbench_action.text() == "Delete Workbench"
+    assert window.delete_workbench_action.text() == "Close Workbench"
     window.close()
 
 
@@ -844,6 +844,25 @@ def test_delete_workbench_action_removes_on_confirmation(qapp, monkeypatch):
     window.delete_workbench_action.trigger()
 
     assert len(window._project.workbenches) == 1
+    window.close()
+
+
+def test_closing_the_active_workbench_lands_on_the_previous_one(qapp, monkeypatch):
+    """"Close Workbench" wording change aside, the underlying
+    `Project.remove_workbench` next-active-Workbench selection is
+    unchanged -- closing the active (second, most-recently-created)
+    Workbench must land back on the first one."""
+    window = _make_window(qapp)
+    first_id = window._project.active_workbench_id
+    window.workbench_tab_bar.new_button.click()
+    second_id = window._project.active_workbench_id
+    assert second_id != first_id
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Yes))
+
+    window.delete_workbench_action.trigger()
+
+    assert window._project.active_workbench_id == first_id
+    assert window._current_workbench_id == first_id
     window.close()
 
 

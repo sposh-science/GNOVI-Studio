@@ -19,13 +19,13 @@ class WorkbenchTabBar(QWidget):
 
     Deliberately has no per-tab close button (`setTabsClosable` stays
     False) -- too easy to mis-click for a destructive action. Rename/
-    Duplicate/Delete are reached via right-click context menu here (see
+    Duplicate/Close are reached via right-click context menu here (see
     `context_menu_requested`) as a secondary path; the primary path is the
     top-level "Workbench" menu (`MainWindow._create_menu`), which fires the
     exact same signals against whichever Workbench is currently active.
-    Delete is always routed through the owner for confirmation + "keep at
+    Close is always routed through the owner for confirmation + "keep at
     least one" enforcement (`Project.remove_workbench`) -- this widget
-    never deletes anything itself.
+    never removes anything itself.
 
     Long names elide (`QTabBar.setElideMode` + the `max-width` QSS rule on
     `QTabBar#WorkbenchTabBar::tab`) with the full name as a native tooltip;
@@ -112,7 +112,7 @@ class WorkbenchTabBar(QWidget):
         menu = QMenu(self)
         rename_action = menu.addAction("Rename Workbench")
         duplicate_action = menu.addAction("Duplicate Workbench")
-        delete_action = menu.addAction("Delete Workbench")
+        delete_action = menu.addAction("Close Workbench")
         delete_action.setEnabled(self.tab_bar.count() > 1)
 
         chosen = menu.exec(self.tab_bar.mapToGlobal(pos))
