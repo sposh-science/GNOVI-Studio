@@ -19,6 +19,10 @@ htmlcov/
 .vscode/
 .idea/
 
+# Local-only development-tool instructions (see PROJECT_GUIDE.md, the
+# tracked, tool-neutral authoritative source for project guidance).
+CLAUDE.md
+
 .DS_Store
 
 # Manual testing artifacts (saved projects / exported figures)
