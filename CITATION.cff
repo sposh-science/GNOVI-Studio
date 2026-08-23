@@ -11,7 +11,12 @@ repository-code: "https://github.com/wavicles/GNOVI-Studio"
 url: "https://github.com/wavicles/GNOVI-Studio"
 version: 0.9.0
 date-released: 2026-08-23
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.22066803"
+    description: "Zenodo DOI for GNOVI Studio v0.9.0"
 abstract: >-
   Scientific Plotting & Analysis Studio -- a cross-platform Python desktop
-  application for scientific plotting, experimental data visualization,
-  equation graphing, and publication-quality figure creation.
+  application for scientific plotting, experimental data visualization and
+  analysis, calculated/derived data workflows, and publication-quality figure
+  creation.
