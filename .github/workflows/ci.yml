@@ -64,3 +64,34 @@ jobs:
         # non-blocking (fail_ci_if_error: false) so a Codecov upload issue
         # never fails an otherwise-green pytest run. See PR description for
         # the external setup step this needs.
+
+  test-fedora:
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:44
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fedora 44's default `python3` is 3.14. This job intentionally installs
+      # the versioned python3.12 package instead, so this first Fedora
+      # portability job tests "GNOVI on a second Linux distribution" without
+      # also introducing an untested Python version at the same time.
+      - name: Install Python 3.12 and Qt runtime libraries (Fedora)
+        run: |
+          dnf install -y python3.12 python3.12-pip mesa-libEGL mesa-libGL libxkbcommon
+
+      - name: Install GNOVI + test dependencies
+        run: |
+          python3.12 -m pip install --upgrade pip
+          python3.12 -m pip install -e ".[test]"
+
+      - name: Verify headless Qt import/startup
+        run: |
+          python3.12 -c "
+          from PySide6.QtWidgets import QApplication
+          app = QApplication([])
+          print('QApplication created OK:', app)
+          "
+
+      - name: Run tests (Fedora)
+        run: python3.12 -m pytest
