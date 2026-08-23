@@ -1,8 +1,8 @@
 # GNOVI Studio
 
-[![CI](https://github.com/wavicles/Gnovi-Plot/actions/workflows/ci.yml/badge.svg)](https://github.com/wavicles/Gnovi-Plot/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/wavicles/Gnovi-Plot/actions/workflows/codeql.yml/badge.svg)](https://github.com/wavicles/Gnovi-Plot/actions/workflows/codeql.yml)
-[![Python](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fwavicles%2FGnovi-Plot%2Fmain%2Fpyproject.toml&query=%24.project.requires-python&label=python)](pyproject.toml)
+[![CI](https://github.com/wavicles/GNOVI-Studio/actions/workflows/ci.yml/badge.svg)](https://github.com/wavicles/GNOVI-Studio/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/wavicles/GNOVI-Studio/actions/workflows/codeql.yml/badge.svg)](https://github.com/wavicles/GNOVI-Studio/actions/workflows/codeql.yml)
+[![Python](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fwavicles%2FGNOVI-Studio%2Fmain%2Fpyproject.toml&query=%24.project.requires-python&label=python)](pyproject.toml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 
 Scientific Plotting & Analysis Studio.

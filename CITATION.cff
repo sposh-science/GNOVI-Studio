@@ -7,8 +7,8 @@ authors:
     family-names: Patil
     alias: wavicles
 license: GPL-3.0-or-later
-repository-code: "https://github.com/wavicles/Gnovi-Plot"
-url: "https://github.com/wavicles/Gnovi-Plot"
+repository-code: "https://github.com/wavicles/GNOVI-Studio"
+url: "https://github.com/wavicles/GNOVI-Studio"
 abstract: >-
   Scientific Plotting & Analysis Studio -- a cross-platform Python desktop
   application for scientific plotting, experimental data visualization,
