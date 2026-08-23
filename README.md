@@ -1,6 +1,8 @@
 # GNOVI Studio
 
 [![CI](https://github.com/wavicles/Gnovi-Plot/actions/workflows/ci.yml/badge.svg)](https://github.com/wavicles/Gnovi-Plot/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/wavicles/Gnovi-Plot/actions/workflows/codeql.yml/badge.svg)](https://github.com/wavicles/Gnovi-Plot/actions/workflows/codeql.yml)
+[![Python](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fwavicles%2FGnovi-Plot%2Fmain%2Fpyproject.toml&query=%24.project.requires-python&label=python)](pyproject.toml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 
 Scientific Plotting & Analysis Studio.
@@ -10,9 +12,20 @@ data visualization, equation graphing, and publication-quality figure creation.
 
 ## Status
 
-Early development. Milestone 1: a minimal, runnable PySide6 application with an
-embedded Matplotlib canvas — the foundation the rest of the application will be
-built on.
+GNOVI Studio is under active development. Core scientific plotting,
+multi-panel Workbenches, project persistence, graph reuse, curve fitting,
+fit diagnostics, residual analysis, and panel-scoped analysis history are
+implemented and covered by automated tests on Linux (Ubuntu) and Windows.
+
+## Platform Support
+
+Linux is the primary development platform. Ubuntu is the reference Linux
+environment validated by continuous integration. Windows is also CI-tested on
+every push and pull request.
+
+GNOVI Studio is designed to remain distribution-independent and is intended
+to work on other Linux distributions, although Ubuntu is currently the Linux
+distribution validated automatically.
 
 ## Development setup (Linux)
 

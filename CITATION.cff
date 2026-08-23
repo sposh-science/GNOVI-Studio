@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: GNOVI Studio
+type: software
+authors:
+  - given-names: Praveen
+    family-names: Patil
+    alias: wavicles
+license: GPL-3.0-or-later
+repository-code: "https://github.com/wavicles/Gnovi-Plot"
+url: "https://github.com/wavicles/Gnovi-Plot"
+abstract: >-
+  Scientific Plotting & Analysis Studio -- a cross-platform Python desktop
+  application for scientific plotting, experimental data visualization,
+  equation graphing, and publication-quality figure creation.
