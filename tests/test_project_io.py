@@ -592,6 +592,205 @@ def test_existing_gnovi_file_saved_before_panel_id_still_loads_end_to_end(tmp_pa
     assert len(loaded.workbenches[0].figure.series) == 1
 
 
+# --- Analysis history: persistence through save/reopen -------------------------
+
+
+def test_analysis_history_round_trips_across_save_and_reopen(tmp_path):
+    """The exact required workflow: 3 panels, Linear fit on panel 1,
+    Gaussian fit on panel 2, nothing on panel 3 -- save, reopen. Both
+    fits must come back as real `FitResult` objects reconstructed from
+    the persisted history (never re-derived from the fit-derived
+    Dataset), with correct type/model/parameters/statistics/provenance;
+    panel 3 stays empty; panel-switch-style lookup behaves identically to
+    before saving; residuals recompute correctly from the restored
+    FitResult plus the live (reloaded) source data."""
+    from gnovi_plot.analysis.fitting import GAUSSIAN, LINEAR, FitResult, fit_curve
+    from gnovi_plot.data.numeric import numeric_xy
+
+    dataset_a = Dataset(
+        name="linear-data",
+        dataframe=pd.DataFrame({"x": list(range(10)), "y": [2.0 * i + 1.0 for i in range(10)]}),
+    )
+    dataset_b = Dataset(
+        name="gaussian-data",
+        dataframe=pd.DataFrame(
+            {
+                "x": [float(i) for i in range(20)],
+                "y": [10.0 * 2.71828 ** (-((i - 10.0) ** 2) / (2 * 3.0**2)) for i in range(20)],
+            }
+        ),
+    )
+    project = Project.new()
+    project.dataset_manager.add(dataset_a)
+    project.dataset_manager.add(dataset_b)
+    workbench = project.workbenches[0]
+    workbench.figure.set_layout(1, 3)
+    panel_1_id = workbench.figure.panels[0].id
+    panel_2_id = workbench.figure.panels[1].id
+    panel_3_id = workbench.figure.panels[2].id
+
+    workbench.figure.set_active_panel(0)
+    series_a = PlotSeries.line(dataset_a, "x", "y")
+    workbench.figure.add_series(series_a)
+    x_a, y_a = numeric_xy(series_a.dataframe, "x", "y")
+    result_a = fit_curve(
+        x_a.to_numpy(),
+        y_a.to_numpy(),
+        LINEAR,
+        source_dataset_id=dataset_a.id,
+        source_dataset_name=dataset_a.name,
+        source_series_id=series_a.id,
+        source_series_label=series_a.label,
+        x_column="x",
+        y_column="y",
+        source_panel_id=panel_1_id,
+    )
+    workbench.analysis_results.add(panel_1_id, result_a)
+
+    workbench.figure.set_active_panel(1)
+    series_b = PlotSeries.line(dataset_b, "x", "y")
+    workbench.figure.add_series(series_b)
+    x_b, y_b = numeric_xy(series_b.dataframe, "x", "y")
+    result_b = fit_curve(
+        x_b.to_numpy(),
+        y_b.to_numpy(),
+        GAUSSIAN,
+        source_dataset_id=dataset_b.id,
+        source_dataset_name=dataset_b.name,
+        source_series_id=series_b.id,
+        source_series_label=series_b.label,
+        x_column="x",
+        y_column="y",
+        source_panel_id=panel_2_id,
+    )
+    workbench.analysis_results.add(panel_2_id, result_b)
+    # Panel 3: deliberately no analysis.
+
+    out_path = save_project(project, tmp_path / "proj.gnovi")
+    loaded = load_project(out_path)
+
+    loaded_workbench = loaded.workbenches[0]
+    loaded_result_a = loaded_workbench.analysis_results.current(panel_1_id)
+    loaded_result_b = loaded_workbench.analysis_results.current(panel_2_id)
+
+    # Panel 1: correct type/model/parameters/statistics/provenance.
+    assert isinstance(loaded_result_a, FitResult)
+    assert loaded_result_a.model == LINEAR
+    assert loaded_result_a.params == pytest.approx(result_a.params)
+    assert loaded_result_a.param_errors == result_a.param_errors
+    assert loaded_result_a.r_squared == pytest.approx(result_a.r_squared)
+    assert loaded_result_a.adjusted_r_squared() == pytest.approx(result_a.adjusted_r_squared())
+    assert loaded_result_a.rmse == pytest.approx(result_a.rmse)
+    assert loaded_result_a.residual_sum_of_squares == pytest.approx(result_a.residual_sum_of_squares)
+    assert loaded_result_a.n_points == result_a.n_points
+    assert loaded_result_a.source_dataset_id == dataset_a.id
+    assert loaded_result_a.source_dataset_name == "linear-data"
+    assert loaded_result_a.source_series_id == series_a.id
+    assert loaded_result_a.source_series_label == series_a.label
+    assert loaded_result_a.source_panel_id == panel_1_id
+    assert loaded_result_a.result_id == result_a.result_id
+
+    # Panel 2: a different model, independently correct.
+    assert isinstance(loaded_result_b, FitResult)
+    assert loaded_result_b.model == GAUSSIAN
+    assert loaded_result_b.result_id == result_b.result_id
+    assert loaded_result_b.source_panel_id == panel_2_id
+
+    # Panel 3: Results stays empty.
+    assert loaded_workbench.analysis_results.current(panel_3_id) is None
+
+    # Switching through all 3 panels behaves identically to before saving
+    # (the same `current(panel_id)` lookup MainWindow's
+    # `_sync_results_to_active_panel` uses for real panel-switch restore).
+    for panel_id, expected_id in [
+        (panel_1_id, result_a.result_id),
+        (panel_2_id, result_b.result_id),
+        (panel_3_id, None),
+    ]:
+        current = loaded_workbench.analysis_results.current(panel_id)
+        assert (current.result_id if current is not None else None) == expected_id
+
+    # Residuals recompute correctly from the restored FitResult + live
+    # (reloaded) source data -- nothing about residuals was ever persisted.
+    loaded_series_a = loaded_workbench.figure.get_series(series_a.id)
+    x_live, y_live = numeric_xy(loaded_series_a.dataframe, "x", "y")
+    restored_residuals = loaded_result_a.compute_residuals(x_live.to_numpy(), y_live.to_numpy())
+    original_residuals = result_a.compute_residuals(x_a.to_numpy(), y_a.to_numpy())
+    assert restored_residuals.residuals == pytest.approx(original_residuals.residuals)
+
+
+def test_analysis_history_persistence_works_with_project_io_alone(tmp_path):
+    """The polymorphic dispatch registry (see `analysis.results.
+    register_result_kind`) must be populated by `project_io.py`'s own
+    import alone -- proves `load_project` correctly reconstructs a
+    persisted FitResult in a *fresh process* that never imports anything
+    from the GUI layer (`gui.widgets.analysis_panel`, which also imports
+    `analysis.fitting`, and could otherwise be silently doing the
+    registration instead of `project_io.py`). A same-process assertion
+    like "`gnovi_plot.gui...` not in `sys.modules`" would be meaningless
+    here -- pytest's own collection has almost certainly already imported
+    the GUI layer via other test files by the time this test runs."""
+    import subprocess
+    import sys
+
+    dataset = _simple_dataset()
+    project = Project.new()
+    project.dataset_manager.add(dataset)
+    workbench = project.workbenches[0]
+    panel_id = workbench.figure.active_panel.id
+    from gnovi_plot.analysis.fitting import LINEAR, fit_curve
+
+    result = fit_curve(
+        [1.0, 2.0, 3.0],
+        [2.0, 4.0, 6.0],
+        LINEAR,
+        source_dataset_id=dataset.id,
+        x_column="x",
+        y_column="y",
+        source_panel_id=panel_id,
+    )
+    workbench.analysis_results.add(panel_id, result)
+    out_path = save_project(project, tmp_path / "proj.gnovi")
+
+    script = f"""
+import sys
+assert "gnovi_plot.gui" not in sys.modules
+from gnovi_plot.core.project_io import load_project
+loaded = load_project(r{out_path.as_posix()!r})
+restored = loaded.workbenches[0].analysis_results.current({panel_id!r})
+assert restored is not None, "analysis result was not restored"
+assert restored.result_id == {result.result_id!r}
+assert type(restored).__name__ == "FitResult"
+print("OK")
+"""
+    proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OK" in proc.stdout
+
+
+def test_analysis_history_key_absent_in_a_pre_existing_gnovi_file_loads_empty(tmp_path):
+    """An old `.gnovi` saved before analysis-history persistence existed
+    has no `"analysis_results"` key in any workbench dict at all --
+    loading it must not crash, and every Workbench simply gets empty
+    history, same as New Project. No `PROJECT_FORMAT_VERSION` bump
+    needed -- see `Workbench.to_dict()`'s own docstring."""
+    project, _dataset = _basic_project()
+    out_path = save_project(project, tmp_path / "proj.gnovi")
+    with zipfile.ZipFile(out_path) as zf:
+        manifest = json.loads(zf.read("project.json"))
+    assert manifest["project_format_version"] == PROJECT_FORMAT_VERSION
+    del manifest["workbenches"][0]["analysis_results"]
+    legacy_path = _rewrite_manifest(out_path, tmp_path, manifest, out_name="no_analysis_results.gnovi")
+
+    loaded = load_project(legacy_path)
+
+    panel_id = loaded.workbenches[0].figure.active_panel.id
+    assert loaded.workbenches[0].analysis_results.current(panel_id) is None
+    # The rest of that workbench's content loaded fine alongside the
+    # missing key.
+    assert len(loaded.workbenches[0].figure.series) == 1
+
+
 # --- Multi-workbench v2 round trip ---------------------------------------------
 
 

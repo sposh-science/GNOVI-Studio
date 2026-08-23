@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import ClassVar
@@ -7,7 +8,7 @@ from typing import ClassVar
 import numpy as np
 from scipy.optimize import curve_fit
 
-from gnovi_plot.analysis.results import AnalysisResult
+from gnovi_plot.analysis.results import AnalysisResult, register_result_kind
 
 LINEAR = "linear"
 POLYNOMIAL = "polynomial"
@@ -21,6 +22,12 @@ MODELS: tuple[str, ...] = (LINEAR, POLYNOMIAL, EXPONENTIAL, GAUSSIAN)
 # `degree` (see `_min_points`).
 _PARAM_COUNT = {LINEAR: 2, EXPONENTIAL: 3, GAUSSIAN: 4}
 
+# Default density for a regenerated fit curve's smooth (x, y) samples (see
+# `sample_fit_curve`) -- defined here, ahead of `fit_curve`, so a freshly
+# computed `FitResult` can stamp its own `curve_num_points` with it at fit
+# time (see `FitResult.curve_num_points`).
+DEFAULT_CURVE_SAMPLES = 200
+
 
 class FitError(Exception):
     """Raised when a curve fit cannot be performed: not enough numeric
@@ -29,6 +36,7 @@ class FitError(Exception):
     message -- mirrors `analysis.cycles.CycleDetectionError`."""
 
 
+@register_result_kind
 @dataclass
 class FitResult(AnalysisResult):
     """The fitting-specific `AnalysisResult`: a model identifier, its
@@ -45,6 +53,22 @@ class FitResult(AnalysisResult):
     source data, fully reconstructible from `model`/`params` plus the
     source series' current data, so storing them would only be a
     redundant, potentially-stale copy.
+
+    `curve_x_min`/`curve_x_max`/`curve_num_points` are the sampling range
+    `fit_curve()` was actually run against -- captured once, at fit time,
+    from the exact (finite) `x` array fitted, exactly like `n_points`.
+    Unlike `n_points` (a count of *source* data points, used for
+    goodness-of-fit stats), these describe the smooth *rendered curve*
+    `sample_fit_curve` should redraw, independent of whatever the source
+    series' live data range happens to be later. "Add Fit Curve to Plot"
+    (see `gui.widgets.analysis_panel.AnalysisPanel._resolve_curve_range`)
+    prefers this stored range so regenerating a fit curve for a result
+    from `analysis.panel_results.PanelResultHistory` -- possibly long
+    after its derived `PlotSeries` was removed, possibly after a project
+    reload -- reproduces exactly what was actually fitted/plotted at
+    analysis time, not whatever the source data looks like *now*. `None`
+    for a `FitResult` persisted before this field existed; callers fall
+    back to resolving the source's current live data range in that case.
     """
 
     kind: ClassVar[str] = "fit"
@@ -57,6 +81,9 @@ class FitResult(AnalysisResult):
     residual_sum_of_squares: float
     rmse: float
     n_points: int
+    curve_x_min: float | None = None
+    curve_x_max: float | None = None
+    curve_num_points: int | None = None
 
     def summary(self) -> str:
         param_str = ", ".join(f"{name}={value:.4g}" for name, value in self.params.items())
@@ -110,9 +137,49 @@ class FitResult(AnalysisResult):
                 "residual_sum_of_squares": self.residual_sum_of_squares,
                 "rmse": self.rmse,
                 "n_points": self.n_points,
+                "curve_x_min": self.curve_x_min,
+                "curve_x_max": self.curve_x_max,
+                "curve_num_points": self.curve_num_points,
             }
         )
         return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "FitResult":
+        """Reconstruct from `to_dict()`'s output (see
+        `analysis.results.result_from_dict`, the polymorphic dispatcher
+        that calls this). Never reconstructs residuals -- those are
+        always recomputed on demand from the restored fields plus the
+        source series' *current* live data (see `compute_residuals`),
+        exactly as for a same-session result. `result_id`/`source_panel_id`
+        fall back to a freshly generated id / `None` when absent, for a
+        hypothetical file saved between this field's introduction and its
+        first real release -- not a case expected in practice, but the
+        same defensive "generate on load if missing" `Panel.id` already
+        established (see `plotting.figure.Panel.from_dict`)."""
+        row_range = data.get("row_range")
+        return cls(
+            source_dataset_id=data["source_dataset_id"],
+            source_dataset_name=data.get("source_dataset_name"),
+            source_series_id=data.get("source_series_id"),
+            source_series_label=data.get("source_series_label"),
+            x_column=data["x_column"],
+            y_column=data["y_column"],
+            row_range=tuple(row_range) if row_range is not None else None,
+            source_panel_id=data.get("source_panel_id"),
+            result_id=data.get("result_id") or uuid.uuid4().hex,
+            model=data["model"],
+            params=dict(data["params"]),
+            param_errors=dict(data["param_errors"]) if data.get("param_errors") is not None else None,
+            r_squared=data["r_squared"],
+            formula=data["formula"],
+            residual_sum_of_squares=data["residual_sum_of_squares"],
+            rmse=data["rmse"],
+            n_points=data["n_points"],
+            curve_x_min=data.get("curve_x_min"),
+            curve_x_max=data.get("curve_x_max"),
+            curve_num_points=data.get("curve_num_points"),
+        )
 
 
 def _min_points(model: str, degree: int) -> int:
@@ -237,6 +304,7 @@ def fit_curve(
     source_series_id: str | None = None,
     source_series_label: str | None = None,
     row_range: tuple[int, int] | None = None,
+    source_panel_id: str | None = None,
     degree: int = 2,
     initial_guess: Sequence[float] | None = None,
 ) -> FitResult:
@@ -244,14 +312,19 @@ def fit_curve(
 
     Pure numerical code: `x`/`y` are plain arrays, and `source_dataset_id`/
     `source_dataset_name`/`source_series_id`/`source_series_label`/
-    `x_column`/`y_column`/`row_range` are opaque provenance values
-    threaded straight into the returned `FitResult` -- this function never
-    imports `Dataset`, Qt, or anything from `gnovi_plot.plotting`. The
-    caller (the GUI layer) is responsible for supplying real ids/names.
-    `source_dataset_name`/`source_series_label` are a descriptive snapshot
-    of what was fitted, captured now because the caller has it live --
-    display code prefers this snapshot over re-resolving the id later
-    (see `AnalysisResult`'s docstring).
+    `x_column`/`y_column`/`row_range`/`source_panel_id` are opaque
+    provenance values threaded straight into the returned `FitResult` --
+    this function never imports `Dataset`, Qt, or anything from
+    `gnovi_plot.plotting`. The caller (the GUI layer) is responsible for
+    supplying real ids/names. `source_dataset_name`/`source_series_label`
+    are a descriptive snapshot of what was fitted, captured now because
+    the caller has it live -- display code prefers this snapshot over
+    re-resolving the id later (see `AnalysisResult`'s docstring).
+    `source_panel_id` is `Panel.id` of whatever panel this fit was run
+    against, if any (see `AnalysisResult.source_panel_id`). The returned
+    `FitResult`'s own `result_id` is always freshly generated here --
+    never a caller-supplied parameter, since every call to `fit_curve()`
+    is a genuinely new scientific result (see `AnalysisResult.result_id`).
 
     `degree` only applies to `POLYNOMIAL` (default 2, i.e. quadratic).
     `initial_guess` only applies to `EXPONENTIAL`/`GAUSSIAN`, whose solver
@@ -309,6 +382,8 @@ def fit_curve(
         x_column=x_column,
         y_column=y_column,
         row_range=row_range,
+        source_panel_id=source_panel_id,
+        result_id=uuid.uuid4().hex,
         model=model,
         params=params,
         param_errors=errors,
@@ -317,10 +392,10 @@ def fit_curve(
         residual_sum_of_squares=ss_res,
         rmse=rmse,
         n_points=len(x_arr),
+        curve_x_min=float(x_arr.min()),
+        curve_x_max=float(x_arr.max()),
+        curve_num_points=DEFAULT_CURVE_SAMPLES,
     )
-
-
-DEFAULT_CURVE_SAMPLES = 200
 
 
 def evaluate_fit(result: FitResult, x: Sequence[float] | np.ndarray) -> np.ndarray:

@@ -20,6 +20,36 @@ _EMPTY_STATE_TEXT = (
 _RESIDUALS_UNAVAILABLE_TEXT = "Residuals unavailable -- the source dataset/series no longer exists."
 
 
+def resolve_live_xy(figure: GnoviFigure | None, manager: DatasetManager | None, result: AnalysisResult):
+    """The source series'/dataset's *current* numeric (x, y) data for
+    `result` -- `None` if nothing resolves any more (dataset/series
+    removed) or the data isn't numeric. Shared by `AnalysisResultView`
+    (on-demand residual computation, see `_show_residuals_for`) and
+    `gui.widgets.analysis_panel.AnalysisPanel` (regenerating a fit curve
+    for a result whose own stored `curve_x_min`/`curve_x_max` are
+    unavailable, see `AnalysisPanel._resolve_curve_range`) -- both need
+    exactly this same live resolution, never a frozen snapshot."""
+    series = None
+    if result.source_series_id is not None and figure is not None:
+        series = figure.get_series(result.source_series_id)
+
+    if series is not None:
+        dataframe = series.dataframe
+    else:
+        dataset = manager.get(result.source_dataset_id) if manager is not None else None
+        if dataset is None:
+            return None
+        dataframe = dataset.dataframe
+        if result.row_range is not None:
+            start, end = result.row_range
+            dataframe = dataframe.iloc[start:end]
+
+    try:
+        return numeric_xy(dataframe, result.x_column, result.y_column)
+    except (KeyError, InsufficientNumericDataError):
+        return None
+
+
 class AnalysisResultView(QWidget):
     """Read-only display for the most recently produced `AnalysisResult`.
 
@@ -212,27 +242,9 @@ class AnalysisResultView(QWidget):
 
     def _resolve_live_xy(self, result: AnalysisResult):
         """The source series'/dataset's *current* numeric (x, y) data, for
-        on-demand residual computation -- `None` if nothing resolves any
-        more (dataset/series removed) or the data isn't numeric."""
-        series = None
-        if result.source_series_id is not None and self._figure is not None:
-            series = self._figure.get_series(result.source_series_id)
-
-        if series is not None:
-            dataframe = series.dataframe
-        else:
-            dataset = self._manager.get(result.source_dataset_id) if self._manager is not None else None
-            if dataset is None:
-                return None
-            dataframe = dataset.dataframe
-            if result.row_range is not None:
-                start, end = result.row_range
-                dataframe = dataframe.iloc[start:end]
-
-        try:
-            return numeric_xy(dataframe, result.x_column, result.y_column)
-        except (KeyError, InsufficientNumericDataError):
-            return None
+        on-demand residual computation -- see the shared `resolve_live_xy`
+        module function."""
+        return resolve_live_xy(self._figure, self._manager, result)
 
     def _on_view_residuals_clicked(self) -> None:
         if self._result is not None:

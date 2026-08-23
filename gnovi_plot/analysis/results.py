@@ -31,6 +31,40 @@ class AnalysisResult:
     (positional, end-exclusive, `DataFrame.iloc`-style), mirroring
     `PlotSeries.row_range`; `None` means the whole dataset.
 
+    `source_panel_id` is `Panel.id` (see `plotting.figure.Panel`) -- the
+    panel this result was produced against, stable across renumbering/
+    layout changes/undo-redo. Used by `analysis.panel_results.
+    PanelResultHistory` (owned by `core.workbench.Workbench`) to restore
+    the right result when the active panel/Workbench changes -- never a
+    panel index or "Panel N" display text, both of which are positional
+    and can silently point at the wrong panel after a layout edit. `None`
+    for a result not associated with any panel (defensive/future case;
+    such a result is simply never added to a `PanelResultHistory`).
+
+    `result_id` is this result's *own* stable identity -- unlike every
+    other id field here (which all point at something else), this is
+    what lets other state point *at* this result and still find it after
+    a save/reload round trip, when Python object identity is gone. Today
+    that's the derived fit Dataset's `metadata["result_id"]` (see
+    `gui.widgets.analysis_panel._on_add_fit_curve_clicked`), which is how
+    "Remove Fit Curve from Plot" finds exactly the `PlotSeries` a given
+    `FitResult` produced -- deliberately never a name/label match, since
+    labels are user-editable and non-unique. Named `result_id` rather
+    than the bare `id` every other domain object (`Dataset`/`PlotSeries`/
+    `Panel`/`Workbench`/`Graph`) uses for its own identity, specifically
+    because this one is primarily consumed as a cross-reference embedded
+    inside a *different* object's metadata, where a bare `"id"` would be
+    ambiguous against that object's own.
+
+    Both `source_panel_id` and `result_id` are required (not defaulted)
+    like every other provenance field here -- `AnalysisResult` has no
+    defaulted fields, since `FitResult` (and any later subclass) adds its
+    own required fields after these, and a dataclass can't mix the two
+    (see PEP 557's default-argument-ordering rule); every field here is
+    always passed explicitly by its caller regardless. `fit_curve()`
+    generates a fresh `result_id` for every new fit; `FitResult.from_dict`
+    restores the one that was persisted, so identity survives reload.
+
     Pure data plus a small display contract (`summary`/`details`/
     `provenance_details`/`report_text`) any results view can render
     without knowing the concrete subclass. No Qt, no plotting, no project
@@ -44,6 +78,8 @@ class AnalysisResult:
     x_column: str
     y_column: str
     row_range: tuple[int, int] | None
+    source_panel_id: str | None
+    result_id: str
 
     kind: ClassVar[str] = "analysis"
 
@@ -131,4 +167,44 @@ class AnalysisResult:
             "x_column": self.x_column,
             "y_column": self.y_column,
             "row_range": list(self.row_range) if self.row_range is not None else None,
+            "source_panel_id": self.source_panel_id,
+            "result_id": self.result_id,
         }
+
+
+# --- Polymorphic (kind -> subclass) reconstruction --------------------------
+#
+# `AnalysisResult` stays fully generic (never imports `FitResult` or any
+# other concrete subclass); a concrete subclass registers itself here
+# instead (see `analysis.fitting.FitResult`'s `@register_result_kind`).
+# `result_from_dict` is the one place that dispatches on `kind` -- callers
+# (see `analysis.panel_results.PanelResultHistory.from_dict`) never
+# hard-code which concrete types exist. Adding a later analysis tool
+# (peak analysis, statistics, FFT, smoothing, ...) means giving it its own
+# `AnalysisResult` subclass with `@register_result_kind` and its own
+# `from_dict`, nothing here changes.
+_RESULT_KIND_REGISTRY: dict[str, type["AnalysisResult"]] = {}
+
+
+def register_result_kind(result_cls: type["AnalysisResult"]) -> type["AnalysisResult"]:
+    """Class decorator: register a concrete `AnalysisResult` subclass's
+    `kind` for polymorphic `result_from_dict` dispatch."""
+    _RESULT_KIND_REGISTRY[result_cls.kind] = result_cls
+    return result_cls
+
+
+def result_from_dict(data: dict) -> "AnalysisResult":
+    """Reconstruct the correct concrete `AnalysisResult` subclass from
+    `data["kind"]` (see `to_dict()`). Raises `ValueError` for an
+    unrecognized kind -- callers persisting a whole history (see
+    `PanelResultHistory.from_dict`) are expected to catch this per-entry
+    and skip/log rather than fail the whole load, the same tolerance
+    `core.project_io.load_project` already gives a stale `PlotSeries`
+    reference; a *result* subclass this app doesn't know about yet
+    (e.g. saved by a newer version) is not this app's fault to crash
+    over."""
+    kind = data.get("kind")
+    result_cls = _RESULT_KIND_REGISTRY.get(kind)
+    if result_cls is None:
+        raise ValueError(f"Unknown analysis result kind: {kind!r}")
+    return result_cls.from_dict(data)

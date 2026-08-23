@@ -11,6 +11,14 @@ from pathlib import Path
 
 import pandas as pd
 
+# Registers FitResult (kind "fit") with `analysis.results.result_from_dict`'s
+# polymorphic dispatch table -- imported here, not just relied upon
+# transitively via the GUI layer, so that `load_project` alone (no GUI
+# import required, e.g. a script or a headless test) is guaranteed to
+# recognize every analysis-result kind this app currently ships. A future
+# analysis tool (peak analysis, statistics, FFT, smoothing, ...) needs
+# exactly one more import here, nothing else in this module.
+import gnovi_plot.analysis.fitting  # noqa: F401
 from gnovi_plot.core.app_info import __version__ as APP_VERSION
 from gnovi_plot.core.project import Project
 from gnovi_plot.core.workbench import DEFAULT_WORKBENCH_NAME, Workbench
