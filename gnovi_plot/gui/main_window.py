@@ -954,6 +954,9 @@ class MainWindow(QMainWindow):
         self.panels_menu.addSeparator()
         self.extract_panel_action = self.panels_menu.addAction("Extract Active Panel to New Workbench")
         self.extract_panel_action.triggered.connect(self._on_extract_panel_requested)
+        self.panels_menu.addSeparator()
+        self.export_panel_action = self.panels_menu.addAction("Export Active Panel…")
+        self.export_panel_action.triggered.connect(self._on_export_panel_requested)
 
         # Dedicated top-level menu (not nested under File) -- these act on
         # whichever Workbench is currently active, exactly mirroring what
@@ -1519,22 +1522,27 @@ class MainWindow(QMainWindow):
         return self.plot_canvas.mapToGlobal(local)
 
     def _show_panel_context_menu(self, global_pos) -> None:
-        """The right-clicked Panel's context menu -- for this PR, just
-        "Extract Panel to New Workbench", invoking the exact same
-        `_on_extract_panel_requested` handler as "Panels -> Extract Active
-        Panel to New Workbench" (see that method's own docstring): the
+        """The right-clicked Panel's context menu -- "Extract Panel to New
+        Workbench" and "Export Panel…", invoking the exact same
+        `_on_extract_panel_requested`/`_on_export_panel_requested` handlers
+        the Panels menu's "Extract Active Panel to New Workbench"/"Export
+        Active Panel…" actions use (see those methods' own docstrings): the
         clicked Panel is already active by the time this runs (see
-        `_on_canvas_context_menu`), so both entry points act on the same
-        `self.figure_model.active_panel` through the same domain operation,
-        `core.project.Project.extract_panel_to_workbench`. Focus/Maximize
-        and Export are deliberately not offered here yet -- they arrive
-        with their own implementations in later PRs, not as dead menu
-        items."""
+        `_on_canvas_context_menu`), so every entry point acts on the same
+        `self.figure_model.active_panel` through the same domain
+        operations -- never a second extraction or export implementation.
+        Focus/Maximize is deliberately not offered here yet -- it arrives
+        with its own implementation in a later PR, not as a dead menu
+        item."""
         menu = QMenu(self)
         extract_action = menu.addAction("Extract Panel to New Workbench")
+        menu.addSeparator()
+        export_action = menu.addAction("Export Panel…")
         chosen = menu.exec(global_pos)
         if chosen is extract_action:
             self._on_extract_panel_requested()
+        elif chosen is export_action:
+            self._on_export_panel_requested()
 
     def _on_dataset_selected(self, dataset):
         self.preview_model.set_dataframe(dataset.dataframe if dataset is not None else None)
@@ -1695,6 +1703,29 @@ class MainWindow(QMainWindow):
 
     def _on_export_figure(self):
         dialog = ExportFigureDialog(self.figure_model, self.plot_canvas, self)
+        dialog.exec()
+
+    def _on_export_panel_requested(self) -> None:
+        """"Panels -> Export Active Panel…" and the Panel context menu's
+        "Export Panel…" both funnel here -- the one handler either entry
+        point uses (see `_show_panel_context_menu`), always acting on
+        `self.figure_model.active_panel` (already the actually-clicked
+        Panel by the time the context-menu path calls this, same as
+        `_on_extract_panel_requested`). Opens the same `ExportFigureDialog`
+        class "Export Figure…" uses, constructed with `panel=`/
+        `dataset_manager=` so it exports only this one Panel via the
+        headless transient-Figure path (see `export.figure_export.
+        build_panel_export_figure`/`export_panel`) instead of the live
+        canvas -- never touches `self._project`, never marks it dirty,
+        never creates a Workbench, never touches Undo/Redo: the dialog
+        itself performs the export directly on accept, nothing here does."""
+        dialog = ExportFigureDialog(
+            self.figure_model,
+            self.plot_canvas,
+            self,
+            panel=self.figure_model.active_panel,
+            dataset_manager=self.dataset_manager,
+        )
         dialog.exec()
 
     def _rerender(self):
