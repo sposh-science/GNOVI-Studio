@@ -5,54 +5,148 @@
 [![Python](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fwavicles%2FGNOVI-Studio%2Fmain%2Fpyproject.toml&query=%24.project.requires-python&label=python)](pyproject.toml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 
-Scientific Plotting & Analysis Studio.
+**Scientific Plotting & Analysis Studio** — a cross-platform Python desktop
+application for scientific plotting, experimental data analysis, and
+publication-quality figure creation.
 
-A cross-platform Python desktop application for scientific plotting, experimental
-data visualization, equation graphing, and publication-quality figure creation.
+GNOVI Studio helps researchers, students, and scientific Python users import
+experimental data, build multi-panel figures, and run reproducible
+curve-fitting analysis in a single open-source desktop application.
 
-## Status
+## Overview
 
-GNOVI Studio is under active development. Core scientific plotting,
-multi-panel Workbenches, project persistence, graph reuse, curve fitting,
-fit diagnostics, residual analysis, and panel-scoped analysis history are
-implemented and covered by automated tests on Linux (Ubuntu) and Windows.
+GNOVI Studio is built on NumPy, SciPy, pandas, and Matplotlib, and is
+designed to keep the full analysis workflow — from imported data, through
+curve fitting, to a finished figure — transparent and reproducible. It
+targets researchers and students who want a dedicated plotting and analysis
+tool rather than assembling one from scripts and notebooks each time.
+
+## Features
+
+**Data import**
+- CSV, TXT, TSV, and DAT import
+- Preview-driven import with automatic header/data-row detection
+- Raw and working-data workflow, so imported data is never modified in place
+- Calculated/derived columns using mathematical expressions
+
+**Plotting & figures**
+- Multi-series plotting
+- Multi-panel figures
+- Workbenches for organizing related plots and datasets
+- Graph Library for saving and reusing graph definitions
+- Panel/layout and figure customization
+
+**Analysis**
+- Curve fitting
+- Fit diagnostics and residual analysis
+- Panel-scoped analysis history
+- Add/Remove Fit Curve on a figure
+
+**Project & output**
+- Project save/open
+- Undo/redo
+- Publication-quality figure export (PNG, TIFF, SVG, PDF)
+
+## Scientific Analysis
+
+GNOVI Studio's curve fitting is built around a small, well-tested set of
+models:
+
+- Linear
+- Polynomial
+- Exponential
+- Gaussian
+
+For each fit, GNOVI reports R², adjusted R², and parameter uncertainty
+estimates, and provides residual diagnostics to help assess fit quality.
+Analysis results are kept in a persistent, panel-scoped history, and fitted
+curves can be added to or removed from a figure directly.
 
 ## Platform Support
 
-Linux is the primary development platform. Ubuntu is the reference Linux
-environment validated by continuous integration, with full test coverage
-reporting. Windows is also CI-tested on every push and pull request.
+Linux is the primary development platform, with Ubuntu as the reference
+Linux environment.
 
-GNOVI Studio is designed to remain distribution-independent. This is now
-verified by continuous integration: Fedora is also CI-tested on every push
-and pull request, running the full test suite in a pinned Fedora container.
-Fedora validation is newer than the Ubuntu and Windows checks and is not yet
-a required check for merging, but it exercises the same test suite as the
-reference platform.
+Continuous integration currently validates:
 
-## Development setup (Linux)
+- Ubuntu
+- Fedora
+- Windows
 
-Create and activate a virtual environment:
+macOS is not currently CI-validated.
+
+## Installation & Running from Source
+
+GNOVI Studio is currently run from source. It is not yet published on PyPI,
+and no packaged installer or executable is provided.
+
+**Linux**
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-```
-
-Install the project (with test dependencies):
-
-```bash
 pip install -e ".[test]"
-```
-
-## Running the application
-
-```bash
 python -m gnovi_plot
 ```
 
-## Running tests
+**Windows**
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[test]"
+python -m gnovi_plot
+```
+
+**Running tests**
 
 ```bash
 pytest
 ```
+
+## Development Status
+
+GNOVI Studio is under active development and is currently in Beta. The
+application identifies itself internally as `v0.9.0 Beta`.
+
+A corresponding `v0.9.0` release has not yet been published on GitHub; that
+release is being prepared separately.
+
+## Testing & Quality
+
+GNOVI Studio is developed with an automated pytest test suite covering data
+import, plotting, analysis, project persistence, and the GUI. Continuous
+integration runs on Ubuntu, Fedora, and Windows on every push and pull
+request, alongside CodeQL static analysis.
+
+## Project Philosophy
+
+GNOVI Studio is built as open, reproducible scientific software:
+
+- Reproducible scientific workflows, from raw data to figure
+- Transparent analysis, with visible fit statistics and residual diagnostics
+- Publication-quality output as a first-class goal
+- A modular, domain-organized codebase
+- Cross-platform development, with Linux as the primary platform
+
+See [PROJECT_GUIDE.md](PROJECT_GUIDE.md) for the full development guide,
+including architecture, conventions, and contribution rules.
+
+## Citation
+
+If you use GNOVI Studio in your work, please cite it using the information
+in [`CITATION.cff`](CITATION.cff). GitHub's "Cite this repository" feature,
+available in the repository sidebar, can generate a citation from this file
+in several formats.
+
+## License
+
+GNOVI Studio is licensed under the [GPL-3.0-or-later](LICENSE).
+
+## Contributing & Issues
+
+Bug reports, feature requests, and contributions are welcome. Please open an
+issue at [github.com/wavicles/GNOVI-Studio/issues](https://github.com/wavicles/GNOVI-Studio/issues).
+
+For development setup, architecture, and contribution conventions, see
+[PROJECT_GUIDE.md](PROJECT_GUIDE.md).
