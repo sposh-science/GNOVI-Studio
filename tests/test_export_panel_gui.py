@@ -48,6 +48,10 @@ def _make_3_panel_window():
 class _FakeAction:
     def __init__(self, text):
         self.text = text
+        self.enabled = True
+
+    def setEnabled(self, value):
+        self.enabled = value
 
 
 def _fake_menu(chosen_text):

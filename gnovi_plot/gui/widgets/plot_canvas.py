@@ -12,8 +12,9 @@ from gnovi_plot.plotting.backends.matplotlib_backend import (
     apply_figure_layout,
     fit_panel_legends_to_axes,
     render_figure,
+    render_panel_with_figure_background,
 )
-from gnovi_plot.plotting.figure import GnoviFigure
+from gnovi_plot.plotting.figure import GnoviFigure, Panel
 
 # Interactive-only chrome, kept out of scientific output two different
 # ways: the active-panel badge is a separate Qt widget never added to the
@@ -103,6 +104,15 @@ class PlotCanvas(FigureCanvasQTAgg):
     selection state stay completely separate). Being a Qt widget, not a
     Matplotlib artist, it structurally can't appear in Matplotlib's
     toolbar "Save" or any export.
+
+    Focus mode (`render(..., focused_panel=...)`, see that method's own
+    docstring) shows exactly one Panel alone, filling the whole plotting
+    area, without ever touching `GnoviFigure.layout`/`.panels` -- purely a
+    change to what THIS canvas renders. `self.is_focused`/
+    `self._focused_panel_index` track this so `panel_index_for_axes`/
+    `active_axes` keep mapping the one Axes actually on screen back to its
+    real position in `figure.panels`, never assuming Axes index == Panel
+    index (only true outside Focus mode).
     """
 
     def __init__(self, parent=None):
@@ -113,6 +123,16 @@ class PlotCanvas(FigureCanvasQTAgg):
         self.axes_list: list = []
         self._last_figure: GnoviFigure | None = None
         self._last_dark_mode: bool = False
+        # The MODEL index (in `figure.panels`, never a canvas-local
+        # `axes_list` index) of the Panel currently shown alone in Focus
+        # mode, or None outside Focus -- set fresh on every `render()`
+        # call from whichever `focused_panel` it was given, this is what
+        # lets `panel_index_for_axes`/`active_axes` below correctly map
+        # the ONE Axes Focus mode actually draws back to its real model
+        # position, instead of assuming Axes index == Panel index (true in
+        # normal mode, false in Focus mode -- see `render`'s docstring).
+        self._focused_panel_index: int | None = None
+        self._last_focused_panel: Panel | None = None
         self._cursor_mode: ReferenceCursorMode = ReferenceCursorMode.OFF
         self._cursor_artists: list = []
         self._active_panel_badge = _ActivePanelBadge(self)
@@ -131,26 +151,62 @@ class PlotCanvas(FigureCanvasQTAgg):
         """Backward-compatible alias for the first panel's Axes."""
         return self.axes_list[0]
 
+    @property
+    def is_focused(self) -> bool:
+        return self._focused_panel_index is not None
+
     def active_axes(self, figure: GnoviFigure):
-        """The Axes for `figure`'s currently active panel."""
+        """The Axes for `figure`'s currently active panel -- in Focus mode
+        (`self.is_focused`) that's always the one Axes actually drawn
+        (`axes_list[0]`), regardless of what `figure.active_panel_index`
+        numerically is, since Focus never resizes `axes_list` to match it."""
+        if self.is_focused:
+            return self.axes_list[0]
         return self.axes_list[figure.active_panel_index]
 
     def panel_index_for_axes(self, ax) -> int | None:
-        """The panel index `ax` belongs to (e.g. from a click event's
-        `event.inaxes`), or None if `ax` isn't one of ours."""
+        """The MODEL panel index `ax` belongs to (e.g. from a click event's
+        `event.inaxes`), or None if `ax` isn't one of ours. In Focus mode,
+        the only Axes we own (`axes_list[0]`) maps back to
+        `self._focused_panel_index` -- the focused Panel's real position
+        in `figure.panels` -- never to the canvas-local index `0`."""
+        if self.is_focused:
+            return self._focused_panel_index if ax is self.axes_list[0] else None
         try:
             return self.axes_list.index(ax)
         except ValueError:
             return None
 
-    def render(self, figure: GnoviFigure, *, dark_mode: bool = False) -> None:
-        """Fully redraw every panel from `figure`. Reading a series' data
-        never mutates the underlying Dataset.dataframe (see
-        plotting.backends.matplotlib_backend). `dark_mode` only affects this
-        on-screen preview -- exported figures resolve their own background
-        independently (see `export.figure_export`)."""
-        self._ensure_layout(figure.layout)
-        render_figure(self.axes_list, figure, dark_mode=dark_mode)
+    def render(self, figure: GnoviFigure, *, dark_mode: bool = False, focused_panel: Panel | None = None) -> None:
+        """Fully redraw from `figure` -- every panel normally, or (when
+        `focused_panel` is given) exactly that one Panel alone, occupying
+        the whole plotting area ("Focus mode"). `focused_panel` must be
+        one of `figure.panels` (the SAME object -- never a clone); Focus
+        never touches `figure.layout`/`figure.panels` to achieve this, it
+        only changes what THIS CANVAS renders -- see
+        `gui.main_window.MainWindow._focus_panel`'s own docstring for the
+        full "why" (no clone, no Workbench, no model mutation).
+
+        Reusing `render_panel` directly (via `matplotlib_backend.
+        render_panel_with_figure_background`, never `render_figure`'s
+        zip-over-`figure.panels` loop, which assumes `len(axes_list) ==
+        len(figure.panels)` -- never true in Focus mode) is what keeps
+        Focus-mode rendering byte-identical to how that same Panel would
+        render normally, with no second rendering implementation.
+
+        Reading a series' data never mutates the underlying
+        Dataset.dataframe (see plotting.backends.matplotlib_backend).
+        `dark_mode` only affects this on-screen preview -- exported
+        figures resolve their own background independently (see
+        `export.figure_export`)."""
+        if focused_panel is not None:
+            self._ensure_layout((1, 1))
+            self._focused_panel_index = figure.panels.index(focused_panel)
+            render_panel_with_figure_background(self.axes_list[0], focused_panel, figure, dark_mode=dark_mode)
+        else:
+            self._ensure_layout(figure.layout)
+            render_figure(self.axes_list, figure, dark_mode=dark_mode)
+            self._focused_panel_index = None
         # render_panel() calls ax.cla() on every panel above, which already
         # discarded any previously-drawn reference-cursor artists -- drop
         # our stale references too (without calling .remove() on them: cla()
@@ -158,9 +214,12 @@ class PlotCanvas(FigureCanvasQTAgg):
         self._cursor_artists = []
         self._last_figure = figure
         self._last_dark_mode = dark_mode
+        self._last_focused_panel = focused_panel
         self._apply_layout(figure)
         self.draw()  # synchronous: fit_panel_legends_to_axes/badge positioning need real extents
-        fit_panel_legends_to_axes(self.axes_list, figure, dark_mode=dark_mode)
+        fit_panel_legends_to_axes(
+            self.axes_list, figure, dark_mode=dark_mode, panels=[focused_panel] if focused_panel is not None else None
+        )
         self._update_active_panel_badge(figure)
         self.draw_idle()
 
@@ -174,7 +233,12 @@ class PlotCanvas(FigureCanvasQTAgg):
         if self._last_figure is not None:
             self._apply_layout(self._last_figure)
             self.draw()
-            fit_panel_legends_to_axes(self.axes_list, self._last_figure, dark_mode=self._last_dark_mode)
+            fit_panel_legends_to_axes(
+                self.axes_list,
+                self._last_figure,
+                dark_mode=self._last_dark_mode,
+                panels=[self._last_focused_panel] if self._last_focused_panel is not None else None,
+            )
             self._update_active_panel_badge(self._last_figure)
             self.draw_idle()
 
@@ -223,8 +287,12 @@ class PlotCanvas(FigureCanvasQTAgg):
         cause of that position changing (resize, drawer/bottom-panel
         resize, layout change, Figure/Panel Aspect Ratio change, margin/
         spacing change) automatically -- see `render()`/`resizeEvent()`,
-        the only two callers.
+        the only two callers. Hidden outright in Focus mode: with only one
+        Panel ever visible, "which one is active" is never in question.
         """
+        if self.is_focused:
+            self._active_panel_badge.hide()
+            return
         index = figure.active_panel_index
         if not 0 <= index < len(self.axes_list):
             self._active_panel_badge.hide()

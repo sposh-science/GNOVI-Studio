@@ -59,7 +59,7 @@ from gnovi_plot.gui.widgets.plot_series_panel import PlotSeriesPanel
 from gnovi_plot.gui.widgets.tool_drawer import ToolDrawer
 from gnovi_plot.gui.widgets.workbench_header import WorkbenchHeader
 from gnovi_plot.gui.widgets.workbench_tabs import WorkbenchTabBar
-from gnovi_plot.plotting.figure import GnoviFigure
+from gnovi_plot.plotting.figure import GnoviFigure, Panel
 from gnovi_plot.plotting.series import PlotSeries
 
 # Wide enough for "x = -0000.0000, y = -0000.0000" so the status-bar
@@ -503,6 +503,20 @@ class MainWindow(QMainWindow):
         # checkpoint is committed by navigation alone).
         self._undo_managers: dict[str, UndoManager] = {}
         self._pending_snapshots: dict[str, GnoviFigure] = {}
+        # Focus mode's ENTIRE persistent state: which Panel (by stable
+        # `Panel.id`, never an index -- see `_current_focused_panel`'s own
+        # docstring for why) each Workbench's session currently has
+        # focused, keyed by `Workbench.id`. Session/GUI-only, exactly like
+        # `_undo_managers`/`_pending_snapshots` above -- never read/written
+        # by `core.project.Project`/`core.workbench.Workbench`/
+        # `core.project_io`, never serialized, reset alongside those two on
+        # New/Open Project (`_load_project_into_window`) and popped
+        # alongside them when a Workbench is closed
+        # (`_on_delete_workbench_requested`). Focus never clones a Panel or
+        # creates a Workbench, so there is nothing else Focus needs to
+        # track: the Panel this points at (when resolved by
+        # `_current_focused_panel`) IS the live, original Panel object.
+        self._focused_panel_ids: dict[str, str] = {}
         self._current_workbench_id = self._project.active_workbench.id
         self.figure_model = self._project.active_workbench.figure
         self._dirty = False
@@ -952,11 +966,15 @@ class MainWindow(QMainWindow):
         self.panel_labels_action.setCheckable(True)
         self.panel_labels_action.toggled.connect(self._on_toggle_panel_labels)
         self.panels_menu.addSeparator()
+        self.focus_panel_action = self.panels_menu.addAction("Focus Active Panel")
+        self.focus_panel_action.triggered.connect(self._on_focus_panel_action_triggered)
+        self.panels_menu.addSeparator()
         self.extract_panel_action = self.panels_menu.addAction("Extract Active Panel to New Workbench")
         self.extract_panel_action.triggered.connect(self._on_extract_panel_requested)
         self.panels_menu.addSeparator()
         self.export_panel_action = self.panels_menu.addAction("Export Active Panel…")
         self.export_panel_action.triggered.connect(self._on_export_panel_requested)
+        self.panels_menu.aboutToShow.connect(self._sync_focus_panel_action_state)
 
         # Dedicated top-level menu (not nested under File) -- these act on
         # whichever Workbench is currently active, exactly mirroring what
@@ -1205,6 +1223,18 @@ class MainWindow(QMainWindow):
         self.figure_size_panel.layout_combo.setCurrentIndex(index)
 
     def _set_active_panel(self, index: int) -> None:
+        # The one choke point every explicit "make a different Panel
+        # active" action funnels through (toolbar combo, Panels -> Active
+        # Panel submenu, canvas click) -- never `_set_layout`, which is
+        # what keeps this from fighting `_current_focused_panel`'s own
+        # "clear Focus if the focused Panel was dropped by a shrinking
+        # layout" self-heal (that path never calls this method at all).
+        # While focused, re-pointing Focus to follow keeps "the focused
+        # Panel remains the active Panel" true even when the user changes
+        # the active Panel through one of these, rather than the canvas
+        # silently continuing to show the now-stale previously-focused one.
+        if self._is_current_workbench_focused():
+            self._focused_panel_ids[self._current_workbench_id] = self.figure_model.panels[index].id
         self.figure_size_panel.panel_combo.setCurrentIndex(index)
 
     def _on_copy_style_to_all_panels(self) -> None:
@@ -1477,8 +1507,18 @@ class MainWindow(QMainWindow):
         """Clicking anywhere inside a panel's Axes makes that panel active
         -- the same effect as picking it from the toolbar/menu Active Panel
         control, just faster for a multi-panel layout. A single-panel
-        layout has nothing else to activate, so this is a no-op there."""
+        layout has nothing else to activate, so this is a no-op there.
+
+        A left double-click while Focus mode is active restores the
+        multi-panel view instead -- checked first (a double-click's own
+        panel is always already the active one, so the ordinary activate-
+        on-click branch below would never fire for it anyway) and only
+        wired up here, never conflicting with anything else: GNOVI has no
+        other double-click behavior on the canvas."""
         if event.inaxes is None:
+            return
+        if event.dblclick and event.button == 1 and self._is_current_workbench_focused():
+            self._restore_multi_panel_view()
             return
         index = self.plot_canvas.panel_index_for_axes(event.inaxes)
         if index is None or index == self.figure_model.active_panel_index:
@@ -1522,24 +1562,41 @@ class MainWindow(QMainWindow):
         return self.plot_canvas.mapToGlobal(local)
 
     def _show_panel_context_menu(self, global_pos) -> None:
-        """The right-clicked Panel's context menu -- "Extract Panel to New
-        Workbench" and "Export Panel…", invoking the exact same
-        `_on_extract_panel_requested`/`_on_export_panel_requested` handlers
-        the Panels menu's "Extract Active Panel to New Workbench"/"Export
-        Active Panel…" actions use (see those methods' own docstrings): the
+        """The right-clicked Panel's context menu, invoking the exact same
+        handlers the Panels menu's own actions use (see each handler's own
+        docstring) -- never a second implementation of any of them: the
         clicked Panel is already active by the time this runs (see
         `_on_canvas_context_menu`), so every entry point acts on the same
         `self.figure_model.active_panel` through the same domain
-        operations -- never a second extraction or export implementation.
-        Focus/Maximize is deliberately not offered here yet -- it arrives
-        with its own implementation in a later PR, not as a dead menu
-        item."""
+        operations.
+
+        The first item is Focus/Restore, toggled exactly like the Panels
+        menu's own action (see `_sync_focus_panel_action_state`) -- while
+        the current Workbench is focused, right-clicking its one visible
+        Panel offers "Restore Multi-Panel View" instead of "Focus Panel",
+        since re-focusing the same already-focused Panel would be a no-op
+        and the far more useful action at that point is getting back out.
+        Disabled (never omitted, for menu-shape consistency) when there's
+        only one Panel to focus."""
+        focused_panel = self._current_focused_panel()
         menu = QMenu(self)
+        if focused_panel is not None:
+            restore_action = menu.addAction("Restore Multi-Panel View")
+            focus_action = None
+        else:
+            restore_action = None
+            focus_action = menu.addAction("Focus Panel")
+            focus_action.setEnabled(len(self.figure_model.panels) > 1)
+        menu.addSeparator()
         extract_action = menu.addAction("Extract Panel to New Workbench")
         menu.addSeparator()
         export_action = menu.addAction("Export Panel…")
         chosen = menu.exec(global_pos)
-        if chosen is extract_action:
+        if focus_action is not None and chosen is focus_action:
+            self._focus_panel(self.figure_model.active_panel)
+        elif restore_action is not None and chosen is restore_action:
+            self._restore_multi_panel_view()
+        elif chosen is extract_action:
             self._on_extract_panel_requested()
         elif chosen is export_action:
             self._on_export_panel_requested()
@@ -1730,10 +1787,92 @@ class MainWindow(QMainWindow):
 
     def _rerender(self):
         dark_mode = self.figure_model.plot_theme == PlotTheme.DARK
-        self.plot_canvas.render(self.figure_model, dark_mode=dark_mode)
+        self.plot_canvas.render(self.figure_model, dark_mode=dark_mode, focused_panel=self._current_focused_panel())
         active_axes = self.plot_canvas.active_axes(self.figure_model)
         self.properties_panel.sync_axes_limits(active_axes.get_xlim(), active_axes.get_ylim())
         self.series_panel.update_contrast_warnings(dark_mode)
+
+    # --- Focus Panel (session/view state only -- see `self._focused_panel_ids`) --
+
+    def _current_focused_panel(self) -> Panel | None:
+        """The Panel the CURRENT Workbench's session has focused, or None
+        -- resolves the stable `Panel.id` stored in `self.
+        _focused_panel_ids` back to the live Panel object in `self.
+        figure_model.panels` fresh on every call (never cached), so it
+        stays correct across undo/redo (which replaces `figure_model.
+        panels` with a new list of otherwise-equal-by-id Panel objects,
+        see `_restore_figure_snapshot`) without any extra bookkeeping.
+
+        Self-healing: if the id no longer resolves to any Panel in the
+        current Figure (removed, a shrinking layout dropped it, or the
+        Workbench/Project was replaced without going through the normal
+        clear path), the stale session entry is dropped right here and
+        None is returned -- Focus must never leave a stale reference or
+        crash, and every caller that cares "is this Workbench focused"
+        goes through this one method, so the self-heal applies everywhere
+        uniformly (render, menu/context-menu state, canvas click mapping)
+        without a separate invalidation hook for each possible structural
+        change (layout edit, undo/redo, Workbench switch, project load)."""
+        panel_id = self._focused_panel_ids.get(self._current_workbench_id)
+        if panel_id is None:
+            return None
+        panel = next((p for p in self.figure_model.panels if p.id == panel_id), None)
+        if panel is None:
+            self._focused_panel_ids.pop(self._current_workbench_id, None)
+        return panel
+
+    def _is_current_workbench_focused(self) -> bool:
+        return self._current_focused_panel() is not None
+
+    def _focus_panel(self, panel: Panel) -> None:
+        """Enter Focus mode for `panel` -- already the active Panel by the
+        time this runs (`_on_canvas_context_menu` activates the clicked
+        Panel first; `_on_focus_panel_action_triggered` acts on whatever
+        is already active) -- showing it alone, filling the plotting area.
+        Records only `panel.id` (see `self._focused_panel_ids`'s own
+        docstring): never clones `panel`, never creates a Workbench, never
+        touches `figure.layout`/`.panels`. Pure navigation, exactly like
+        switching the active Panel already is -- no undo checkpoint, never
+        marks the Project dirty."""
+        self._focused_panel_ids[self._current_workbench_id] = panel.id
+        self._sync_focus_panel_action_state()
+        self._rerender()
+
+    def _restore_multi_panel_view(self) -> None:
+        """Exit Focus mode for the current Workbench, returning to its
+        normal multi-panel rendering. There is nothing to "apply" or
+        synchronize: every edit made while focused already happened
+        directly on the one real Panel object (see `_focus_panel`), so
+        restoring is exactly as pure-navigation as entering was -- no
+        undo checkpoint, never marks the Project dirty."""
+        self._focused_panel_ids.pop(self._current_workbench_id, None)
+        self._sync_focus_panel_action_state()
+        self._rerender()
+
+    def _on_focus_panel_action_triggered(self) -> None:
+        """"Panels -> Focus Active Panel" / "...Restore Multi-Panel View"
+        -- one QAction whose label/behavior toggles with the current
+        Workbench's Focus state (see `_sync_focus_panel_action_state`),
+        rather than two separate always-visible commands."""
+        if self._is_current_workbench_focused():
+            self._restore_multi_panel_view()
+        else:
+            self._focus_panel(self.figure_model.active_panel)
+
+    def _sync_focus_panel_action_state(self) -> None:
+        """Keeps `focus_panel_action`'s label/enabled state correct --
+        connected to `panels_menu.aboutToShow` (so opening the menu is
+        always right, the same defensive pattern `_sync_workbench_menu_
+        state` uses for the Workbench menu) and also called eagerly right
+        after every Focus enter/exit for immediacy. Disabled for a single-
+        Panel Figure when not already focused -- "there is nothing
+        meaningful to focus" -- but Restore stays enabled unconditionally
+        while focused, so the user can never become trapped in Focus mode."""
+        focused_panel = self._current_focused_panel()
+        self.focus_panel_action.setText(
+            "Restore Multi-Panel View" if focused_panel is not None else "Focus Active Panel"
+        )
+        self.focus_panel_action.setEnabled(focused_panel is not None or len(self.figure_model.panels) > 1)
 
     # --- Undo/Redo (figure content only -- see gui.undo_manager) -----------
 
@@ -1998,6 +2137,7 @@ class MainWindow(QMainWindow):
 
         self._undo_managers = {}
         self._pending_snapshots = {}
+        self._focused_panel_ids = {}
         self._activate_workbench(project.active_workbench)
 
         self.workbench_tab_bar.set_workbenches(project.workbenches, project.active_workbench_id)
@@ -2105,10 +2245,14 @@ class MainWindow(QMainWindow):
         removed = self._project.remove_workbench(workbench_id)
         if not removed:
             return
-        # Drop the closed Workbench's runtime Undo/Redo state -- it can
-        # never be switched back to.
+        # Drop the closed Workbench's runtime Undo/Redo and Focus state --
+        # it can never be switched back to. No Apply/Discard prompt for a
+        # focused Panel: there is no unapplied data (edits already
+        # happened directly on the original Panel), so this is exactly as
+        # simple as dropping its Undo/Redo state.
         self._undo_managers.pop(workbench_id, None)
         self._pending_snapshots.pop(workbench_id, None)
+        self._focused_panel_ids.pop(workbench_id, None)
         self._activate_workbench(self._project.active_workbench)
         self.workbench_tab_bar.set_workbenches(self._project.workbenches, self._project.active_workbench_id)
         self._sync_workbench_menu_state()

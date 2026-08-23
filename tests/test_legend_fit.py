@@ -14,6 +14,7 @@ from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.plotting.backends.matplotlib_backend import (
     fit_panel_legends_to_axes,
     render_figure,
+    render_panel_with_figure_background,
 )
 from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.series import PlotSeries
@@ -247,3 +248,49 @@ def test_fit_pass_is_a_no_op_when_there_are_no_series():
     fit_panel_legends_to_axes(axes_list, figure)  # must not raise
 
     assert axes_list[0].get_legend() is None
+
+
+# --- Focus mode: one Axes, one arbitrary Panel, explicit `panels=` override -----
+
+
+def test_explicit_panels_override_handles_an_axes_panels_length_mismatch():
+    """Simulates Focus mode (`gui.widgets.plot_canvas.PlotCanvas.render`):
+    exactly one Axes rendering one Panel plucked from the middle of a
+    larger Figure -- `axes_list` (length 1) and `figure.panels` (length 3)
+    deliberately don't correspond 1:1, which the default `panels=None`
+    (`zip` against `figure.panels`) would pair incorrectly. Passing
+    `panels=[panel]` explicitly must not raise and must fit the legend
+    against that one Axes' own box only, via the same
+    `render_panel_with_figure_background` Focus mode itself calls."""
+    figure = _crowded_figure(layout=(1, 3), legend_fontsize=12.0)
+    focused_panel = figure.panels[1]
+
+    mpl_figure = Figure(figsize=(3.0, 2.4))
+    FigureCanvasAgg(mpl_figure)
+    (ax,) = mpl_figure.subplots(1, 1, squeeze=False).flat
+
+    render_panel_with_figure_background(ax, focused_panel, figure)
+    fit_panel_legends_to_axes([ax], figure, panels=[focused_panel])  # must not raise
+
+    assert _fontsize(ax) <= 12.0  # still fit to ITS OWN (small) box
+
+
+def test_focused_single_panel_at_generous_size_is_not_shrunk_by_neighbor_avoidance():
+    """The same crowded Panel that WOULD get shrunk as part of its real
+    2x2 Figure (see test_a_small_crowded_panel_uses_a_smaller_effective_
+    fontsize above) must render at its full configured size when given
+    the whole (generously-sized) plotting area alone, as Focus mode does
+    -- proving the `panels=[panel]` override genuinely stops the
+    neighbor-avoidance logic from ever running against sibling panels
+    that aren't even being drawn."""
+    figure = _crowded_figure(layout=(2, 2), legend_fontsize=9.0)
+    focused_panel = figure.panels[0]
+
+    mpl_figure = Figure(figsize=(12.0, 9.0))  # generous, like a focused canvas
+    FigureCanvasAgg(mpl_figure)
+    (ax,) = mpl_figure.subplots(1, 1, squeeze=False).flat
+
+    render_panel_with_figure_background(ax, focused_panel, figure)
+    fit_panel_legends_to_axes([ax], figure, panels=[focused_panel])
+
+    assert _fontsize(ax) == pytest.approx(9.0)

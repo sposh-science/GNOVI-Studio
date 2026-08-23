@@ -308,24 +308,53 @@ class ExportFigureDialog(QDialog):
         return kwargs
 
     def _panel_export_kwargs(self, *, dpi: int) -> dict:
-        """`export_figure` kwargs for exporting `self._panel_export_model`
-        -- the transient single-Panel figure -- reusing the same Background
-        (`_background_kwargs`, whose `transparent`/`facecolor` keys are
-        already exactly `export_figure`'s own parameter names) and Bounding
-        box/Padding widgets as whole-Figure export, just shaped for
-        `export_figure`'s `tight_bbox: bool` + `pad_inches` instead of a
-        computed `bbox_inches` value -- there's no live Axes to measure a
-        tight bbox from here, `export_figure`'s own `tight_bbox=True` path
-        (Matplotlib's `bbox_inches="tight"`) does the equivalent trim."""
+        """`export_figure` kwargs -- shared by both headless paths, Panel
+        export (`self._panel_export_model`) and "Complete Figure" scope
+        while focused (`self._figure` itself, see
+        `_complete_figure_export_uses_headless_path`) -- reusing the same
+        Background (`_background_kwargs`, whose `transparent`/`facecolor`
+        keys are already exactly `export_figure`'s own parameter names)
+        and Bounding box/Padding widgets as whole-Figure export, just
+        shaped for `export_figure`'s `tight_bbox: bool` + `pad_inches`
+        instead of a computed `bbox_inches` value -- there's no live Axes
+        to measure a tight bbox from in either headless case,
+        `export_figure`'s own `tight_bbox=True` path (Matplotlib's
+        `bbox_inches="tight"`) does the equivalent trim."""
         kwargs: dict = dict(dpi=dpi, **self._background_kwargs())
         if self.bbox_combo.currentText() == _BBOX_TIGHT:
             kwargs["tight_bbox"] = True
             kwargs["pad_inches"] = self.padding_spin.value()
         return kwargs
 
+    def _complete_figure_export_uses_headless_path(self) -> bool:
+        """"Complete Figure" scope normally saves the LIVE canvas Figure
+        directly (see class docstring) -- but while the canvas is in Focus
+        mode (`PlotCanvas.is_focused`), that live Figure has only ONE Axes
+        (the focused Panel's), so saving it as-is would silently export a
+        single Panel under the "Complete Figure" label. Focus must never
+        change what "Export Figure" means -- see `gui.main_window.
+        MainWindow._focus_panel`'s own docstring for the parallel
+        guarantee on the model side. So "Complete Figure" scope builds a
+        fresh Figure from the underlying `GnoviFigure` MODEL instead here
+        (via the headless `export_figure`, exactly like `export_panel`/a
+        generated script would, independent of on-screen rendering state)
+        -- the complete multi-panel Figure, including whatever edits were
+        made while focused, since those already live on the one real
+        Panel object Focus never cloned. "Active Panel" scope is
+        unaffected: `PlotCanvas.active_axes` already resolves to the
+        focused Axes correctly (see its own docstring), so it keeps using
+        the live canvas either way."""
+        return (
+            self._panel is None
+            and self.scope_combo.currentText() == _SCOPE_COMPLETE
+            and self._plot_canvas.is_focused
+        )
+
     def _current_physical_size_in(self) -> tuple[float, float] | None:
         if self._panel is not None:
             return (self._panel_export_model.figure_width_in, self._panel_export_model.figure_height_in)
+        if self._complete_figure_export_uses_headless_path():
+            return (self._figure.figure_width_in, self._figure.figure_height_in)
         if self.scope_combo.currentText() == _SCOPE_ACTIVE:
             bbox = self._active_panel_bbox_inches(padded=(self.bbox_combo.currentText() == _BBOX_NORMAL))
             if bbox is None:
@@ -371,6 +400,13 @@ class ExportFigureDialog(QDialog):
                     fmt=self.format_combo.currentText().lower(),
                     **self._panel_export_kwargs(dpi=self.dpi_spin.value()),
                 )
+            elif self._complete_figure_export_uses_headless_path():
+                export_figure(
+                    self._figure,
+                    self.path_edit.text(),
+                    fmt=self.format_combo.currentText().lower(),
+                    **self._panel_export_kwargs(dpi=self.dpi_spin.value()),
+                )
             else:
                 self._hide_gui_only_overlays()
                 export_live_figure(
@@ -410,6 +446,13 @@ class ExportFigureDialog(QDialog):
         if self._panel is not None:
             export_figure(
                 self._panel_export_model,
+                buffer,
+                fmt="png",
+                **self._panel_export_kwargs(dpi=_PREVIEW_DPI),
+            )
+        elif self._complete_figure_export_uses_headless_path():
+            export_figure(
+                self._figure,
                 buffer,
                 fmt="png",
                 **self._panel_export_kwargs(dpi=_PREVIEW_DPI),
