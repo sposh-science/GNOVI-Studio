@@ -26,7 +26,7 @@ from gnovi_plot.gui.styles import STALE_COLOR, WARNING_COLOR
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.plotting.backends.matplotlib_backend import is_low_contrast
-from gnovi_plot.plotting.figure import GnoviFigure, theme_color_cycle
+from gnovi_plot.plotting.figure import GnoviFigure, Panel, theme_color_cycle
 from gnovi_plot.plotting.graph_library import GraphLibrary
 from gnovi_plot.plotting.series import PlotSeries, PlotType
 from gnovi_plot.plotting.stacking import auto_stack_offsets, reset_offsets
@@ -256,6 +256,21 @@ class PlotSeriesPanel(QWidget):
 
     def refresh(self, select_id: str | None = None) -> None:
         self.active_panel_label.refresh(self._figure)
+        # This whole page is 2D-`PlotSeries`-specific (line width/style,
+        # marker fill, histogram bins/mode, stacking offsets -- none of
+        # which `Series3D` has, see `plotting.series3d.Series3D`'s own
+        # docstring). A `Panel3D`'s one series is edited through
+        # `Add3DScatterDialog` instead (see `MainWindow._on_add_3d_
+        # scatter_requested`); disabling this whole page when a `Panel3D`
+        # is active avoids the editor fields below crashing against a
+        # `Series3D`'s different field set.
+        self.setEnabled(isinstance(self._figure.active_panel, Panel))
+        if not isinstance(self._figure.active_panel, Panel):
+            self.series_list.blockSignals(True)
+            self.series_list.clear()
+            self.series_list.blockSignals(False)
+            self._on_selection_changed(-1)
+            return
         self.series_list.blockSignals(True)
         self.series_list.clear()
         target_row = -1

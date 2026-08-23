@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from gnovi_plot.data.dataset import Dataset
-from gnovi_plot.plotting.figure import GnoviFigure, Panel
+from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D, panel_from_dict
 
 
 @dataclass
@@ -24,7 +24,7 @@ class Graph:
     """
 
     name: str
-    panel: Panel
+    panel: Panel | Panel3D
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     modified_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -45,7 +45,11 @@ class Graph:
             name=data["name"],
             created_at=datetime.fromisoformat(data["created_at"]),
             modified_at=datetime.fromisoformat(data["modified_at"]),
-            panel=Panel.from_dict(data["panel"], dataset_lookup),
+            # `panel_from_dict` (not `Panel.from_dict`) so a saved Panel3D
+            # Graph reloads as a Panel3D, never silently misparsed as a
+            # `Panel` -- see `plotting.figure.panel_from_dict`'s own
+            # docstring for the "kind" dispatch this relies on.
+            panel=panel_from_dict(data["panel"], dataset_lookup),
         )
 
 
@@ -60,20 +64,23 @@ def dataset_identity_memo(dataset_manager) -> dict:
     return {id(dataset): dataset for dataset in dataset_manager.datasets}
 
 
-def clone_panel_with_shared_datasets(panel: Panel, dataset_manager) -> Panel:
+def clone_panel_with_shared_datasets(panel: Panel | Panel3D, dataset_manager) -> Panel | Panel3D:
     """Deep-copy `panel` (series/styling/everything) while keeping every
-    `PlotSeries.dataset` pointed at the same live `Dataset` instance from
-    `dataset_manager` -- see `dataset_identity_memo`.
+    series' `.dataset` pointed at the same live `Dataset` instance from
+    `dataset_manager` -- see `dataset_identity_memo`. Works unchanged for
+    either `Panel` or `Panel3D`: nothing here is type-specific --
+    `copy.deepcopy` recurses through whichever dataclass it's given, and
+    reassigning `.id` afterward is plain duck typing (both types have one).
 
-    Assigns the clone a *fresh* `Panel.id` -- this produces a genuinely
-    independent panel (Graph Library save/load-into-panel is its only
-    caller today), never "the same panel at a different point in time"
-    (that's `gui.undo_manager.snapshot_figure`'s plain `copy.deepcopy`
-    instead, which deliberately preserves `id`). Without this, e.g.
-    loading two different Graphs into two different panels that started
-    from the same stored `Graph.panel` would leave them sharing an id --
-    letting one panel's analysis-result history appear to belong to the
-    other."""
+    Assigns the clone a *fresh* `.id` -- this produces a genuinely
+    independent panel (Graph Library save/load-into-panel and
+    `core.project.Project.extract_panel_to_workbench` are its callers
+    today), never "the same panel at a different point in time" (that's
+    `gui.undo_manager.snapshot_figure`'s plain `copy.deepcopy` instead,
+    which deliberately preserves `id`). Without this, e.g. loading two
+    different Graphs into two different panels that started from the same
+    stored `Graph.panel` would leave them sharing an id -- letting one
+    panel's analysis-result history appear to belong to the other."""
     cloned = copy.deepcopy(panel, dataset_identity_memo(dataset_manager))
     cloned.id = uuid.uuid4().hex
     return cloned

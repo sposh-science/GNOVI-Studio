@@ -190,7 +190,7 @@ def test_saved_manifest_contains_the_current_format_version(tmp_path):
 
     with zipfile.ZipFile(out_path) as zf:
         manifest = json.loads(zf.read("project.json"))
-    assert manifest["project_format_version"] == PROJECT_FORMAT_VERSION == 2
+    assert manifest["project_format_version"] == PROJECT_FORMAT_VERSION == 3
     # Independent of the app's own version string.
     assert "app_version" in manifest
 
@@ -238,7 +238,7 @@ def test_fit_derived_dataset_round_trips_with_no_format_version_bump(tmp_path):
 
     with zipfile.ZipFile(out_path) as zf:
         manifest = json.loads(zf.read("project.json"))
-    assert manifest["project_format_version"] == PROJECT_FORMAT_VERSION == 2
+    assert manifest["project_format_version"] == PROJECT_FORMAT_VERSION == 3
 
     reloaded = load_project(out_path)
     reloaded_fit = next(d for d in reloaded.dataset_manager.datasets if d.metadata.get("kind") == "fit")
@@ -439,7 +439,7 @@ def test_opening_a_v1_project_with_multiple_figures_migrates_to_multiple_named_w
     assert loaded.active_workbench_id == loaded.workbenches[1].id
 
 
-def test_reopening_a_migrated_v1_project_and_resaving_writes_v2(tmp_path):
+def test_reopening_a_migrated_v1_project_and_resaving_writes_the_current_format_version(tmp_path):
     project, dataset = _basic_project()
     out_path = save_project(project, tmp_path / "v2_source.gnovi")
     with zipfile.ZipFile(out_path) as zf:
@@ -462,7 +462,7 @@ def test_reopening_a_migrated_v1_project_and_resaving_writes_v2(tmp_path):
 
     with zipfile.ZipFile(resave_path) as zf:
         resaved_manifest = json.loads(zf.read("project.json"))
-    assert resaved_manifest["project_format_version"] == 2
+    assert resaved_manifest["project_format_version"] == PROJECT_FORMAT_VERSION
     assert "workbenches" in resaved_manifest
     assert "figures" not in resaved_manifest
 

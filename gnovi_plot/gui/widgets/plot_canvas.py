@@ -10,11 +10,12 @@ from PySide6.QtWidgets import QLabel
 from gnovi_plot.gui.styles import ACTIVE_PANEL_BADGE_COLOR
 from gnovi_plot.plotting.backends.matplotlib_backend import (
     apply_figure_layout,
+    build_projection_aware_axes,
     fit_panel_legends_to_axes,
     render_figure,
     render_panel_with_figure_background,
 )
-from gnovi_plot.plotting.figure import GnoviFigure, Panel
+from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D
 
 # Interactive-only chrome, kept out of scientific output two different
 # ways: the active-panel badge is a separate Qt widget never added to the
@@ -120,6 +121,12 @@ class PlotCanvas(FigureCanvasQTAgg):
         super().__init__(figure)
         self.setParent(parent)
         self._layout: tuple[int, int] | None = None
+        # Which cells (in `figure.panels` order) are 3D -- part of the
+        # rebuild-cache key alongside `self._layout` below (see
+        # `_ensure_layout`): converting one Panel to/from Panel3D at an
+        # UNCHANGED grid position never changes `(rows, cols)`, but still
+        # requires rebuilding that one Axes with the matching projection.
+        self._projection_flags: tuple[bool, ...] | None = None
         self.axes_list: list = []
         self._last_figure: GnoviFigure | None = None
         self._last_dark_mode: bool = False
@@ -132,19 +139,31 @@ class PlotCanvas(FigureCanvasQTAgg):
         # position, instead of assuming Axes index == Panel index (true in
         # normal mode, false in Focus mode -- see `render`'s docstring).
         self._focused_panel_index: int | None = None
-        self._last_focused_panel: Panel | None = None
+        self._last_focused_panel: Panel | Panel3D | None = None
         self._cursor_mode: ReferenceCursorMode = ReferenceCursorMode.OFF
         self._cursor_artists: list = []
         self._active_panel_badge = _ActivePanelBadge(self)
-        self._ensure_layout((1, 1))
+        self._ensure_layout((1, 1), [Panel()])
 
-    def _ensure_layout(self, layout: tuple[int, int]) -> None:
-        if layout == self._layout:
+    def _ensure_layout(self, layout: tuple[int, int], panels: list[Panel | Panel3D]) -> None:
+        """Rebuild the Axes grid to `layout`, one Axes per `panels[i]` (same
+        order), each with `projection="3d"` exactly where `panels[i]` is a
+        `Panel3D` -- via `build_projection_aware_axes`, see that function's
+        own docstring for why a per-cell choice, made here rather than a
+        uniform `self.figure.subplots(...)` call, is what makes a mixed
+        2D/3D Figure possible at all. No-ops if neither the grid shape nor
+        which cells are 3D actually changed since the last call -- rebuild-
+        cache key is `(layout, tuple(isinstance(p, Panel3D) for p in
+        panels))`, since converting one Panel to/from Panel3D at an
+        UNCHANGED grid position never changes `layout` alone."""
+        projection_flags = tuple(isinstance(p, Panel3D) for p in panels)
+        if layout == self._layout and projection_flags == self._projection_flags:
             return
         rows, cols = layout
         self.figure.clear()
-        self.axes_list = list(self.figure.subplots(rows, cols, squeeze=False).flat)
+        self.axes_list = build_projection_aware_axes(self.figure, rows, cols, panels)
         self._layout = layout
+        self._projection_flags = projection_flags
 
     @property
     def axes(self):
@@ -177,7 +196,9 @@ class PlotCanvas(FigureCanvasQTAgg):
         except ValueError:
             return None
 
-    def render(self, figure: GnoviFigure, *, dark_mode: bool = False, focused_panel: Panel | None = None) -> None:
+    def render(
+        self, figure: GnoviFigure, *, dark_mode: bool = False, focused_panel: Panel | Panel3D | None = None
+    ) -> None:
         """Fully redraw from `figure` -- every panel normally, or (when
         `focused_panel` is given) exactly that one Panel alone, occupying
         the whole plotting area ("Focus mode"). `focused_panel` must be
@@ -200,11 +221,11 @@ class PlotCanvas(FigureCanvasQTAgg):
         figures resolve their own background independently (see
         `export.figure_export`)."""
         if focused_panel is not None:
-            self._ensure_layout((1, 1))
+            self._ensure_layout((1, 1), [focused_panel])
             self._focused_panel_index = figure.panels.index(focused_panel)
             render_panel_with_figure_background(self.axes_list[0], focused_panel, figure, dark_mode=dark_mode)
         else:
-            self._ensure_layout(figure.layout)
+            self._ensure_layout(figure.layout, figure.panels)
             render_figure(self.axes_list, figure, dark_mode=dark_mode)
             self._focused_panel_index = None
         # render_panel() calls ax.cla() on every panel above, which already
@@ -217,11 +238,29 @@ class PlotCanvas(FigureCanvasQTAgg):
         self._last_focused_panel = focused_panel
         self._apply_layout(figure)
         self.draw()  # synchronous: fit_panel_legends_to_axes/badge positioning need real extents
-        fit_panel_legends_to_axes(
-            self.axes_list, figure, dark_mode=dark_mode, panels=[focused_panel] if focused_panel is not None else None
-        )
+        self._fit_legends(figure, dark_mode, focused_panel)
         self._update_active_panel_badge(figure)
         self.draw_idle()
+
+    def _fit_legends(
+        self, figure: GnoviFigure, dark_mode: bool, focused_panel: Panel | Panel3D | None
+    ) -> None:
+        """`fit_panel_legends_to_axes` only knows about `Panel`'s legend
+        fields (`legend_visible`/`legend_loc`) -- `Panel3D` has neither (3D
+        scatter renders without a legend in this milestone, see `Panel3D`'s
+        own docstring), so every `Panel3D`/its Axes must be excluded from
+        the `(axes_list, panels)` pairs handed to it, never just left for
+        it to silently skip (it would `AttributeError` on `panel.
+        legend_visible`, not skip cleanly, since that call assumes every
+        panel it's given is 2D)."""
+        if focused_panel is not None:
+            if not isinstance(focused_panel, Panel3D):
+                fit_panel_legends_to_axes(self.axes_list, figure, dark_mode=dark_mode, panels=[focused_panel])
+            return
+        pairs = [(ax, panel) for ax, panel in zip(self.axes_list, figure.panels) if not isinstance(panel, Panel3D)]
+        if pairs:
+            legend_axes, legend_panels = zip(*pairs)
+            fit_panel_legends_to_axes(list(legend_axes), figure, dark_mode=dark_mode, panels=list(legend_panels))
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -233,12 +272,7 @@ class PlotCanvas(FigureCanvasQTAgg):
         if self._last_figure is not None:
             self._apply_layout(self._last_figure)
             self.draw()
-            fit_panel_legends_to_axes(
-                self.axes_list,
-                self._last_figure,
-                dark_mode=self._last_dark_mode,
-                panels=[self._last_focused_panel] if self._last_focused_panel is not None else None,
-            )
+            self._fit_legends(self._last_figure, self._last_dark_mode, self._last_focused_panel)
             self._update_active_panel_badge(self._last_figure)
             self.draw_idle()
 
