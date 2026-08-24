@@ -3,13 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import Signal
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QGroupBox,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -53,18 +50,26 @@ def _format_group_label(value: object) -> str:
 
 
 class Plot3DPanel(QWidget):
-    """Left-side "3D" drawer page: the creation/management workspace for
-    `Panel3D` content -- Dataset + plot type + X/Y/Z column selection,
-    optionally split into a "Group by" curve family, to add new `Series3D`
-    to the active panel, plus a read-only summary list of the active
-    panel's current 3D series.
+    """Left-side "3D" drawer page: the creation workspace for `Panel3D`
+    content -- Dataset + plot type + X/Y/Z column selection, optionally
+    split into a "Group by" curve family, to add new `Series3D` to the
+    active panel.
 
-    Deliberately does NOT duplicate per-series styling (color/marker/alpha/
-    visibility/line style/line width) -- that stays on the Series tab's
-    adaptive 3D page (see `plot_series_panel.PlotSeriesPanel`), exactly
-    mirroring how 2D's own "Add to Plot" (`DatasetPanel.plot_section`)
-    creates series while `PlotSeriesPanel` styles them, never duplicating
-    the split.
+    Deliberately does NOT duplicate per-series styling OR a series list --
+    both stay on the Series tab's adaptive 3D page (see `plot_series_panel.
+    PlotSeriesPanel`), exactly mirroring how 2D's own "Add to Plot"
+    (`DatasetPanel.plot_section`) creates series while `PlotSeriesPanel`
+    lists and styles them, never duplicating the split. This page used to
+    also carry its own read-only summary list of the active panel's 3D
+    series; it was removed (see PR "Sidebar Navigation & 2D/3D Workflow
+    Polish"'s own audit) once the adaptive Series page's `series3d_list`
+    was confirmed to fully cover selecting/renaming/styling/removing/
+    clearing every `Series3D` this page can create -- the removed list
+    offered no selection, editing, or per-item removal of its own (no
+    `currentRowChanged` connection existed on it), so there was no
+    workflow only available through it. "Clear 3D Plot" below is kept
+    (its own quick-clear counterpart to 2D's "Clear Plot") -- Series still
+    also offers "Remove Series"/"Clear All" for finer-grained management.
 
     This panel never decides whether "Add to 3D Plot" should convert the
     active panel, append to it, or ask for confirmation first -- that
@@ -135,19 +140,11 @@ class Plot3DPanel(QWidget):
         add_layout.addWidget(self.add_button)
         add_layout.addWidget(self.clear_button)
 
-        self.series_list = QListWidget()
-
-        list_group = QGroupBox("3D Series")
-        list_layout = QVBoxLayout(list_group)
-        list_layout.addWidget(self.series_list)
-
         self.add_section = CollapsibleSection("Add 3D Series", add_group)
-        self.list_section = CollapsibleSection("3D Series", list_group)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.active_panel_label)
         layout.addWidget(self.add_section)
-        layout.addWidget(self.list_section)
         layout.addStretch(1)
 
         self.dataset_combo.currentIndexChanged.connect(self._on_dataset_changed)
@@ -211,30 +208,17 @@ class Plot3DPanel(QWidget):
         self.group_by_combo.blockSignals(False)
 
     def refresh(self) -> None:
-        """Reload the active panel's 3D series list and "Clear 3D Plot"'s
-        enabled state. The "Add 3D Series" form itself stays enabled
-        regardless of the active panel's current type -- it's how an empty
-        or 2D panel becomes a `Panel3D` in the first place (see
-        `MainWindow._on_add_3d_series_requested`)."""
+        """Reload the active-panel context and "Clear 3D Plot"'s enabled
+        state (see this class's own docstring for why there's no series
+        list here to reload alongside it -- that's the Series page's job).
+        The "Add 3D Series" form itself stays enabled regardless of the
+        active panel's current type -- it's how an empty or 2D panel
+        becomes a `Panel3D` in the first place (see `MainWindow.
+        _on_add_3d_series_requested`)."""
         self.active_panel_label.refresh(self._figure)
         panel = self._figure.active_panel
-        series_list = panel.series if isinstance(panel, Panel3D) else []
-
-        self.series_list.blockSignals(True)
-        self.series_list.clear()
-        for series in series_list:
-            item = QListWidgetItem(self._item_text(series))
-            if series.stale:
-                item.setForeground(QColor(STALE_COLOR))
-            self.series_list.addItem(item)
-        self.series_list.blockSignals(False)
-
-        self.clear_button.setEnabled(bool(series_list))
-
-    @staticmethod
-    def _item_text(series: Series3D) -> str:
-        label = series.label or "(untitled series)"
-        return f"{label}  [stale — re-add]" if series.stale else label
+        has_series = isinstance(panel, Panel3D) and bool(panel.series)
+        self.clear_button.setEnabled(has_series)
 
     def _on_add_clicked(self) -> None:
         self.error_label.setVisible(False)

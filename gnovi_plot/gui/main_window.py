@@ -197,8 +197,9 @@ _DRAWER_CONTENT_MARGIN = 12
 # actual minimum is raised to whatever its widest page's content genuinely
 # needs (see `_side_drawer_min_width`), and the user can always drag the
 # splitter wider afterward. Deliberately different per side: the right
-# Working Data drawer holds far less content than the left Data/Plot/
-# Series/Figure/Layout/Axes drawer, so it needs a smaller share by default.
+# Working Data drawer holds far less content than the left Data/2D/3D/
+# Series/Axes/Figure/Layout/Analysis drawer, so it needs a smaller share
+# by default.
 _LEFT_DRAWER_WIDTH_FRACTION = 0.19
 _RIGHT_DRAWER_WIDTH_FRACTION = 0.16
 
@@ -594,10 +595,12 @@ class MainWindow(QMainWindow):
             lambda: self.dataset_manager,
         )
 
-        # LEFT: compact DSO-style vertical tool strip (Data / Plot / Series /
-        # Figure / Layout / Axes) plus a single-page drawer next to it --
-        # "what data/series do I want to plot, and how should the figure/
-        # axes look?". See gui.widgets.tool_drawer.ToolDrawer. Existing panel
+        # LEFT: compact DSO-style vertical tool strip, visually grouped
+        # DATA / PLOT (2D, 3D) / FORMAT (Series, Axes, Figure, Layout) /
+        # ANALYZE, plus a single-page drawer next to it -- "what data/2D or
+        # 3D series do I want to plot, how should I style/format the
+        # existing series/axes/figure/layout, and what analysis do I want
+        # to run?". See gui.widgets.tool_drawer.ToolDrawer. Existing panel
         # widgets are relocated into drawer pages rather than rebuilt:
         # DatasetPanel's two CollapsibleSections (Datasets, Add to Plot)
         # split across the Data and Plot pages, while PlotSeriesPanel/
@@ -646,13 +649,28 @@ class MainWindow(QMainWindow):
             self.analysis_panel,
         ]
 
+        # Visually grouped DATA / PLOT / FORMAT / ANALYZE -- see PR "Sidebar
+        # Navigation & 2D/3D Workflow Polish"'s own scope note: pure visual
+        # grouping via `add_section` (a non-interactive heading, see its own
+        # docstring), never a nested/collapsible menu -- every button below
+        # is still one flat, always-visible strip of destinations, exactly
+        # as before. Internal page `key`s are unchanged (only the "plot"
+        # page's user-facing `label` becomes "2D" -- see that call below);
+        # every existing `tool_drawer.show_page("plot")`/`._buttons["plot"]`
+        # call site keeps working unchanged. FORMAT's internal order
+        # (Series, Axes, Figure, Layout) now matches its visual grouping
+        # order too, ahead of "axes" no longer trailing "figure"/"layout".
         self.tool_drawer = ToolDrawer(side="left")
+
+        self.tool_drawer.add_section("DATA")
         self.tool_drawer.add_page(
             "data", "Data", "Dataset list -- import and remove datasets.", "data", _wrap_scrollable(data_page)
         )
+
+        self.tool_drawer.add_section("PLOT")
         self.tool_drawer.add_page(
             "plot",
-            "Plot",
+            "2D",
             "Plot type, X/Y columns, plot mode and cycle controls.",
             "plot",
             _wrap_scrollable(plot_page),
@@ -664,12 +682,22 @@ class MainWindow(QMainWindow):
             "3d",
             _wrap_scrollable(self.plot3d_panel),
         )
+
+        self.tool_drawer.add_section("FORMAT")
         self.tool_drawer.add_page(
             "series",
             "Series",
             "Plot series list and the selected series' styling.",
             "series",
             _wrap_scrollable(self.series_panel),
+        )
+        self.tool_drawer.add_page(
+            "axes",
+            "Axes",
+            "Active panel's title/labels/limits/grid -- ticks, spines and legend for a "
+            "2D panel, or 3D View/Camera for a 3D panel.",
+            "axes",
+            _wrap_scrollable(self.properties_panel),
         )
         self.tool_drawer.add_page(
             "figure",
@@ -686,14 +714,8 @@ class MainWindow(QMainWindow):
             "layout",
             _wrap_scrollable(self.figure_layout_panel),
         )
-        self.tool_drawer.add_page(
-            "axes",
-            "Axes",
-            "Active panel's title/labels/limits/grid -- ticks, spines and legend for a "
-            "2D panel, or 3D View/Camera for a 3D panel.",
-            "axes",
-            _wrap_scrollable(self.properties_panel),
-        )
+
+        self.tool_drawer.add_section("ANALYZE")
         self.tool_drawer.add_page(
             "analysis",
             "Analysis",
@@ -705,8 +727,8 @@ class MainWindow(QMainWindow):
         self.tool_drawer.show_page("data")
 
         # RIGHT: a dedicated Working Data drawer -- "how do I derive/filter/
-        # modify Working Data?", kept separate from the LEFT
-        # Data/Plot/Series drawer so plotting setup and working-data
+        # modify Working Data?", kept separate from the LEFT DATA/PLOT/
+        # FORMAT/ANALYZE drawer so plotting setup and working-data
         # mutation stay conceptually (and visually) apart. Same ToolDrawer
         # architecture, mirrored (`side="right"`), with a single "Working"
         # page hosting DataToolsPanel whole -- its own signals/logic are
@@ -1018,7 +1040,7 @@ class MainWindow(QMainWindow):
 
         view_menu = self.menuBar().addMenu("&View")
         # Hides/shows the entire left tool strip + drawer (both the Data /
-        # Plot / Series buttons and whichever page is open) -- distinct
+        # 2D / 3D / Series buttons and whichever page is open) -- distinct
         # from a strip button's own collapse, which only hides the drawer
         # page and leaves the strip itself visible.
         self.toggle_controls_action = view_menu.addAction("Controls")

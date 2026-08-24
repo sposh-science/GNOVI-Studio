@@ -47,7 +47,7 @@ _MODEL_OPTIONS = [
 
 _NO_SOURCE_TEXT = (
     "No plotted line/scatter series in the active panel yet -- add one "
-    "from the Plot page first."
+    "from the 2D page first."
 )
 
 
