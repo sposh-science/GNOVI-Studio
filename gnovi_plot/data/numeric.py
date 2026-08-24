@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 
@@ -58,6 +59,81 @@ def numeric_xyz(
             f"(found {len(x)}, need at least {min_points})."
         )
     return x, y, z
+
+
+def group_row_positions(
+    dataframe: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    z_col: str,
+    group_col: str | None = None,
+    min_points: int = 2,
+) -> dict[object, list[int]]:
+    """Partition `dataframe`'s row POSITIONS (0-based, `.iloc` order) by
+    `group_col`'s value, restricted to rows where x_col/y_col/z_col are all
+    numeric (same combined-mask row-wise correspondence as `numeric_xyz`,
+    computed identically here so grouping and numeric-validity filtering
+    can never disagree about which rows exist).
+
+    `group_col=None` -> a single group under key `None`, holding every
+    numerically-valid row position -- callers building an ungrouped
+    `Series3D` should ignore these positions and use `row_indices=None`
+    instead (meaning "the whole dataset", matching this function's own
+    "no grouping" case exactly); this dict form still exists so
+    validation/error handling stays identical whether or not grouping is
+    requested.
+
+    Row order WITHIN each group is preserved exactly as it appears in
+    `dataframe` -- never sorted by X or any other column. Sweep data can be
+    genuinely non-monotonic in X by design (a forward+reverse sweep, a
+    cyclic scan); silently sorting would connect points in an order the
+    experiment never produced. Groups themselves are returned in ascending
+    order of their group value when that value is orderable (`sorted()`
+    succeeds), which is what makes automatic color-cycle assignment and
+    on-screen series order deterministic and reproducible -- falling back
+    to first-encountered order only if the group column holds genuinely
+    unorderable mixed types.
+
+    Rows whose `group_col` value is missing/NaN are EXCLUDED entirely --
+    never bucketed into a synthetic "missing" group -- the same "drop
+    rather than guess" policy already applied to invalid X/Y/Z. `group_col`
+    values are used exactly as stored (never coerced to numeric): a
+    categorical/string group column partitions exactly like a numeric one.
+
+    Raises `InsufficientNumericDataError` if fewer than `min_points` valid
+    (x, y, z) rows exist in total (before any grouping) -- the same
+    controlled-error convention `numeric_xyz` already uses.
+    """
+    x = pd.to_numeric(dataframe[x_col], errors="coerce")
+    y = pd.to_numeric(dataframe[y_col], errors="coerce")
+    z = pd.to_numeric(dataframe[z_col], errors="coerce")
+    valid_mask = (x.notna() & y.notna() & z.notna()).to_numpy()
+    positions = np.flatnonzero(valid_mask)
+
+    if len(positions) < min_points:
+        raise InsufficientNumericDataError(
+            f"Not enough numeric data points in columns '{x_col}'/'{y_col}'/'{z_col}' to plot "
+            f"(found {len(positions)}, need at least {min_points})."
+        )
+
+    if group_col is None:
+        return {None: positions.tolist()}
+
+    group_values = dataframe[group_col].to_numpy()
+    groups: dict[object, list[int]] = {}
+    for pos in positions:
+        value = group_values[pos]
+        if pd.isna(value):
+            continue
+        groups.setdefault(value, []).append(int(pos))
+
+    try:
+        return dict(sorted(groups.items(), key=lambda item: item[0]))
+    except TypeError:
+        # Genuinely unorderable/mixed group value types -- keep whatever
+        # order they were first encountered in `dataframe` rather than
+        # raising; grouping itself is still fully well-defined.
+        return groups
 
 
 def numeric_column(dataframe: pd.DataFrame, column: str, min_points: int = 1) -> pd.Series:

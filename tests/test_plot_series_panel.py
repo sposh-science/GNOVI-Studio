@@ -6,7 +6,7 @@ from gnovi_plot.gui.widgets import plot_series_panel as plot_series_panel_module
 from gnovi_plot.gui.widgets.plot_series_panel import PlotSeriesPanel
 from gnovi_plot.plotting.figure import GnoviFigure, Panel3D
 from gnovi_plot.plotting.series import PlotSeries
-from gnovi_plot.plotting.series3d import Series3D
+from gnovi_plot.plotting.series3d import Plot3DType, Series3D
 
 
 def _make_dataset(name="d"):
@@ -193,3 +193,99 @@ def test_switching_from_2d_to_3d_panel_swaps_the_stack_page_on_refresh(qapp):
     panel.refresh()
 
     assert panel._stack.currentWidget() is panel._page_3d
+
+
+# --- 3D plot type: editable, conditional marker/line-style-width visibility -----------
+
+
+def test_3d_plot_type_defaults_to_scatter_in_the_combo(qapp):
+    figure = _make_3d_figure()
+    panel = PlotSeriesPanel(figure)
+    panel.series3d_list.setCurrentRow(0)
+
+    assert panel.d3_plot_type_combo.currentData() == Plot3DType.SCATTER
+
+
+def test_scatter_shows_marker_controls_and_hides_line_controls(qapp):
+    figure = _make_3d_figure()
+    panel = PlotSeriesPanel(figure)
+    panel.show()
+    panel.series3d_list.setCurrentRow(0)
+
+    assert panel.d3_marker_combo.isVisible() is True
+    assert panel.d3_marker_size_spin.isVisible() is True
+    assert panel.d3_line_style_combo.isVisible() is False
+    assert panel.d3_line_width_spin.isVisible() is False
+    panel.close()
+
+
+def test_line_hides_marker_controls_and_shows_line_controls(qapp):
+    figure = _make_3d_figure()
+    figure.active_panel.series[0].plot_type = Plot3DType.LINE
+    panel = PlotSeriesPanel(figure)
+    panel.show()
+    panel.series3d_list.setCurrentRow(0)
+
+    assert panel.d3_marker_combo.isVisible() is False
+    assert panel.d3_marker_size_spin.isVisible() is False
+    assert panel.d3_line_style_combo.isVisible() is True
+    assert panel.d3_line_width_spin.isVisible() is True
+    panel.close()
+
+
+def test_line_marker_shows_both_marker_and_line_controls(qapp):
+    figure = _make_3d_figure()
+    figure.active_panel.series[0].plot_type = Plot3DType.LINE_MARKER
+    panel = PlotSeriesPanel(figure)
+    panel.show()
+    panel.series3d_list.setCurrentRow(0)
+
+    assert panel.d3_marker_combo.isVisible() is True
+    assert panel.d3_line_style_combo.isVisible() is True
+    panel.close()
+
+
+def test_changing_plot_type_via_the_combo_updates_the_series_and_visibility(qapp):
+    figure = _make_3d_figure()
+    panel = PlotSeriesPanel(figure)
+    panel.show()
+    panel.series3d_list.setCurrentRow(0)
+
+    panel.d3_plot_type_combo.setCurrentIndex(panel.d3_plot_type_combo.findData(Plot3DType.LINE))
+
+    assert figure.active_panel.series[0].plot_type == Plot3DType.LINE
+    assert panel.d3_line_style_combo.isVisible() is True
+    assert panel.d3_marker_combo.isVisible() is False
+    panel.close()
+
+
+def test_changing_plot_type_via_the_combo_stores_a_genuine_enum_member(qapp):
+    """Regression test: `QComboBox.currentData()` can hand back a plain
+    `str` that merely `==`-compares equal to the right `Plot3DType` member
+    (a Qt/PySide `str`-subclassed-Enum marshalling quirk) -- must be
+    normalized back to a real enum member or `Series3D.to_dict()` crashes
+    on `.value` at save time. Caught via manual GUI validation."""
+    figure = _make_3d_figure()
+    panel = PlotSeriesPanel(figure)
+    panel.series3d_list.setCurrentRow(0)
+
+    panel.d3_plot_type_combo.setCurrentIndex(panel.d3_plot_type_combo.findData(Plot3DType.LINE))
+
+    series = figure.active_panel.series[0]
+    assert isinstance(series.plot_type, Plot3DType)
+    series.to_dict()  # must not raise AttributeError
+    panel.close()
+
+
+def test_editing_line_style_and_width_updates_the_series(qapp):
+    figure = _make_3d_figure()
+    figure.active_panel.series[0].plot_type = Plot3DType.LINE
+    panel = PlotSeriesPanel(figure)
+    panel.series3d_list.setCurrentRow(0)
+
+    panel.d3_line_style_combo.setCurrentIndex(panel.d3_line_style_combo.findData("--"))
+    panel.d3_line_width_spin.setValue(3.0)
+
+    assert figure.active_panel.series[0].line_style == "--"
+    assert figure.active_panel.series[0].line_width == 3.0
+    panel.close()

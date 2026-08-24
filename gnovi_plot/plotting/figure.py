@@ -423,13 +423,19 @@ class Panel3D:
     explicitly sets them).
 
     Deliberately excludes (see this milestone's own scope notes): surface/
-    mesh/wireframe/trisurf fields, a colorbar, `panel_aspect_preset`/
+    mesh/wireframe/trisurf fields, a colorbar, and `panel_aspect_preset`/
     `roll` (3D box-aspect and full orientation are separate, more involved
     design questions -- see the architecture inspection's "roadmap"
-    section -- not needed for scatter), and a legend (no `legend_visible`/
-    `legend_loc` -- 3D scatter renders without a legend in this milestone;
-    a future PR can add one following `Panel`'s own legend fields as a
-    template once actually needed).
+    section -- not needed for scatter/line).
+
+    `legend_visible`/`legend_loc` are the minimal legend controls added for
+    the 3D-curve-families milestone -- deliberately not the full `Panel`
+    legend field set (`legend_ncol`/`legend_frameon`/`legend_fontsize`/
+    `legend_title`): a grouped 3D curve family's legend need is "which
+    color is which series" (`Series3D.label`), not the fuller per-legend
+    customization 2D supports; font size reuses `GnoviFigure.
+    legend_font_size` directly rather than duplicating a per-panel
+    override.
     """
 
     title: str = ""
@@ -446,6 +452,13 @@ class Panel3D:
     # rotation never writes back into them.
     elevation: float = 30.0
     azimuth: float = -60.0
+
+    # Minimal legend support -- see this class's own docstring. Default
+    # `True` matches `Panel.legend_visible`'s own default, for the same
+    # reason: a fresh panel with one series still shows a (harmless,
+    # one-entry) legend by default, consistent with 2D.
+    legend_visible: bool = True
+    legend_loc: str = "best"
 
     # Auto-assigned by GnoviFigure whenever the panel grid changes; only
     # drawn when GnoviFigure.panel_labels_visible is True -- identical
@@ -496,17 +509,24 @@ class Panel3D:
 
     def invalidate_series_for_dataset(self, dataset: Dataset, row_set_changed: bool) -> list[Series3D]:
         """Mark series referencing `dataset` stale after a transformation --
-        the 3D counterpart of `Panel.invalidate_series_for_dataset`. A 3D
-        scatter series has no `row_range` (see `Series3D`'s own docstring),
-        so `row_set_changed` only matters in that it's part of the same
-        shared call signature `GnoviFigure.invalidate_series_for_dataset`
-        uses to fan out across every panel regardless of type; a 3D series
-        is marked stale purely on a missing x/y/z column."""
+        the 3D counterpart of `Panel.invalidate_series_for_dataset`, same
+        two conditions: a missing x/y/z column, or -- when `row_set_changed`
+        is True -- a `row_indices` subset (a "Group by" curve family
+        member) at all. `row_indices` are invalidated unconditionally
+        rather than only when out of bounds, for the identical reason
+        `Panel.invalidate_series_for_dataset` already gives for
+        `row_range`: a row-count/order change can silently shift what a
+        still-in-bounds position list actually contains, and guessing it's
+        still correct isn't safe."""
         newly_stale = []
         for series in self.series:
             if series.dataset.id != dataset.id or series.stale:
                 continue
-            if any(col not in dataset.columns for col in (series.x_column, series.y_column, series.z_column)):
+            missing_column = any(
+                col not in dataset.columns for col in (series.x_column, series.y_column, series.z_column)
+            )
+            row_indices_invalid = row_set_changed and series.row_indices is not None
+            if missing_column or row_indices_invalid:
                 series.stale = True
                 newly_stale.append(series)
         return newly_stale
@@ -529,6 +549,8 @@ class Panel3D:
             "grid": self.grid,
             "elevation": self.elevation,
             "azimuth": self.azimuth,
+            "legend_visible": self.legend_visible,
+            "legend_loc": self.legend_loc,
             "panel_label": self.panel_label,
             "source_graph_id": self.source_graph_id,
             "id": self.id,
@@ -553,6 +575,8 @@ class Panel3D:
             grid=data.get("grid", True),
             elevation=data.get("elevation", 30.0),
             azimuth=data.get("azimuth", -60.0),
+            legend_visible=data.get("legend_visible", True),
+            legend_loc=data.get("legend_loc", "best"),
             panel_label=data.get("panel_label", ""),
             source_graph_id=data.get("source_graph_id"),
         )

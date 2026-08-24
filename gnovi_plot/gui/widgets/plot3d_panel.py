@@ -16,46 +16,72 @@ from PySide6.QtWidgets import (
 )
 
 from gnovi_plot.data.dataset_manager import DatasetManager
-from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xyz
+from gnovi_plot.data.numeric import InsufficientNumericDataError, group_row_positions
 from gnovi_plot.gui.styles import STALE_COLOR
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.plotting.figure import GnoviFigure, Panel3D
 from gnovi_plot.plotting.graph_library import GraphLibrary
-from gnovi_plot.plotting.series3d import Series3D
+from gnovi_plot.plotting.series3d import Plot3DType, Series3D
 
-# Only "Scatter" this milestone -- the combo exists (rather than a plain
-# label) so 3D Line/Curve Family (a later, separate PR -- see this
-# milestone's own architecture inspection) has an obvious place to land as
-# a second option, without another sidebar page or control ever being
-# needed for it.
-_PLOT_TYPE_OPTIONS = [("Scatter", "scatter")]
+_PLOT_TYPE_OPTIONS = [
+    ("Scatter", Plot3DType.SCATTER),
+    ("Line", Plot3DType.LINE),
+    ("Line + Markers", Plot3DType.LINE_MARKER),
+]
+
+# No marker for a pure LINE series (matches `PlotSeries.line()`'s own
+# `overrides.setdefault("marker", "")` convention); scatter/line+markers
+# both get a real marker so a point is actually visible.
+_DEFAULT_MARKER_BY_PLOT_TYPE = {
+    Plot3DType.SCATTER: "o",
+    Plot3DType.LINE: "",
+    Plot3DType.LINE_MARKER: "o",
+}
+
+_GROUP_BY_NONE = "__none__"
+
+
+def _format_group_label(value: object) -> str:
+    """Plain value label for a "Group by" group -- e.g. `25.0` -> `"25"`,
+    `25.5` -> `"25.5"`, a categorical string used as-is. No unit is ever
+    invented from the group column's name (GNOVI has no trusted unit
+    metadata system to draw one from) -- see this milestone's own notes."""
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
 
 
 class Plot3DPanel(QWidget):
     """Left-side "3D" drawer page: the creation/management workspace for
-    `Panel3D` content -- Dataset + X/Y/Z column selection to add a new
-    `Series3D` to the active panel, plus a read-only summary list of the
-    active panel's current 3D series.
+    `Panel3D` content -- Dataset + plot type + X/Y/Z column selection,
+    optionally split into a "Group by" curve family, to add new `Series3D`
+    to the active panel, plus a read-only summary list of the active
+    panel's current 3D series.
 
     Deliberately does NOT duplicate per-series styling (color/marker/alpha/
-    visibility) -- that stays on the Series tab's adaptive 3D page (see
-    `plot_series_panel.PlotSeriesPanel`), exactly mirroring how 2D's own
-    "Add to Plot" (`DatasetPanel.plot_section`) creates series while
-    `PlotSeriesPanel` styles them, never duplicating the split.
+    visibility/line style/line width) -- that stays on the Series tab's
+    adaptive 3D page (see `plot_series_panel.PlotSeriesPanel`), exactly
+    mirroring how 2D's own "Add to Plot" (`DatasetPanel.plot_section`)
+    creates series while `PlotSeriesPanel` styles them, never duplicating
+    the split.
 
     This panel never decides whether "Add to 3D Plot" should convert the
     active panel, append to it, or ask for confirmation first -- that
     decision needs `GnoviFigure.active_panel`'s current type/content, which
     only the owner (`MainWindow`) resolves against together with the rest
     of the application's state. This panel only validates the Dataset/X/Y/Z
-    choice is numerically usable (`numeric_xyz`, the same controlled-error
-    pattern `DatasetPanel._on_add_to_plot_clicked` already uses for 2D) and
-    emits a fully-formed `Series3D` (no color yet -- see
-    `Panel3D.add_series`, which assigns one from the theme cycle).
+    (and, if set, Group by) choice is numerically usable (`data.numeric.
+    group_row_positions`, the same controlled-error convention `numeric_xy`/
+    `numeric_xyz` already use) and emits a fully-formed list of `Series3D`
+    (no color yet -- see `Panel3D.add_series`, which assigns one from the
+    theme cycle) as ONE signal -- "Group by Temperature" creating 7 series
+    is one atomic Add operation, not 7 (see `MainWindow.
+    _on_add_3d_series_requested`, which commits exactly one undo checkpoint
+    for the whole list).
     """
 
-    add_3d_series_requested = Signal(object)  # Series3D
+    add_3d_series_requested = Signal(list)  # list[Series3D]
     clear_3d_plot_requested = Signal()
 
     def __init__(
@@ -73,17 +99,14 @@ class Plot3DPanel(QWidget):
 
         self.dataset_combo = QComboBox()
         self.plot_type_combo = QComboBox()
-        for text, code in _PLOT_TYPE_OPTIONS:
-            self.plot_type_combo.addItem(text, code)
-        # A visible, disabled combo (not a hidden one) -- "there is exactly
-        # one option right now" should read as an honest, temporary fact
-        # about this milestone, not a control that mysteriously vanished
-        # once a second plot type exists.
-        self.plot_type_combo.setEnabled(len(_PLOT_TYPE_OPTIONS) > 1)
+        for text, plot_type in _PLOT_TYPE_OPTIONS:
+            self.plot_type_combo.addItem(text, plot_type)
 
         self.x_combo = QComboBox()
         self.y_combo = QComboBox()
         self.z_combo = QComboBox()
+
+        self.group_by_combo = QComboBox()
 
         self.add_button = QPushButton("Add to 3D Plot")
         self.add_button.setProperty("primary", True)
@@ -106,6 +129,8 @@ class Plot3DPanel(QWidget):
         add_layout.addWidget(self.y_combo)
         add_layout.addWidget(QLabel("Z column"))
         add_layout.addWidget(self.z_combo)
+        add_layout.addWidget(QLabel("Group by"))
+        add_layout.addWidget(self.group_by_combo)
         add_layout.addWidget(self.error_label)
         add_layout.addWidget(self.add_button)
         add_layout.addWidget(self.clear_button)
@@ -173,6 +198,18 @@ class Plot3DPanel(QWidget):
                 combo.setCurrentText(current)
             combo.blockSignals(False)
 
+        current_group = self.group_by_combo.currentData()
+        self.group_by_combo.blockSignals(True)
+        self.group_by_combo.clear()
+        self.group_by_combo.addItem("None", _GROUP_BY_NONE)
+        for column in columns:
+            self.group_by_combo.addItem(column, column)
+        if current_group is not None:
+            index = self.group_by_combo.findData(current_group)
+            if index >= 0:
+                self.group_by_combo.setCurrentIndex(index)
+        self.group_by_combo.blockSignals(False)
+
     def refresh(self) -> None:
         """Reload the active panel's 3D series list and "Clear 3D Plot"'s
         enabled state. The "Add 3D Series" form itself stays enabled
@@ -207,12 +244,46 @@ class Plot3DPanel(QWidget):
             self.error_label.setText("Choose a Dataset and X/Y/Z columns.")
             self.error_label.setVisible(True)
             return
+
+        group_data = self.group_by_combo.currentData()
+        group_col = None if group_data in (None, _GROUP_BY_NONE) else group_data
         try:
-            numeric_xyz(dataset.dataframe, x_col, y_col, z_col)
+            groups = group_row_positions(dataset.dataframe, x_col, y_col, z_col, group_col)
         except (KeyError, InsufficientNumericDataError) as exc:
             self.error_label.setText(str(exc))
             self.error_label.setVisible(True)
             return
 
-        series = Series3D(dataset=dataset, x_column=x_col, y_column=y_col, z_column=z_col, label=dataset.name)
-        self.add_3d_series_requested.emit(series)
+        # `QComboBox.currentData()` round-trips a str-subclassed Enum
+        # through QVariant and hands back a plain `str` -- same Qt
+        # marshalling quirk `dataset_panel._current_plot_type` already
+        # documents/normalizes for 2D; without this, `Series3D.plot_type`
+        # would be a plain string that happens to `==`-compare equal to the
+        # right `Plot3DType` member (so rendering/tests using `==` don't
+        # notice) but crashes in `to_dict()` (`.value` doesn't exist on a
+        # plain str) the moment the panel is saved.
+        raw_plot_type = self.plot_type_combo.currentData()
+        plot_type = raw_plot_type if isinstance(raw_plot_type, Plot3DType) else Plot3DType(raw_plot_type)
+        marker = _DEFAULT_MARKER_BY_PLOT_TYPE[plot_type]
+
+        series_list = []
+        for group_value, positions in groups.items():
+            if group_col is None:
+                label = dataset.name
+                row_indices = None
+            else:
+                label = _format_group_label(group_value)
+                row_indices = tuple(positions)
+            series_list.append(
+                Series3D(
+                    dataset=dataset,
+                    x_column=x_col,
+                    y_column=y_col,
+                    z_column=z_col,
+                    label=label,
+                    plot_type=plot_type,
+                    marker=marker,
+                    row_indices=row_indices,
+                )
+            )
+        self.add_3d_series_requested.emit(series_list)
