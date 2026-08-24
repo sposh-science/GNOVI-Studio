@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 import matplotlib
 from matplotlib.axes import Axes
-from matplotlib.colors import to_rgb
+from matplotlib.colors import to_rgb, to_rgba
 from matplotlib.figure import Figure as MplFigure
 from matplotlib.ticker import MultipleLocator
 
@@ -417,8 +417,32 @@ def render_panel_3d(ax, panel: Panel3D, figure: GnoviFigure | None = None, *, da
     if panel.zlim is not None:
         ax.set_zlim(*panel.zlim)
 
+    # Scientific/data aspect -- see `Panel3D.aspect_mode`'s own docstring
+    # for why this is `set_aspect` (data-unit scaling), never
+    # `set_box_aspect` (physical panel shape, an entirely separate,
+    # untouched concern). `adjustable="datalim"` changes the x/y/z data
+    # limits to achieve the requested aspect rather than warping the
+    # panel's own box shape -- "auto" is a real, valid `set_aspect` value
+    # too (not just the absence of a call), so this is always called
+    # unconditionally for a uniform code path.
+    ax.set_aspect(panel.aspect_mode, adjustable="datalim")
+
     ax.tick_params(axis="both", which="major", labelsize=tick_size)
+    if panel.major_tick_spacing_x:
+        ax.xaxis.set_major_locator(MultipleLocator(panel.major_tick_spacing_x))
+    if panel.major_tick_spacing_y:
+        ax.yaxis.set_major_locator(MultipleLocator(panel.major_tick_spacing_y))
+    if panel.major_tick_spacing_z:
+        ax.zaxis.set_major_locator(MultipleLocator(panel.major_tick_spacing_z))
+    if panel.minor_tick_spacing_x:
+        ax.xaxis.set_minor_locator(MultipleLocator(panel.minor_tick_spacing_x))
+    if panel.minor_tick_spacing_y:
+        ax.yaxis.set_minor_locator(MultipleLocator(panel.minor_tick_spacing_y))
+    if panel.minor_tick_spacing_z:
+        ax.zaxis.set_minor_locator(MultipleLocator(panel.minor_tick_spacing_z))
+
     ax.grid(panel.grid)
+    _apply_3d_grid_style(ax, panel, dark_mode)
 
     # The deterministic default/exported camera -- see `Panel3D`'s own
     # docstring for why only elev/azim are modeled, and why interactive
@@ -428,16 +452,26 @@ def render_panel_3d(ax, panel: Panel3D, figure: GnoviFigure | None = None, *, da
     # Panel's stored xlim/ylim (or "auto" if never explicitly set).
     ax.view_init(elev=panel.elevation, azim=panel.azimuth)
 
-    # Deliberately minimal (see `Panel3D`'s own docstring): `loc` + figure-
-    # level font size only, no ncol/frameon/title/outside-bbox customization
-    # -- `ax.get_legend_handles_labels()` only ever contains artists from
-    # series actually drawn above (visible, non-stale), so a hidden/stale
-    # series never gets a legend entry, the same "only what's actually
-    # rendered" semantics `render_panel`'s own legend block already has.
+    # Deliberately minimal (see `Panel3D`'s own docstring): `loc`/`ncols`/
+    # `frameon` + figure-level font size, no title/outside-bbox/per-panel
+    # font-size-override customization -- `Axes3D` doesn't override
+    # `legend()` (confirmed directly against the installed Matplotlib
+    # version), so this is the exact same public `Axes.legend(...)` call
+    # `render_panel`'s own 2D legend block uses, just a smaller kwarg
+    # subset. `ax.get_legend_handles_labels()` only ever contains artists
+    # from series actually drawn above (visible, non-stale), so a hidden/
+    # stale series never gets a legend entry, the same "only what's
+    # actually rendered" semantics `render_panel`'s own legend block
+    # already has.
     if panel.legend_visible:
         handles, _labels = ax.get_legend_handles_labels()
         if handles:
-            ax.legend(loc=panel.legend_loc, fontsize=figure.legend_font_size if figure else None)
+            ax.legend(
+                loc=panel.legend_loc,
+                ncols=max(1, panel.legend_ncol),
+                frameon=panel.legend_frameon,
+                fontsize=figure.legend_font_size if figure else None,
+            )
     else:
         legend = ax.get_legend()
         if legend is not None:
@@ -454,7 +488,7 @@ def render_panel_3d(ax, panel: Panel3D, figure: GnoviFigure | None = None, *, da
             fontweight="bold",
         )
 
-    _apply_chrome_3d(ax, dark_mode)
+    _apply_chrome_3d(ax, panel, dark_mode)
 
 
 def _apply_chrome(ax: Axes, dark_mode: bool) -> None:
@@ -482,7 +516,7 @@ def _apply_chrome(ax: Axes, dark_mode: bool) -> None:
             legend.get_title().set_color(chrome["text"])
 
 
-def _apply_chrome_3d(ax, dark_mode: bool) -> None:
+def _apply_chrome_3d(ax, panel: Panel3D, dark_mode: bool) -> None:
     """3D counterpart of `_apply_chrome` -- same palette dicts (never a
     duplicated theme definition, just a separate application), but a
     genuinely different Matplotlib API surface: `Axes3D` has three pane
@@ -492,13 +526,24 @@ def _apply_chrome_3d(ax, dark_mode: bool) -> None:
     meaningful visual boundary a 3D view actually shows -- the panes are,
     so those are what get colored/outlined here instead of spines. Legend
     theming (frame/text colors) mirrors `_apply_chrome`'s own block
-    exactly, now that `Panel3D` supports a legend."""
+    exactly, now that `Panel3D` supports a legend.
+
+    Pane visibility/color/alpha are `panel`-driven (see `Panel3D.
+    pane_visible`/`.pane_color`/`.pane_alpha`'s own docstring) via
+    `Axis.pane`'s fully public, stable `Polygon` API (`set_visible`/
+    `set_facecolor`/`set_alpha`) -- no private-API concerns here, unlike
+    grid (see `_apply_3d_grid_style`). `pane_color=None` falls back to the
+    current Plot Theme's background exactly like before this field
+    existed."""
     chrome = _DARK_CHROME if dark_mode else _LIGHT_CHROME
     ax.set_facecolor(chrome["axes_bg"])
     ax.title.set_color(chrome["text"])
+    pane_color = panel.pane_color or chrome["axes_bg"]
     for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
         axis.label.set_color(chrome["text"])
-        axis.pane.set_facecolor(chrome["axes_bg"])
+        axis.pane.set_visible(panel.pane_visible)
+        axis.pane.set_facecolor(pane_color)
+        axis.pane.set_alpha(panel.pane_alpha)
         axis.pane.set_edgecolor(chrome["spine"])
     ax.tick_params(axis="both", colors=chrome["text"])
 
@@ -510,6 +555,65 @@ def _apply_chrome_3d(ax, dark_mode: bool) -> None:
             text.set_color(chrome["text"])
         if legend.get_title() is not None:
             legend.get_title().set_color(chrome["text"])
+
+
+def _apply_3d_grid_style(ax, panel: Panel3D, dark_mode: bool) -> None:
+    """Apply `Panel3D`'s grid style (linestyle/linewidth/alpha/color) to a
+    live `Axes3D`.
+
+    WHY THIS TOUCHES A PRIVATE MATPLOTLIB API: verified directly against
+    the installed Matplotlib version (see this milestone's own
+    architecture-inspection notes) that there is no public way to do this.
+    `Axes3D.grid(visible, **kwargs)` is overridden to ignore every style
+    kwarg entirely (its own docstring: "does not behave the same as
+    `.axes.Axes.grid`, but is intended to eventually support that
+    behavior"). The seemingly-public `ax.get_xgridlines()`/`get_ygridlines`/
+    `get_zgridlines()` return real, fully-settable `Line2D` objects, but
+    styling them has ZERO effect on the actual rendered/exported grid --
+    confirmed experimentally (set + re-export, before and after an explicit
+    `draw()`, style never appeared in the output). The ONLY mechanism that
+    actually controls rendered 3D grid line appearance in this Matplotlib
+    version is each axis's private `_axinfo["grid"]` dict
+    (`mpl_toolkits.mplot3d.axis3d.Axis.draw` reads `_axinfo["grid"]
+    ["color"/"linewidth"/"linestyle"]` directly every render) -- confirmed
+    experimentally the opposite way too (mutating it and re-exporting DID
+    change the rendered output).
+
+    CONTAINMENT: this is the ONE function in all of GNOVI that touches
+    `_axinfo` -- every other 3D grid/pane/legend/aspect/tick control in
+    this milestone uses fully public Matplotlib API. If a future
+    Matplotlib release restructures `_axinfo`, this is the only place that
+    needs to change.
+
+    Alpha must be baked into the RGBA color tuple (`to_rgba(color, alpha)`)
+    rather than passed as a separate `alpha` key -- confirmed by reading
+    `axis3d.py`'s own draw code: it calls `set_color`/`set_linewidth`/
+    `set_linestyle` on the grid line collection, never `set_alpha`, so a
+    bare `alpha` dict key is silently ignored.
+
+    GRACEFUL FALLBACK: wrapped in a broad `except` -- if `_axinfo`'s shape
+    changes in a future Matplotlib release (or an invalid color string
+    somehow reaches here), this silently leaves whatever grid Matplotlib's
+    own `ax.grid(panel.grid)` (called by the caller, unconditionally, via
+    the public API) already produced -- never crashes the render, never
+    corrupts `panel` (this function only ever READS it), and never leaves
+    a partially-styled axis (X/Y/Z are looped together; if one axis's
+    dict write fails they all abort before any partial mutation matters,
+    since each axis's dict is independent of the others' success)."""
+    if not panel.grid:
+        return
+    theme_grid_color = _DARK_CHROME["grid"] if dark_mode else _LIGHT_CHROME["grid"]
+    color = panel.grid_color or theme_grid_color
+    try:
+        rgba = to_rgba(color, panel.grid_alpha)
+        for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+            axis._axinfo["grid"].update(
+                color=rgba,
+                linewidth=panel.grid_linewidth,
+                linestyle=panel.grid_linestyle,
+            )
+    except (AttributeError, KeyError, TypeError, ValueError):
+        pass
 
 
 # --- Preview-only legend fitting (screen only -- never export) -------------

@@ -336,6 +336,18 @@ class PlotSeriesPanel(QWidget):
         self.d3_alpha_spin.setRange(0.05, 1.0)
         self.d3_alpha_spin.setSingleStep(0.05)
 
+        # Non-modal low-contrast warning for manually-colored 3D series --
+        # same mechanism/widgets as the 2D page's own `contrast_warning_
+        # label`/`optimize_colors_button` (see `update_contrast_warnings`),
+        # just a separate pair of widgets since the 3D page is a distinct
+        # `QWidget` from the 2D page in this adaptive stack.
+        self.d3_contrast_warning_label = QLabel("")
+        self.d3_contrast_warning_label.setWordWrap(True)
+        self.d3_contrast_warning_label.setStyleSheet(f"color: {WARNING_COLOR}; font-weight: 600;")
+        self.d3_contrast_warning_label.setVisible(False)
+        self.d3_optimize_colors_button = QPushButton("Optimize Colors for Theme")
+        self.d3_optimize_colors_button.setVisible(False)
+
         list_group = QGroupBox("3D Series")
         list_layout = QVBoxLayout(list_group)
         list_layout.addWidget(self.series3d_list)
@@ -343,6 +355,8 @@ class PlotSeriesPanel(QWidget):
         buttons.addWidget(self.remove_3d_button)
         buttons.addWidget(self.clear_3d_button)
         list_layout.addLayout(buttons)
+        list_layout.addWidget(self.d3_contrast_warning_label)
+        list_layout.addWidget(self.d3_optimize_colors_button)
 
         props_group = QGroupBox("Series Properties")
         form = QFormLayout(props_group)
@@ -378,6 +392,7 @@ class PlotSeriesPanel(QWidget):
         self.d3_line_style_combo.currentIndexChanged.connect(self._apply_3d_line_style)
         self.d3_line_width_spin.valueChanged.connect(self._apply_3d_line_width)
         self.d3_alpha_spin.valueChanged.connect(self._apply_3d_alpha)
+        self.d3_optimize_colors_button.clicked.connect(self._on_optimize_colors)
 
         return page
 
@@ -648,22 +663,24 @@ class PlotSeriesPanel(QWidget):
         self._on_selection_changed(self.series_list.currentRow())
         self.changed.emit()
 
-    # --- Theme-aware contrast warning (manual colors only, 2D only) --------
+    # --- Theme-aware contrast warning (manual colors only) -----------------
 
     def update_contrast_warnings(self, dark_mode: bool) -> None:
         """Refresh the non-modal low-contrast banner for the active panel's
         visible, manually-colored series against the current Plot Theme.
         Call after every render (theme switch, series edit, panel switch) --
-        see `MainWindow._rerender`. Never changes a color itself. A no-op
-        (and hides the banner) when the active panel is a `Panel3D` -- 3D
-        scatter series aren't checked for contrast in this milestone."""
+        see `MainWindow._rerender`. Never changes a color itself.
+
+        Works identically for `Panel`/`PlotSeries` and `Panel3D`/
+        `Series3D` -- both expose the same `.visible`/`.stale`/
+        `.color_is_manual`/`.color` field names, and `is_low_contrast`
+        itself is format-agnostic, so this is the exact same algorithm
+        2D already used, only now also applied when the active panel is a
+        `Panel3D`; there is no second contrast check to maintain. Which
+        page's banner widgets get shown/hidden is the only thing that
+        depends on the active panel's type."""
         self._dark_mode = dark_mode
         panel = self._figure.active_panel
-        if not isinstance(panel, Panel):
-            self._low_contrast_series = []
-            self.contrast_warning_label.setVisible(False)
-            self.optimize_colors_button.setVisible(False)
-            return
         self._low_contrast_series = [
             series
             for series in panel.series
@@ -674,22 +691,34 @@ class PlotSeriesPanel(QWidget):
             and is_low_contrast(series.color, dark_mode)
         ]
         count = len(self._low_contrast_series)
+        text = ""
         if count:
             noun = "series has" if count == 1 else "series have"
-            self.contrast_warning_label.setText(f"{count} {noun} low contrast on the current plot background.")
-        self.contrast_warning_label.setVisible(bool(count))
-        self.optimize_colors_button.setVisible(bool(count))
+            text = f"{count} {noun} low contrast on the current plot background."
+        is_3d = isinstance(panel, Panel3D)
+        self.contrast_warning_label.setText(text if not is_3d else "")
+        self.contrast_warning_label.setVisible(bool(count) and not is_3d)
+        self.optimize_colors_button.setVisible(bool(count) and not is_3d)
+        self.d3_contrast_warning_label.setText(text if is_3d else "")
+        self.d3_contrast_warning_label.setVisible(bool(count) and is_3d)
+        self.d3_optimize_colors_button.setVisible(bool(count) and is_3d)
 
     def _on_optimize_colors(self) -> None:
         """Explicit, user-triggered re-color of the currently flagged
         low-contrast manual colors from the theme-appropriate cycle --
         the only way a manually chosen color ever changes (see
-        `PlotSeries.color_is_manual`)."""
+        `PlotSeries.color_is_manual`/`Series3D.color_is_manual`). Shared by
+        both pages' "Optimize Colors for Theme" buttons -- `_low_contrast_
+        series` already holds whichever type is currently relevant (see
+        `update_contrast_warnings`), so no branching is needed here beyond
+        picking the right "currently selected series" accessor to restore
+        the selection afterward."""
         cycle = theme_color_cycle(self._dark_mode)
         for i, series in enumerate(self._low_contrast_series):
             series.color = cycle[i % len(cycle)]
             series.color_is_manual = False
-        current = self._current_series()
+        is_3d = isinstance(self._figure.active_panel, Panel3D)
+        current = self._current_3d_series() if is_3d else self._current_series()
         self.refresh(select_id=current.id if current is not None else None)
         self.update_contrast_warnings(self._dark_mode)
         self.changed.emit()

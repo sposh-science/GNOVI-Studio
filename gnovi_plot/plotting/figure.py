@@ -428,14 +428,55 @@ class Panel3D:
     design questions -- see the architecture inspection's "roadmap"
     section -- not needed for scatter/line).
 
-    `legend_visible`/`legend_loc` are the minimal legend controls added for
-    the 3D-curve-families milestone -- deliberately not the full `Panel`
-    legend field set (`legend_ncol`/`legend_frameon`/`legend_fontsize`/
-    `legend_title`): a grouped 3D curve family's legend need is "which
-    color is which series" (`Series3D.label`), not the fuller per-legend
-    customization 2D supports; font size reuses `GnoviFigure.
+    `legend_visible`/`legend_loc`/`legend_ncol`/`legend_frameon` mirror
+    `Panel`'s own field names exactly -- still deliberately not the FULL
+    `Panel` legend field set (no
+    `legend_fontsize`/`legend_title`): font size reuses `GnoviFigure.
     legend_font_size` directly rather than duplicating a per-panel
-    override.
+    override, and a legend title wasn't judged worth the extra control for
+    a grouped 3D curve family's actual need ("which color is which
+    series", i.e. `Series3D.label` via the legend body, not a heading).
+
+    Grid style (`grid_linestyle`/`grid_linewidth`/`grid_alpha`/
+    `grid_color`) is deliberately PER-PANEL here, unlike `Panel`'s own grid
+    style fields (which live on `GnoviFigure`, shared figure-wide) -- 3D
+    grid styling is applied through a fundamentally different, private-API
+    -backed mechanism (see `plotting.backends.matplotlib_backend.
+    _apply_3d_grid_style`) that has nothing in common with 2D's rendering
+    path, so there's no real sharing to be had by hoisting it to
+    `GnoviFigure`; keeping it per-panel also means a mixed-figure's 2D
+    panels' shared grid style is never accidentally coupled to a 3D
+    panel's independent one. Defaults (`"-"`, `0.8`, `1.0`, `None`) are
+    chosen to exactly reproduce Matplotlib's own unstyled `Axes3D` grid
+    appearance, so a project saved before this field existed renders
+    identically after loading.
+
+    `pane_visible`/`pane_color`/`pane_alpha` use Matplotlib's fully public,
+    stable `Axis.pane` (`matplotlib.patches.Polygon`) API -- no private-API
+    concerns here, unlike grid. `pane_color=None` means "follow the
+    current Plot Theme" (the existing, only-ever behavior before this
+    field existed); an explicit color overrides it. Defaults reproduce
+    current appearance exactly (panes always visible, fully opaque,
+    theme-colored).
+
+    `aspect_mode` (`"auto"` | `"equal"`) is SCIENTIFIC/DATA aspect --
+    whether one data-unit in X visually equals one data-unit in Y/Z --
+    mapped to Matplotlib's public `Axes3D.set_aspect(...)`, deliberately
+    NOT `set_box_aspect()` (that controls the physical panel SHAPE, a
+    separate cosmetic concern this milestone does not touch). Default
+    `"auto"` reproduces current (unconstrained autoscale) behavior exactly.
+
+    `major_tick_spacing_x/y/z`/`minor_tick_spacing_x/y/z` mirror `Panel`'s
+    own `major_tick_spacing_x/y`/`minor_tick_spacing_x/y` naming, extended
+    to a third axis; `None` means "no explicit spacing" (Matplotlib's own
+    automatic tick placement), matching `Panel`'s own convention exactly.
+    Deliberately no per-axis tick WIDTH or LENGTH field: verified directly
+    against the installed Matplotlib version that `tick_params(width=...)`
+    has no visible effect on rendered `Axes3D` ticks (a second private-API
+    surface would be needed, which this milestone's scope explicitly
+    avoids), and tick length/direction are known-unreliable in mplot3d
+    across viewing angles -- see the architecture inspection this PR
+    implements.
     """
 
     title: str = ""
@@ -459,6 +500,34 @@ class Panel3D:
     # one-entry) legend by default, consistent with 2D.
     legend_visible: bool = True
     legend_loc: str = "best"
+    legend_ncol: int = 1
+    legend_frameon: bool = True
+
+    # Grid style -- private-API-backed, see this class's own docstring and
+    # `matplotlib_backend._apply_3d_grid_style`. Defaults reproduce
+    # Matplotlib's own unstyled `Axes3D` grid exactly.
+    grid_linestyle: str = "-"
+    grid_linewidth: float = 0.8
+    grid_alpha: float = 1.0
+    grid_color: str | None = None  # None = follow the current Plot Theme
+
+    # Panes -- public `Axis.pane` API, see this class's own docstring.
+    pane_visible: bool = True
+    pane_color: str | None = None  # None = follow the current Plot Theme
+    pane_alpha: float = 1.0
+
+    # Scientific/data aspect -- "auto" or "equal", see this class's own
+    # docstring for why this is `set_aspect`, never `set_box_aspect`.
+    aspect_mode: str = "auto"
+
+    # Tick spacing, per axis -- see this class's own docstring for why no
+    # width/length/direction fields exist alongside these.
+    major_tick_spacing_x: float | None = None
+    major_tick_spacing_y: float | None = None
+    major_tick_spacing_z: float | None = None
+    minor_tick_spacing_x: float | None = None
+    minor_tick_spacing_y: float | None = None
+    minor_tick_spacing_z: float | None = None
 
     # Auto-assigned by GnoviFigure whenever the panel grid changes; only
     # drawn when GnoviFigure.panel_labels_visible is True -- identical
@@ -551,6 +620,22 @@ class Panel3D:
             "azimuth": self.azimuth,
             "legend_visible": self.legend_visible,
             "legend_loc": self.legend_loc,
+            "legend_ncol": self.legend_ncol,
+            "legend_frameon": self.legend_frameon,
+            "grid_linestyle": self.grid_linestyle,
+            "grid_linewidth": self.grid_linewidth,
+            "grid_alpha": self.grid_alpha,
+            "grid_color": self.grid_color,
+            "pane_visible": self.pane_visible,
+            "pane_color": self.pane_color,
+            "pane_alpha": self.pane_alpha,
+            "aspect_mode": self.aspect_mode,
+            "major_tick_spacing_x": self.major_tick_spacing_x,
+            "major_tick_spacing_y": self.major_tick_spacing_y,
+            "major_tick_spacing_z": self.major_tick_spacing_z,
+            "minor_tick_spacing_x": self.minor_tick_spacing_x,
+            "minor_tick_spacing_y": self.minor_tick_spacing_y,
+            "minor_tick_spacing_z": self.minor_tick_spacing_z,
             "panel_label": self.panel_label,
             "source_graph_id": self.source_graph_id,
             "id": self.id,
@@ -577,6 +662,22 @@ class Panel3D:
             azimuth=data.get("azimuth", -60.0),
             legend_visible=data.get("legend_visible", True),
             legend_loc=data.get("legend_loc", "best"),
+            legend_ncol=data.get("legend_ncol", 1),
+            legend_frameon=data.get("legend_frameon", True),
+            grid_linestyle=data.get("grid_linestyle", "-"),
+            grid_linewidth=data.get("grid_linewidth", 0.8),
+            grid_alpha=data.get("grid_alpha", 1.0),
+            grid_color=data.get("grid_color"),
+            pane_visible=data.get("pane_visible", True),
+            pane_color=data.get("pane_color"),
+            pane_alpha=data.get("pane_alpha", 1.0),
+            aspect_mode=data.get("aspect_mode", "auto"),
+            major_tick_spacing_x=data.get("major_tick_spacing_x"),
+            major_tick_spacing_y=data.get("major_tick_spacing_y"),
+            major_tick_spacing_z=data.get("major_tick_spacing_z"),
+            minor_tick_spacing_x=data.get("minor_tick_spacing_x"),
+            minor_tick_spacing_y=data.get("minor_tick_spacing_y"),
+            minor_tick_spacing_z=data.get("minor_tick_spacing_z"),
             panel_label=data.get("panel_label", ""),
             source_graph_id=data.get("source_graph_id"),
         )

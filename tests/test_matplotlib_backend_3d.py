@@ -4,6 +4,8 @@ mirroring `test_matplotlib_backend.py`'s/`test_legend_fit.py`'s style
 (`FigureCanvasAgg` directly).
 """
 
+import io
+
 import pandas as pd
 import pytest
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -12,6 +14,7 @@ from mpl_toolkits.mplot3d import Axes3D
 
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.plotting.backends.matplotlib_backend import (
+    _apply_3d_grid_style,
     build_projection_aware_axes,
     render_figure,
     render_panel_3d,
@@ -519,3 +522,279 @@ def test_legend_labels_match_series_labels_exactly():
 
     legend = ax.get_legend()
     assert [text.get_text() for text in legend.get_texts()] == ["Custom Label"]
+
+
+# --- Grid style (private-API-backed, see _apply_3d_grid_style's own docstring) ---
+
+
+def test_grid_style_linestyle_and_width_are_applied():
+    dataset = _make_dataset()
+    panel = Panel3D(grid_linestyle=":", grid_linewidth=3.0)
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        assert axis._axinfo["grid"]["linestyle"] == ":"
+        assert axis._axinfo["grid"]["linewidth"] == 3.0
+
+
+def test_grid_alpha_is_baked_into_the_rgba_color_not_a_bare_alpha_key():
+    """Confirmed via direct Matplotlib source inspection: `axis3d.py`'s own
+    draw code never reads a bare `alpha` dict key, only `color`/
+    `linewidth`/`linestyle` -- alpha MUST be part of the RGBA color tuple."""
+    dataset = _make_dataset()
+    panel = Panel3D(grid_color="#00ff00", grid_alpha=0.4)
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    color = ax.xaxis._axinfo["grid"]["color"]
+    assert color == pytest.approx((0.0, 1.0, 0.0, 0.4))
+
+
+def test_grid_color_none_uses_theme_appropriate_default():
+    dataset = _make_dataset()
+    panel_light = Panel3D(grid_color=None)
+    panel_light.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax_light = mpl_figure.add_subplot(1, 2, 1, projection="3d")
+    ax_dark = mpl_figure.add_subplot(1, 2, 2, projection="3d")
+    render_panel_3d(ax_light, panel_light, dark_mode=False)
+    render_panel_3d(ax_dark, panel_light, dark_mode=True)
+
+    assert ax_light.xaxis._axinfo["grid"]["color"] != ax_dark.xaxis._axinfo["grid"]["color"]
+
+
+def test_grid_style_exported_svg_reflects_manual_color():
+    """End-to-end confirmation (not just the internal dict) -- the styled
+    color must actually reach the exported/rendered output, exactly as
+    verified experimentally during this milestone's own architecture
+    inspection."""
+    dataset = _make_dataset()
+    panel = Panel3D(grid_color="#123abc", grid_alpha=1.0)
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+    buf = io.BytesIO()
+    mpl_figure.savefig(buf, format="svg")
+    content = buf.getvalue().decode("utf-8").lower()
+    assert "123abc" in content
+
+
+def test_grid_style_gracefully_falls_back_if_axinfo_is_unavailable(monkeypatch):
+    """The one function in GNOVI that touches `_axinfo` must never crash a
+    render if a future Matplotlib release restructures it -- simulated
+    here by making the private dict inaccessible."""
+    dataset = _make_dataset()
+    panel = Panel3D(grid_color="#ff0000")
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+
+    class _BrokenAxis:
+        def __getattr__(self, _name):
+            raise AttributeError("_axinfo restructured")
+
+    monkeypatch.setattr(ax, "xaxis", _BrokenAxis())
+    _apply_3d_grid_style(ax, panel, dark_mode=False)  # must not raise
+
+
+def test_grid_style_disabled_when_grid_is_off():
+    dataset = _make_dataset()
+    panel = Panel3D(grid=False, grid_color="#ff0000")
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)  # must not raise, grid style is simply skipped
+
+
+# --- Panes (public Axis.pane API) -------------------------------------------------
+
+
+def test_pane_visibility_is_applied():
+    dataset = _make_dataset()
+    panel = Panel3D(pane_visible=False)
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        assert axis.pane.get_visible() is False
+
+
+def test_pane_manual_color_is_applied():
+    dataset = _make_dataset()
+    panel = Panel3D(pane_color="#123456")
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    from matplotlib.colors import to_rgba
+
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        assert axis.pane.get_facecolor() == pytest.approx(to_rgba("#123456"))
+
+
+def test_pane_color_none_follows_theme():
+    dataset = _make_dataset()
+    panel = Panel3D(pane_color=None)
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax_light = mpl_figure.add_subplot(1, 2, 1, projection="3d")
+    ax_dark = mpl_figure.add_subplot(1, 2, 2, projection="3d")
+    render_panel_3d(ax_light, panel, dark_mode=False)
+    render_panel_3d(ax_dark, panel, dark_mode=True)
+
+    assert ax_light.xaxis.pane.get_facecolor() != ax_dark.xaxis.pane.get_facecolor()
+
+
+def test_pane_alpha_is_applied():
+    dataset = _make_dataset()
+    panel = Panel3D(pane_alpha=0.3)
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        assert axis.pane.get_alpha() == pytest.approx(0.3)
+
+
+# --- Legend columns / frame ------------------------------------------------------
+
+
+def test_legend_ncol_is_applied_with_enough_series():
+    dataset = _make_dataset()
+    panel = Panel3D(legend_visible=True, legend_ncol=3)
+    for i in range(6):
+        panel.add_series(
+            Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity", label=f"s{i}")
+        )
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    legend = ax.get_legend()
+    assert legend._ncols == 3
+
+
+def test_legend_frame_off_is_applied():
+    dataset = _make_dataset()
+    panel = Panel3D(legend_visible=True, legend_frameon=False)
+    panel.add_series(
+        Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity", label="s1")
+    )
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    legend = ax.get_legend()
+    assert legend.get_frame_on() is False
+
+
+def test_legend_supports_many_grouped_curves_with_multiple_columns():
+    """The grouped-diode-family scenario at realistic scale -- 10 groups,
+    3 legend columns, must render without error and produce all 10
+    entries."""
+    dataset = _make_dataset()
+    panel = Panel3D(legend_visible=True, legend_ncol=3)
+    for i in range(10):
+        panel.add_series(
+            Series3D(
+                dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+                label=f"{20 + i * 10}",
+            )
+        )
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)  # must not raise
+
+    legend = ax.get_legend()
+    assert len(legend.get_texts()) == 10
+    assert legend._ncols == 3
+
+
+# --- Scientific aspect (set_aspect, never set_box_aspect) ------------------------
+
+
+def test_aspect_auto_is_applied():
+    dataset = _make_dataset()
+    panel = Panel3D(aspect_mode="auto")
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    assert ax.get_aspect() == "auto"
+
+
+def test_aspect_equal_is_applied():
+    dataset = _make_dataset()
+    panel = Panel3D(aspect_mode="equal")
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    assert ax.get_aspect() == "equal"
+
+
+# --- Tick locators (public per-axis API) ------------------------------------------
+
+
+def test_major_tick_spacing_applied_per_axis():
+    dataset = _make_dataset()
+    panel = Panel3D(major_tick_spacing_x=25.0, major_tick_spacing_y=0.05)
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    xticks = ax.get_xticks()
+    diffs = [round(b - a, 6) for a, b in zip(xticks, xticks[1:])]
+    assert all(d == pytest.approx(25.0) for d in diffs)
+
+
+def test_minor_tick_spacing_applied_per_axis():
+    dataset = _make_dataset()
+    panel = Panel3D(minor_tick_spacing_x=10.0)
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    minor_ticks = ax.get_xticks(minor=True)
+    assert len(minor_ticks) > 0
+
+
+def test_no_tick_spacing_set_uses_automatic_placement():
+    dataset = _make_dataset()
+    panel = Panel3D()
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)  # must not raise
+    assert len(ax.get_xticks(minor=True)) == 0

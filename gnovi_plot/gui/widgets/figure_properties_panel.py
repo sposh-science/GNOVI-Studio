@@ -88,6 +88,9 @@ _LIMIT_RANGE = 1e12
 _TICK_SPACING_RANGE = 1e9
 _TICK_GEOMETRY_RANGE = 100.0
 _DEFAULT_GRID_COLOR = "#b0b0b0"
+_DEFAULT_PANE_COLOR = "#ffffff"
+
+_ASPECT_OPTIONS = [("Auto", "auto"), ("Equal", "equal")]
 
 # Figure-wide (not per-panel) grid-appearance fields this panel also edits --
 # see the "Grid" QGroupBox below. Unlike the axis/tick/spine/legend fields
@@ -383,11 +386,15 @@ class FigurePropertiesPanel(QWidget):
     # --- 3D page (Panel3D) ----------------------------------------------------
 
     def _build_3d_page(self) -> QWidget:
-        """`Panel3D`'s deliberately smaller field set (see that class's own
-        docstring): title/X-Y-Z labels, X/Y/Z limits, a plain grid on/off,
-        the camera (elevation/azimuth), and a minimal legend (visible +
-        location only) -- no ticks/spines/legend ncol/frameon/title/font-
-        size override, none of which `Panel3D` has."""
+        """`Panel3D`'s field set (see that class's own docstring): title/
+        X-Y-Z labels, X/Y/Z limits, scientific (data) aspect, X/Y/Z tick
+        spacing, grid style, panes, legend (visible/location/columns/
+        frame), and the camera -- no tick width/length/direction, no
+        per-axis grid visibility/major-minor distinction, no axis-line
+        color, none of which is reliable or has a real API surface in
+        this Matplotlib version (see `Panel3D`'s own docstring and
+        `matplotlib_backend._apply_3d_grid_style`'s docstring for exactly
+        what was verified and why each is excluded)."""
         self.d3_title_edit = QLineEdit()
         self.d3_xlabel_edit = QLineEdit()
         self.d3_ylabel_edit = QLineEdit()
@@ -404,11 +411,60 @@ class FigurePropertiesPanel(QWidget):
         self.d3_z_max_spin = self._make_limit_spin()
         self.d3_reset_limits_button = QPushButton("Reset / Auto Limits")
 
-        self.d3_grid_check = QCheckBox("Show grid")
+        # --- Scientific Aspect -- data/coordinate scaling, NOT panel
+        # shape (`set_box_aspect`, untouched) and NOT camera (`view_init`,
+        # unaffected) -- see `Panel3D.aspect_mode`'s own docstring.
+        self.d3_aspect_combo = self._make_option_combo(_ASPECT_OPTIONS)
 
+        # --- Ticks -- major/minor spacing only, per axis; no width/length/
+        # direction (verified unreliable/non-functional for Axes3D in this
+        # Matplotlib version -- see `Panel3D`'s own docstring).
+        self.d3_major_spacing_x_spin = self._make_spacing_spin()
+        self.d3_major_spacing_y_spin = self._make_spacing_spin()
+        self.d3_major_spacing_z_spin = self._make_spacing_spin()
+        self.d3_minor_spacing_x_spin = self._make_spacing_spin()
+        self.d3_minor_spacing_y_spin = self._make_spacing_spin()
+        self.d3_minor_spacing_z_spin = self._make_spacing_spin()
+
+        # --- Grid -- style is applied via a single isolated, private-API
+        # -backed helper (`matplotlib_backend._apply_3d_grid_style`); see
+        # that function's own docstring for why and how it fails
+        # gracefully. Same widget pattern as the 2D Grid group.
+        self.d3_grid_check = QCheckBox("Show grid")
+        self.d3_grid_style_combo = QComboBox()
+        for text, code in _GRID_STYLE_OPTIONS:
+            self.d3_grid_style_combo.addItem(text, code)
+        self.d3_grid_width_spin = QDoubleSpinBox()
+        self.d3_grid_width_spin.setRange(0.1, 10.0)
+        self.d3_grid_width_spin.setSingleStep(0.1)
+        self.d3_grid_alpha_spin = QDoubleSpinBox()
+        self.d3_grid_alpha_spin.setRange(0.05, 1.0)
+        self.d3_grid_alpha_spin.setSingleStep(0.05)
+        self.d3_grid_custom_color_check = QCheckBox("Custom grid color")
+        self.d3_grid_color_button = QPushButton()
+        self.d3_grid_color_button.setFixedWidth(48)
+
+        # --- Panes -- fully public `Axis.pane` (`Polygon`) API, see
+        # `Panel3D.pane_visible`/`.pane_color`/`.pane_alpha`'s own
+        # docstring. No axis-line color in this PR (lower value, shares
+        # grid's private-API risk profile -- deferred).
+        self.d3_pane_visible_check = QCheckBox("Show panes")
+        self.d3_pane_custom_color_check = QCheckBox("Custom pane color")
+        self.d3_pane_color_button = QPushButton()
+        self.d3_pane_color_button.setFixedWidth(48)
+        self.d3_pane_alpha_spin = QDoubleSpinBox()
+        self.d3_pane_alpha_spin.setRange(0.05, 1.0)
+        self.d3_pane_alpha_spin.setSingleStep(0.05)
+
+        # --- Legend -- adds columns/frame over the prior milestone's
+        # visible/location only; still no title/per-panel font-size
+        # override/outside-placement (see `Panel3D`'s own docstring).
         self.d3_legend_check = QCheckBox("Show legend")
         self.d3_legend_loc_combo = QComboBox()
         self.d3_legend_loc_combo.addItems(_LEGEND_LOCATIONS_3D)
+        self.d3_legend_ncol_spin = QSpinBox()
+        self.d3_legend_ncol_spin.setRange(1, 10)
+        self.d3_legend_frame_check = QCheckBox("Legend frame")
 
         self.d3_elevation_spin = QDoubleSpinBox()
         self.d3_elevation_spin.setRange(-180.0, 180.0)
@@ -423,15 +479,6 @@ class FigurePropertiesPanel(QWidget):
         labels_form.addRow("X label", self.d3_xlabel_edit)
         labels_form.addRow("Y label", self.d3_ylabel_edit)
         labels_form.addRow("Z label", self.d3_zlabel_edit)
-
-        view_group = QGroupBox("3D View / Camera")
-        view_form = QFormLayout(view_group)
-        view_form.addRow("Elevation", self.d3_elevation_spin)
-        view_form.addRow("Azimuth", self.d3_azimuth_spin)
-        view_buttons = QHBoxLayout()
-        view_buttons.addWidget(self.d3_set_current_view_button)
-        view_buttons.addWidget(self.d3_reset_view_button)
-        view_form.addRow(view_buttons)
 
         limits_group = QGroupBox("Limits")
         limits_layout = QVBoxLayout(limits_group)
@@ -452,23 +499,62 @@ class FigurePropertiesPanel(QWidget):
         limits_layout.addLayout(z_row)
         limits_layout.addWidget(self.d3_reset_limits_button)
 
+        aspect_group = QGroupBox("Scientific Aspect")
+        aspect_form = QFormLayout(aspect_group)
+        aspect_form.addRow("Aspect", self.d3_aspect_combo)
+
+        ticks_group = QGroupBox("Ticks")
+        ticks_form = QFormLayout(ticks_group)
+        ticks_form.addRow("Major spacing X", self.d3_major_spacing_x_spin)
+        ticks_form.addRow("Major spacing Y", self.d3_major_spacing_y_spin)
+        ticks_form.addRow("Major spacing Z", self.d3_major_spacing_z_spin)
+        ticks_form.addRow("Minor spacing X", self.d3_minor_spacing_x_spin)
+        ticks_form.addRow("Minor spacing Y", self.d3_minor_spacing_y_spin)
+        ticks_form.addRow("Minor spacing Z", self.d3_minor_spacing_z_spin)
+
         grid_group = QGroupBox("Grid")
         grid_form = QFormLayout(grid_group)
         grid_form.addRow(self.d3_grid_check)
+        grid_form.addRow("Style", self.d3_grid_style_combo)
+        grid_form.addRow("Line width", self.d3_grid_width_spin)
+        grid_form.addRow("Grid opacity", self.d3_grid_alpha_spin)
+        grid_form.addRow(self.d3_grid_custom_color_check)
+        grid_form.addRow("Color", self.d3_grid_color_button)
+
+        panes_group = QGroupBox("Panes")
+        panes_form = QFormLayout(panes_group)
+        panes_form.addRow(self.d3_pane_visible_check)
+        panes_form.addRow(self.d3_pane_custom_color_check)
+        panes_form.addRow("Color", self.d3_pane_color_button)
+        panes_form.addRow("Pane opacity", self.d3_pane_alpha_spin)
 
         legend_group = QGroupBox("Legend")
         legend_form = QFormLayout(legend_group)
         legend_form.addRow(self.d3_legend_check)
         legend_form.addRow("Legend location", self.d3_legend_loc_combo)
+        legend_form.addRow("Legend columns", self.d3_legend_ncol_spin)
+        legend_form.addRow(self.d3_legend_frame_check)
+
+        view_group = QGroupBox("View / Camera")
+        view_form = QFormLayout(view_group)
+        view_form.addRow("Elevation", self.d3_elevation_spin)
+        view_form.addRow("Azimuth", self.d3_azimuth_spin)
+        view_buttons = QHBoxLayout()
+        view_buttons.addWidget(self.d3_set_current_view_button)
+        view_buttons.addWidget(self.d3_reset_view_button)
+        view_form.addRow(view_buttons)
 
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(labels_group)
-        layout.addWidget(view_group)
         layout.addWidget(limits_group)
+        layout.addWidget(aspect_group)
+        layout.addWidget(ticks_group)
         layout.addWidget(grid_group)
+        layout.addWidget(panes_group)
         layout.addWidget(legend_group)
+        layout.addWidget(view_group)
         layout.addStretch(1)
 
         self.d3_title_edit.editingFinished.connect(self._apply_3d_title)
@@ -485,9 +571,27 @@ class FigurePropertiesPanel(QWidget):
         self.d3_z_min_spin.valueChanged.connect(self._apply_3d_z_limits)
         self.d3_z_max_spin.valueChanged.connect(self._apply_3d_z_limits)
         self.d3_reset_limits_button.clicked.connect(self._on_reset_3d_limits)
+        self.d3_aspect_combo.currentIndexChanged.connect(self._apply_3d_aspect)
+        self.d3_major_spacing_x_spin.valueChanged.connect(self._apply_3d_major_spacing_x)
+        self.d3_major_spacing_y_spin.valueChanged.connect(self._apply_3d_major_spacing_y)
+        self.d3_major_spacing_z_spin.valueChanged.connect(self._apply_3d_major_spacing_z)
+        self.d3_minor_spacing_x_spin.valueChanged.connect(self._apply_3d_minor_spacing_x)
+        self.d3_minor_spacing_y_spin.valueChanged.connect(self._apply_3d_minor_spacing_y)
+        self.d3_minor_spacing_z_spin.valueChanged.connect(self._apply_3d_minor_spacing_z)
         self.d3_grid_check.toggled.connect(self._apply_3d_grid)
+        self.d3_grid_style_combo.currentIndexChanged.connect(self._apply_3d_grid_style)
+        self.d3_grid_width_spin.valueChanged.connect(self._apply_3d_grid_width)
+        self.d3_grid_alpha_spin.valueChanged.connect(self._apply_3d_grid_alpha)
+        self.d3_grid_custom_color_check.toggled.connect(self._apply_3d_grid_custom_color_toggled)
+        self.d3_grid_color_button.clicked.connect(self._pick_3d_grid_color)
+        self.d3_pane_visible_check.toggled.connect(self._apply_3d_pane_visible)
+        self.d3_pane_custom_color_check.toggled.connect(self._apply_3d_pane_custom_color_toggled)
+        self.d3_pane_color_button.clicked.connect(self._pick_3d_pane_color)
+        self.d3_pane_alpha_spin.valueChanged.connect(self._apply_3d_pane_alpha)
         self.d3_legend_check.toggled.connect(self._apply_3d_legend_visible)
         self.d3_legend_loc_combo.currentTextChanged.connect(self._apply_3d_legend_loc)
+        self.d3_legend_ncol_spin.valueChanged.connect(self._apply_3d_legend_ncol)
+        self.d3_legend_frame_check.toggled.connect(self._apply_3d_legend_frame)
         self.d3_elevation_spin.valueChanged.connect(self._apply_3d_elevation)
         self.d3_azimuth_spin.valueChanged.connect(self._apply_3d_azimuth)
         self.d3_set_current_view_button.clicked.connect(self.set_current_view_requested)
@@ -824,6 +928,12 @@ class FigurePropertiesPanel(QWidget):
     def _set_grid_color_swatch(self, color: str) -> None:
         self.grid_color_button.setStyleSheet(f"background-color: {color};")
 
+    def _set_color_swatch(self, button: QPushButton, color: str) -> None:
+        """Generic version of `_set_grid_color_swatch` -- used by the 3D
+        page's grid/pane color pickers (two independent swatches, unlike
+        2D's single figure-wide grid color button)."""
+        button.setStyleSheet(f"background-color: {color};")
+
     def _apply_grid_style(self, _index: int) -> None:
         if self._updating:
             return
@@ -968,9 +1078,36 @@ class FigurePropertiesPanel(QWidget):
             self.d3_z_min_spin.setValue(panel.zlim[0])
             self.d3_z_max_spin.setValue(panel.zlim[1])
 
+        self.d3_aspect_combo.setCurrentIndex(max(self.d3_aspect_combo.findData(panel.aspect_mode), 0))
+
+        self.d3_major_spacing_x_spin.setValue(panel.major_tick_spacing_x or 0.0)
+        self.d3_major_spacing_y_spin.setValue(panel.major_tick_spacing_y or 0.0)
+        self.d3_major_spacing_z_spin.setValue(panel.major_tick_spacing_z or 0.0)
+        self.d3_minor_spacing_x_spin.setValue(panel.minor_tick_spacing_x or 0.0)
+        self.d3_minor_spacing_y_spin.setValue(panel.minor_tick_spacing_y or 0.0)
+        self.d3_minor_spacing_z_spin.setValue(panel.minor_tick_spacing_z or 0.0)
+
         self.d3_grid_check.setChecked(panel.grid)
+        self.d3_grid_style_combo.setCurrentIndex(max(self.d3_grid_style_combo.findData(panel.grid_linestyle), 0))
+        self.d3_grid_width_spin.setValue(panel.grid_linewidth)
+        self.d3_grid_alpha_spin.setValue(panel.grid_alpha)
+        has_custom_grid_color = panel.grid_color is not None
+        self.d3_grid_custom_color_check.setChecked(has_custom_grid_color)
+        self.d3_grid_color_button.setEnabled(has_custom_grid_color)
+        self._set_color_swatch(self.d3_grid_color_button, panel.grid_color or _DEFAULT_GRID_COLOR)
+
+        self.d3_pane_visible_check.setChecked(panel.pane_visible)
+        has_custom_pane_color = panel.pane_color is not None
+        self.d3_pane_custom_color_check.setChecked(has_custom_pane_color)
+        self.d3_pane_color_button.setEnabled(has_custom_pane_color)
+        self._set_color_swatch(self.d3_pane_color_button, panel.pane_color or _DEFAULT_PANE_COLOR)
+        self.d3_pane_alpha_spin.setValue(panel.pane_alpha)
+
         self.d3_legend_check.setChecked(panel.legend_visible)
         self.d3_legend_loc_combo.setCurrentText(panel.legend_loc)
+        self.d3_legend_ncol_spin.setValue(panel.legend_ncol)
+        self.d3_legend_frame_check.setChecked(panel.legend_frameon)
+
         self.d3_elevation_spin.setValue(panel.elevation)
         self.d3_azimuth_spin.setValue(panel.azimuth)
         self._updating = False
@@ -1046,10 +1183,124 @@ class FigurePropertiesPanel(QWidget):
         self._sync_from_figure()
         self.changed.emit()
 
+    def _apply_3d_aspect(self, _index: int) -> None:
+        if self._updating:
+            return
+        self._panel.aspect_mode = self.d3_aspect_combo.currentData()
+        self.changed.emit()
+
+    def _apply_3d_major_spacing_x(self, value: float) -> None:
+        if self._updating:
+            return
+        self._panel.major_tick_spacing_x = value or None
+        self.changed.emit()
+
+    def _apply_3d_major_spacing_y(self, value: float) -> None:
+        if self._updating:
+            return
+        self._panel.major_tick_spacing_y = value or None
+        self.changed.emit()
+
+    def _apply_3d_major_spacing_z(self, value: float) -> None:
+        if self._updating:
+            return
+        self._panel.major_tick_spacing_z = value or None
+        self.changed.emit()
+
+    def _apply_3d_minor_spacing_x(self, value: float) -> None:
+        if self._updating:
+            return
+        self._panel.minor_tick_spacing_x = value or None
+        self.changed.emit()
+
+    def _apply_3d_minor_spacing_y(self, value: float) -> None:
+        if self._updating:
+            return
+        self._panel.minor_tick_spacing_y = value or None
+        self.changed.emit()
+
+    def _apply_3d_minor_spacing_z(self, value: float) -> None:
+        if self._updating:
+            return
+        self._panel.minor_tick_spacing_z = value or None
+        self.changed.emit()
+
     def _apply_3d_grid(self, checked: bool) -> None:
         if self._updating:
             return
         self._panel.grid = checked
+        self.changed.emit()
+
+    def _apply_3d_grid_style(self, _index: int) -> None:
+        if self._updating:
+            return
+        self._panel.grid_linestyle = self.d3_grid_style_combo.currentData()
+        self.changed.emit()
+
+    def _apply_3d_grid_width(self, value: float) -> None:
+        if self._updating:
+            return
+        self._panel.grid_linewidth = value
+        self.changed.emit()
+
+    def _apply_3d_grid_alpha(self, value: float) -> None:
+        if self._updating:
+            return
+        self._panel.grid_alpha = value
+        self.changed.emit()
+
+    def _apply_3d_grid_custom_color_toggled(self, checked: bool) -> None:
+        self.d3_grid_color_button.setEnabled(checked)
+        if self._updating:
+            return
+        if checked:
+            self._panel.grid_color = self.d3_grid_color_button.property("_picked_color") or _DEFAULT_GRID_COLOR
+        else:
+            self._panel.grid_color = None
+        self._set_color_swatch(self.d3_grid_color_button, self._panel.grid_color or _DEFAULT_GRID_COLOR)
+        self.changed.emit()
+
+    def _pick_3d_grid_color(self) -> None:
+        initial = QColor(self._panel.grid_color or _DEFAULT_GRID_COLOR)
+        color = QColorDialog.getColor(initial, self, "3D Grid Color")
+        if not color.isValid():
+            return
+        self._panel.grid_color = color.name()
+        self.d3_grid_color_button.setProperty("_picked_color", color.name())
+        self._set_color_swatch(self.d3_grid_color_button, color.name())
+        self.changed.emit()
+
+    def _apply_3d_pane_visible(self, checked: bool) -> None:
+        if self._updating:
+            return
+        self._panel.pane_visible = checked
+        self.changed.emit()
+
+    def _apply_3d_pane_custom_color_toggled(self, checked: bool) -> None:
+        self.d3_pane_color_button.setEnabled(checked)
+        if self._updating:
+            return
+        if checked:
+            self._panel.pane_color = self.d3_pane_color_button.property("_picked_color") or _DEFAULT_PANE_COLOR
+        else:
+            self._panel.pane_color = None
+        self._set_color_swatch(self.d3_pane_color_button, self._panel.pane_color or _DEFAULT_PANE_COLOR)
+        self.changed.emit()
+
+    def _pick_3d_pane_color(self) -> None:
+        initial = QColor(self._panel.pane_color or _DEFAULT_PANE_COLOR)
+        color = QColorDialog.getColor(initial, self, "3D Pane Color")
+        if not color.isValid():
+            return
+        self._panel.pane_color = color.name()
+        self.d3_pane_color_button.setProperty("_picked_color", color.name())
+        self._set_color_swatch(self.d3_pane_color_button, color.name())
+        self.changed.emit()
+
+    def _apply_3d_pane_alpha(self, value: float) -> None:
+        if self._updating:
+            return
+        self._panel.pane_alpha = value
         self.changed.emit()
 
     def _apply_3d_legend_visible(self, checked: bool) -> None:
@@ -1062,6 +1313,18 @@ class FigurePropertiesPanel(QWidget):
         if self._updating or not text:
             return
         self._panel.legend_loc = text
+        self.changed.emit()
+
+    def _apply_3d_legend_ncol(self, value: int) -> None:
+        if self._updating:
+            return
+        self._panel.legend_ncol = value
+        self.changed.emit()
+
+    def _apply_3d_legend_frame(self, checked: bool) -> None:
+        if self._updating:
+            return
+        self._panel.legend_frameon = checked
         self.changed.emit()
 
     def _apply_3d_elevation(self, value: float) -> None:

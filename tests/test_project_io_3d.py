@@ -321,3 +321,129 @@ def test_project_format_version_is_unchanged_for_grouped_families(tmp_path):
         manifest = json.loads(zf.read("project.json"))
 
     assert manifest["project_format_version"] == PROJECT_FORMAT_VERSION == 3
+
+
+# --- Publication-polish fields: grid style/panes/legend columns/aspect/ticks -----
+
+
+def _polished_project():
+    dataset = _diode_dataset()
+    project = Project.new()
+    project.dataset_manager.add(dataset)
+    wb = project.workbenches[0]
+    panel = Panel3D(
+        title="Polished",
+        grid_linestyle="--", grid_linewidth=2.0, grid_alpha=0.5, grid_color="#ff00ff",
+        pane_visible=False, pane_color="#00ffff", pane_alpha=0.6,
+        legend_visible=True, legend_ncol=3, legend_frameon=False,
+        aspect_mode="equal",
+        major_tick_spacing_x=1.0, major_tick_spacing_y=2.0, major_tick_spacing_z=3.0,
+        minor_tick_spacing_x=0.1, minor_tick_spacing_y=0.2, minor_tick_spacing_z=0.3,
+    )
+    panel.add_series(
+        Series3D(dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", label="25", row_indices=(0, 2, 4))
+    )
+    panel.add_series(
+        Series3D(dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", label="35", row_indices=(1, 3, 5))
+    )
+    wb.figure.panels = [panel]
+    wb.figure.layout = (1, 1)
+    return project, dataset, panel
+
+
+def test_save_reopen_preserves_grid_style(tmp_path):
+    project, _dataset, _panel = _polished_project()
+    out_path = save_project(project, tmp_path / "polished.gnovi")
+
+    reloaded = load_project(out_path)
+    panel = reloaded.workbenches[0].figure.panels[0]
+
+    assert panel.grid_linestyle == "--"
+    assert panel.grid_linewidth == pytest.approx(2.0)
+    assert panel.grid_alpha == pytest.approx(0.5)
+    assert panel.grid_color == "#ff00ff"
+
+
+def test_save_reopen_preserves_panes(tmp_path):
+    project, _dataset, _panel = _polished_project()
+    out_path = save_project(project, tmp_path / "polished.gnovi")
+
+    reloaded = load_project(out_path)
+    panel = reloaded.workbenches[0].figure.panels[0]
+
+    assert panel.pane_visible is False
+    assert panel.pane_color == "#00ffff"
+    assert panel.pane_alpha == pytest.approx(0.6)
+
+
+def test_save_reopen_preserves_legend_columns_and_frame(tmp_path):
+    project, _dataset, _panel = _polished_project()
+    out_path = save_project(project, tmp_path / "polished.gnovi")
+
+    reloaded = load_project(out_path)
+    panel = reloaded.workbenches[0].figure.panels[0]
+
+    assert panel.legend_ncol == 3
+    assert panel.legend_frameon is False
+
+
+def test_save_reopen_preserves_aspect_mode(tmp_path):
+    project, _dataset, _panel = _polished_project()
+    out_path = save_project(project, tmp_path / "polished.gnovi")
+
+    reloaded = load_project(out_path)
+    panel = reloaded.workbenches[0].figure.panels[0]
+
+    assert panel.aspect_mode == "equal"
+
+
+def test_save_reopen_preserves_tick_spacing_per_axis(tmp_path):
+    project, _dataset, _panel = _polished_project()
+    out_path = save_project(project, tmp_path / "polished.gnovi")
+
+    reloaded = load_project(out_path)
+    panel = reloaded.workbenches[0].figure.panels[0]
+
+    assert panel.major_tick_spacing_x == pytest.approx(1.0)
+    assert panel.major_tick_spacing_y == pytest.approx(2.0)
+    assert panel.major_tick_spacing_z == pytest.approx(3.0)
+    assert panel.minor_tick_spacing_x == pytest.approx(0.1)
+    assert panel.minor_tick_spacing_y == pytest.approx(0.2)
+    assert panel.minor_tick_spacing_z == pytest.approx(0.3)
+
+
+def test_old_v3_project_without_polish_fields_still_reopens(tmp_path):
+    """A project saved by this repo's own IMMEDIATELY-prior 3D milestone
+    (v3, `Panel3D` with no grid-style/pane/aspect/tick-spacing/legend-
+    columns keys at all) must still load correctly with defaults that
+    reproduce its original (unstyled) rendering."""
+    project, dataset, panel = _grouped_project()  # from the prior milestone's own fixture
+    out_path = save_project(project, tmp_path / "old_v3.gnovi")
+
+    with zipfile.ZipFile(out_path) as zf:
+        manifest = json.loads(zf.read("project.json"))
+    for panel_data in manifest["workbenches"][0]["figure"]["panels"]:
+        if panel_data.get("kind") == "3d":
+            for key in (
+                "grid_linestyle", "grid_linewidth", "grid_alpha", "grid_color",
+                "pane_visible", "pane_color", "pane_alpha",
+                "legend_ncol", "legend_frameon", "aspect_mode",
+                "major_tick_spacing_x", "major_tick_spacing_y", "major_tick_spacing_z",
+                "minor_tick_spacing_x", "minor_tick_spacing_y", "minor_tick_spacing_z",
+            ):
+                panel_data.pop(key, None)
+    rewritten = tmp_path / "old_v3_rewritten.gnovi"
+    with zipfile.ZipFile(out_path) as src, zipfile.ZipFile(rewritten, "w") as dst:
+        for item in src.infolist():
+            data = json.dumps(manifest).encode() if item.filename == "project.json" else src.read(item.filename)
+            dst.writestr(item.filename, data)
+
+    reloaded = load_project(rewritten)
+    reloaded_panel = reloaded.workbenches[0].figure.panels[0]
+
+    assert isinstance(reloaded_panel, Panel3D)
+    assert reloaded_panel.aspect_mode == "auto"
+    assert reloaded_panel.grid_linestyle == "-"
+    assert reloaded_panel.pane_visible is True
+    assert reloaded_panel.legend_ncol == 1
+    assert len(reloaded_panel.series) == 2
