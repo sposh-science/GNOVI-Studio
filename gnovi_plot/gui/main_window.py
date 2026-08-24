@@ -39,8 +39,7 @@ from gnovi_plot.core.app_info import APP_NAME, about_text
 from gnovi_plot.core.project import Project
 from gnovi_plot.core.project_io import ProjectIOError, load_project, save_project
 from gnovi_plot.core.workbench import Workbench
-from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy, numeric_xyz
-from gnovi_plot.gui.dialogs.add_3d_scatter_dialog import Add3DScatterDialog
+from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
 from gnovi_plot.gui.dialogs.export_figure_dialog import ExportFigureDialog
 from gnovi_plot.gui.styles import PlotTheme, apply_app_theme
 from gnovi_plot.gui.undo_manager import UndoManager, snapshot_figure
@@ -55,6 +54,7 @@ from gnovi_plot.gui.widgets.figure_layout_panel import FigureLayoutPanel
 from gnovi_plot.gui.widgets.figure_properties_panel import FigurePropertiesPanel
 from gnovi_plot.gui.widgets.figure_size_panel import LAYOUT_PRESETS, FigureSizePanel
 from gnovi_plot.gui.widgets.graph_library_panel import GraphLibraryPanel
+from gnovi_plot.gui.widgets.plot3d_panel import Plot3DPanel
 from gnovi_plot.gui.widgets.plot_canvas import PlotCanvas, ReferenceCursorMode
 from gnovi_plot.gui.widgets.plot_series_panel import PlotSeriesPanel
 from gnovi_plot.gui.widgets.tool_drawer import ToolDrawer
@@ -576,6 +576,7 @@ class MainWindow(QMainWindow):
         # `get_figure`/`get_dataset_manager` callables below).
         get_graph_library = lambda: self._project.graph_library  # noqa: E731
         self.dataset_panel = DatasetPanel(self.dataset_manager, self.preview_table)
+        self.plot3d_panel = Plot3DPanel(self.dataset_manager, self.figure_model, get_graph_library=get_graph_library)
         self.series_panel = PlotSeriesPanel(self.figure_model, get_graph_library=get_graph_library)
         self.properties_panel = FigurePropertiesPanel(self.figure_model, get_graph_library=get_graph_library)
         self.figure_size_panel = FigureSizePanel(self.figure_model, get_graph_library=get_graph_library)
@@ -637,6 +638,7 @@ class MainWindow(QMainWindow):
         left_drawer_content_widgets = [
             data_page,
             plot_page,
+            self.plot3d_panel,
             self.series_panel,
             self.figure_size_panel,
             self.figure_layout_panel,
@@ -654,6 +656,13 @@ class MainWindow(QMainWindow):
             "Plot type, X/Y columns, plot mode and cycle controls.",
             "plot",
             _wrap_scrollable(plot_page),
+        )
+        self.tool_drawer.add_page(
+            "3d",
+            "3D",
+            "3D scatter creation -- Dataset and X/Y/Z columns for the active panel's 3D series.",
+            "3d",
+            _wrap_scrollable(self.plot3d_panel),
         )
         self.tool_drawer.add_page(
             "series",
@@ -680,7 +689,8 @@ class MainWindow(QMainWindow):
         self.tool_drawer.add_page(
             "axes",
             "Axes",
-            "Active panel's axis limits, ticks, spines, grid and legend.",
+            "Active panel's title/labels/limits/grid -- ticks, spines and legend for a "
+            "2D panel, or 3D View/Camera for a 3D panel.",
             "axes",
             _wrap_scrollable(self.properties_panel),
         )
@@ -835,10 +845,13 @@ class MainWindow(QMainWindow):
         self.dataset_panel.clear_plot_requested.connect(self._on_clear_plot)
         self.dataset_panel.axis_preset_requested.connect(self._on_axis_preset_requested)
         self.dataset_panel.datasets_changed.connect(self._on_datasets_changed)
+        self.plot3d_panel.add_3d_series_requested.connect(self._on_add_3d_series_requested)
+        self.plot3d_panel.clear_3d_plot_requested.connect(self._on_clear_3d_plot_requested)
         self.graph_library_panel.graph_library_changed.connect(self._on_graph_library_changed)
         self.graph_library_panel.graph_loaded_into_panel.connect(self._on_graph_loaded_into_panel)
         self.series_panel.changed.connect(self._on_figure_content_changed)
         self.properties_panel.changed.connect(self._on_figure_content_changed)
+        self.properties_panel.set_current_view_requested.connect(self._on_set_current_3d_view_requested)
         self.figure_size_panel.changed.connect(self._on_figure_content_changed)
         self.figure_layout_panel.changed.connect(self._on_figure_content_changed)
         self.figure_size_panel.panel_switched.connect(self._on_panel_switched)
@@ -1247,58 +1260,88 @@ class MainWindow(QMainWindow):
         self._on_figure_content_changed()
 
     def _on_add_3d_scatter_requested(self) -> None:
-        """"Panels -> Add 3D Scatter…" -- the one entry point for both
-        creating a new 3D scatter Panel and editing an existing one's
-        Dataset/X/Y/Z/labels/marker (see `Add3DScatterDialog`'s own
-        docstring for why one dialog serves both). Reuses `numeric_xyz`'s
-        existing NaN/non-numeric row-alignment handling for validation up
-        front -- same pattern `_on_plot_selected_rows` already uses for 2D
-        -- so an unusable column choice gets a clear, immediate error
-        rather than failing silently or crashing at render time.
+        """"Panels -> Add 3D Scatter…" -- a thin route to the "3D" sidebar
+        page (see `gui.widgets.plot3d_panel.Plot3DPanel`), which is now the
+        one 3D-creation implementation (see this milestone's own
+        architecture inspection on why the earlier standalone
+        `Add3DScatterDialog` was retired rather than kept as a second,
+        independently-maintained creation path)."""
+        self.tool_drawer.show_page("3d")
 
-        Editing an existing `Panel3D` mutates it IN PLACE (same `.id`, so
-        Focus/analysis-history association survives); creating fresh
-        replaces the active panel at its current grid position with a new
-        `Panel3D`, the same "replace panel at position" pattern Graph
-        Library's own "Load Graph into Active Panel" already uses (see
-        `plotting.graph_library.GraphLibrary.load_graph_into_panel`) --
-        never touches `figure.layout`/panel COUNT. Either way this is a
-        normal, undoable, dirty-marking model edit, exactly like any other
-        panel content change."""
+    def _on_add_3d_series_requested(self, series: Series3D) -> None:
+        """`Plot3DPanel.add_3d_series_requested` -- `series` is already
+        validated (numeric X/Y/Z, see `Plot3DPanel._on_add_clicked`) but not
+        yet attached to any Panel; this decides WHERE it goes, based on the
+        active panel's current type/content:
+
+        - Active panel already a `Panel3D`: append -- multiple `Series3D`
+          per panel is a plain list already (`Panel3D.add_series`), so nothing
+          special is needed beyond not clobbering what's there.
+        - Active panel an EMPTY `Panel` (no plotted series): convert in
+          place at the same grid position -- the natural "this panel had
+          nothing in it yet" case, no confirmation needed.
+        - Active panel a POPULATED `Panel` (has 2D series already): confirm
+          first -- converting it to `Panel3D` would silently discard that
+          content, so this is the one creation path that must NOT act like
+          Graph Library's "replace panel at position" without asking (see
+          this milestone's own architecture inspection, "Panel creation
+          UX")."""
         active_panel = self.figure_model.active_panel
-        existing_panel = active_panel if isinstance(active_panel, Panel3D) else None
-        dialog = Add3DScatterDialog(self.dataset_manager, existing_panel, self)
-        if dialog.exec() != Add3DScatterDialog.Accepted:
-            return
-        try:
-            numeric_xyz(dialog.dataset.dataframe, dialog.x_column, dialog.y_column, dialog.z_column)
-        except (KeyError, InsufficientNumericDataError) as exc:
-            QMessageBox.critical(self, "Add 3D Scatter", str(exc))
-            return
-
         dark_mode = self.figure_model.plot_theme == PlotTheme.DARK
-        new_series = Series3D(
-            dataset=dialog.dataset,
-            x_column=dialog.x_column,
-            y_column=dialog.y_column,
-            z_column=dialog.z_column,
-            marker=dialog.marker,
-            marker_size=dialog.marker_size,
-        )
-        if existing_panel is not None:
-            existing_panel.title = dialog.title
-            existing_panel.x_label = dialog.x_label
-            existing_panel.y_label = dialog.y_label
-            existing_panel.z_label = dialog.z_label
-            existing_panel.clear_series()
-            existing_panel.add_series(new_series, dark_mode=dark_mode)
+
+        if isinstance(active_panel, Panel3D):
+            active_panel.add_series(series, dark_mode=dark_mode)
         else:
-            new_panel = Panel3D(
-                title=dialog.title, x_label=dialog.x_label, y_label=dialog.y_label, z_label=dialog.z_label
-            )
-            new_panel.add_series(new_series, dark_mode=dark_mode)
+            if active_panel.series:
+                reply = QMessageBox.question(
+                    self,
+                    "Add to 3D Plot",
+                    f"Panel {self.figure_model.active_panel_index + 1} already has plotted "
+                    "2D series. Replace it with a new 3D scatter panel? The existing 2D "
+                    "content will be removed from this panel (Undo can still recover it).",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if reply != QMessageBox.Yes:
+                    return
+            new_panel = Panel3D()
+            new_panel.add_series(series, dark_mode=dark_mode)
             self.figure_model.panels[self.figure_model.active_panel_index] = new_panel
             self.figure_model._renumber_panel_labels()
+
+        self.plot3d_panel.refresh()
+        self.series_panel.refresh()
+        self.properties_panel.refresh()
+        self._on_figure_content_changed()
+
+    def _on_clear_3d_plot_requested(self) -> None:
+        """"Clear 3D Plot" -- removes every `Series3D` from the active
+        panel but KEEPS it as a `Panel3D` (title/labels/camera untouched),
+        mirroring 2D "Clear Plot"'s own semantics exactly (`_on_clear_plot`
+        below, which similarly never reverts `Panel` to some more-primitive
+        state). Reuses that same handler unchanged: `GnoviFigure.
+        clear_series()` already delegates to `active_panel.clear_series()`,
+        and `Panel3D.clear_series()` already exists with identical
+        semantics -- no separate 3D-specific clear implementation needed."""
+        self._on_clear_plot()
+
+    def _on_set_current_3d_view_requested(self) -> None:
+        """`FigurePropertiesPanel.set_current_view_requested` -- reads the
+        LIVE `Axes3D`'s current elevation/azimuth (from
+        `plot_canvas.active_axes`, the only place that holds it -- ordinary
+        mouse rotation never writes into the model, see `Panel3D`'s own
+        docstring) and commits it into `Panel3D.elevation`/`.azimuth`. A
+        normal, undoable, dirty-marking model edit via
+        `_on_figure_content_changed` -- the moment of commit is
+        indistinguishable from any other property edit, only the SOURCE of
+        the new value (the live canvas rather than a typed number) differs."""
+        panel = self.figure_model.active_panel
+        if not isinstance(panel, Panel3D):
+            return
+        ax = self.plot_canvas.active_axes(self.figure_model)
+        panel.elevation = float(ax.elev)
+        panel.azimuth = float(ax.azim)
+        self.properties_panel.refresh()
         self._on_figure_content_changed()
 
     def _on_toggle_panel_labels(self, checked: bool) -> None:
@@ -1769,18 +1812,20 @@ class MainWindow(QMainWindow):
     def _on_clear_plot(self):
         self.figure_model.clear_series()
         self.series_panel.refresh()
+        self.plot3d_panel.refresh()
         self._on_figure_content_changed()
 
     def _on_axis_preset_requested(self, preset: dict) -> None:
         panel = self.figure_model.active_panel
         if not isinstance(panel, Panel):
-            return  # 2D-only quick preset; Panel3D has x_label/y_label/z_label instead (see Add3DScatterDialog)
+            return  # 2D-only quick preset; Panel3D has x_label/y_label/z_label instead (see the "3D"/"Axes" pages)
         panel.xlabel = preset.get("xlabel", panel.xlabel)
         panel.ylabel = preset.get("ylabel", panel.ylabel)
         self.properties_panel.refresh()
         self._on_figure_content_changed()
 
     def _on_panel_switched(self):
+        self.plot3d_panel.refresh()
         self.series_panel.refresh()
         self.properties_panel.refresh()
         self.figure_layout_panel.refresh()
@@ -1828,6 +1873,7 @@ class MainWindow(QMainWindow):
         loaded/renamed/duplicated/deleted/updated, undo/redo, project load,
         Workbench switch/rename)."""
         self.plot_page_active_panel_label.refresh(self.figure_model)
+        self.plot3d_panel.active_panel_label.refresh(self.figure_model)
         self.series_panel.active_panel_label.refresh(self.figure_model)
         self.figure_size_panel.active_panel_label.refresh(self.figure_model)
         self.figure_layout_panel.active_panel_label.refresh(self.figure_model)
@@ -1999,10 +2045,10 @@ class MainWindow(QMainWindow):
 
     def _restore_figure_snapshot(self, snapshot: GnoviFigure) -> None:
         """Copy `snapshot`'s data onto the live `self.figure_model` in
-        place, rather than replacing the object -- `series_panel`/
-        `properties_panel`/`figure_size_panel` all hold a reference to this
-        exact GnoviFigure instance from construction, so swapping it out
-        would leave them silently pointing at stale state."""
+        place, rather than replacing the object -- `plot3d_panel`/
+        `series_panel`/`properties_panel`/`figure_size_panel` all hold a
+        reference to this exact GnoviFigure instance from construction, so
+        swapping it out would leave them silently pointing at stale state."""
         live = self.figure_model
         live.plot_theme = snapshot.plot_theme
         live.panels = snapshot.panels
@@ -2031,6 +2077,7 @@ class MainWindow(QMainWindow):
         live.panel_wspace = snapshot.panel_wspace
         live.panel_hspace = snapshot.panel_hspace
 
+        self.plot3d_panel.refresh()
         self.series_panel.refresh()
         self.properties_panel.refresh()
         self.figure_size_panel.refresh()
@@ -2057,6 +2104,7 @@ class MainWindow(QMainWindow):
         transformation on an existing Dataset) -- so it needs its own dirty
         hook, fed by `DatasetPanel.datasets_changed`."""
         self._set_dirty(True)
+        self.plot3d_panel.set_manager(self.dataset_manager)
 
     def _on_graph_library_changed(self) -> None:
         """Save/Rename/Duplicate/Delete/Update Saved Graph -- only the
@@ -2182,6 +2230,7 @@ class MainWindow(QMainWindow):
         self._current_workbench_id = workbench.id
         self.figure_model = workbench.figure
 
+        self.plot3d_panel.set_figure(self.figure_model)
         self.series_panel.set_figure(self.figure_model)
         self.properties_panel.set_figure(self.figure_model)
         self.figure_size_panel.set_figure(self.figure_model)
@@ -2208,6 +2257,7 @@ class MainWindow(QMainWindow):
         self.dataset_manager = project.dataset_manager
 
         self.dataset_panel.set_manager(self.dataset_manager)
+        self.plot3d_panel.set_manager(self.dataset_manager)
         self.analysis_panel.set_manager(self.dataset_manager)
         self.analysis_result_view.set_manager(self.dataset_manager)
         self.graph_library_panel.set_library(project.graph_library)

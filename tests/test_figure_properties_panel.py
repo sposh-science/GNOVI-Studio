@@ -1,7 +1,10 @@
+import pandas as pd
 import pytest
 
+from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.gui.widgets.figure_properties_panel import FigurePropertiesPanel
-from gnovi_plot.plotting.figure import GnoviFigure
+from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D
+from gnovi_plot.plotting.series3d import Series3D
 
 
 # --- Grid (single authoritative location -- see the module's
@@ -184,3 +187,121 @@ def test_capture_and_restore_state_preserves_the_panels_id(qapp):
     panel.restore_state(snapshot)
 
     assert figure.active_panel.id == original_id
+
+
+# --- Adaptive 3D page (Panel3D) ----------------------------------------------
+
+
+def _make_3d_figure():
+    df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "y": [1.0, 2.0, 3.0], "z": [1.0, 2.0, 3.0]})
+    dataset = Dataset(name="ds", dataframe=df)
+    panel3d = Panel3D()
+    panel3d.add_series(Series3D(dataset=dataset, x_column="x", y_column="y", z_column="z"))
+    return GnoviFigure(panels=[panel3d])
+
+
+def test_a_panel3d_active_panel_shows_the_3d_stack_page(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    assert panel._stack.currentWidget() is panel._page_3d
+
+
+def test_a_2d_panel_active_panel_shows_the_2d_stack_page(qapp):
+    figure = GnoviFigure()
+    panel = FigurePropertiesPanel(figure)
+
+    assert panel._stack.currentWidget() is panel._page_2d
+
+
+def test_3d_title_and_labels_edit_the_active_panel3d(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    panel.d3_title_edit.setText("Conductivity")
+    panel._apply_3d_title()
+    panel.d3_zlabel_edit.setText("Z axis")
+    panel._apply_3d_zlabel()
+
+    assert figure.active_panel.title == "Conductivity"
+    assert figure.active_panel.z_label == "Z axis"
+
+
+def test_3d_elevation_and_azimuth_spins_update_the_panel(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    panel.d3_elevation_spin.setValue(12.0)
+    panel.d3_azimuth_spin.setValue(200.0)
+
+    assert figure.active_panel.elevation == pytest.approx(12.0)
+    assert figure.active_panel.azimuth == pytest.approx(200.0)
+
+
+def test_reset_view_button_restores_camera_defaults(qapp):
+    figure = _make_3d_figure()
+    figure.active_panel.elevation = 5.0
+    figure.active_panel.azimuth = 5.0
+    panel = FigurePropertiesPanel(figure)
+    panel.refresh()
+
+    panel.d3_reset_view_button.click()
+
+    assert figure.active_panel.elevation == Panel3D().elevation
+    assert figure.active_panel.azimuth == Panel3D().azimuth
+
+
+def test_set_current_view_button_emits_a_signal_rather_than_mutating_directly(qapp):
+    """`FigurePropertiesPanel` never reads the live canvas itself (see the
+    class's own docstring on `set_current_view_requested`) -- clicking "Set
+    Current View" must only emit the signal, leaving elevation/azimuth
+    untouched until the owner (`MainWindow`) commits a value from the live
+    Axes3D."""
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+    received = []
+    panel.set_current_view_requested.connect(lambda: received.append(True))
+    before_elev = figure.active_panel.elevation
+
+    panel.d3_set_current_view_button.click()
+
+    assert received == [True]
+    assert figure.active_panel.elevation == before_elev
+
+
+def test_3d_manual_limits_round_trip(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    panel.d3_x_manual_check.setChecked(True)
+    panel.d3_x_min_spin.setValue(0.0)
+    panel.d3_x_max_spin.setValue(10.0)
+
+    assert figure.active_panel.xlim == (0.0, 10.0)
+
+
+def test_3d_reset_limits_clears_xyz_limits(qapp):
+    figure = _make_3d_figure()
+    figure.active_panel.xlim = (0.0, 1.0)
+    figure.active_panel.ylim = (0.0, 1.0)
+    figure.active_panel.zlim = (0.0, 1.0)
+    panel = FigurePropertiesPanel(figure)
+    panel.refresh()
+
+    panel.d3_reset_limits_button.click()
+
+    assert figure.active_panel.xlim is None
+    assert figure.active_panel.ylim is None
+    assert figure.active_panel.zlim is None
+
+
+def test_switching_from_2d_to_3d_panel_swaps_the_stack_page_on_refresh(qapp):
+    figure = GnoviFigure()
+    panel = FigurePropertiesPanel(figure)
+    assert panel._stack.currentWidget() is panel._page_2d
+
+    figure.panels.append(_make_3d_figure().panels[0])
+    figure.set_active_panel(1)
+    panel.refresh()
+
+    assert panel._stack.currentWidget() is panel._page_3d

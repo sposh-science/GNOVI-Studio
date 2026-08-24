@@ -369,14 +369,15 @@ def test_figure_menu_shortcuts_open_the_figure_and_axes_drawer_pages(qapp):
 
 def test_working_is_not_a_page_in_the_left_tool_drawer(qapp):
     """Working Data moved to its own RIGHT drawer -- the LEFT drawer only
-    covers "what data/series/figure/layout/axes/analysis do I want to
-    plot/configure/run?" (Data/Plot/Series/Figure/Layout/Axes/Analysis)."""
+    covers "what data/3D/series/figure/layout/axes/analysis do I want to
+    plot/configure/run?" (Data/Plot/3D/Series/Figure/Layout/Axes/Analysis)."""
     window = MainWindow()
     window.show()
 
     assert set(window.tool_drawer._buttons.keys()) == {
         "data",
         "plot",
+        "3d",
         "series",
         "figure",
         "layout",

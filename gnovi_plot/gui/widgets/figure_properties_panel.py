@@ -16,12 +16,13 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSpinBox,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
-from gnovi_plot.plotting.figure import GnoviFigure, Panel
+from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D
 from gnovi_plot.plotting.graph_library import GraphLibrary
 
 # Panel dataclass fields excluded from Apply/Cancel/Reset snapshots: `series`
@@ -77,20 +78,42 @@ _DEFAULT_GRID_COLOR = "#b0b0b0"
 # `reset_to_defaults`.
 _FIGURE_GRID_FIELDS = ["grid_linestyle", "grid_linewidth", "grid_alpha", "grid_color"]
 
+# mplot3d's own `Axes3D.view_init()` defaults -- see `Panel3D`'s own
+# docstring. "Reset View" restores exactly these, read off a fresh
+# `Panel3D()` rather than hardcoded here, so it can never drift from the
+# dataclass's own defaults.
+_PANEL3D_DEFAULTS = Panel3D()
+
 
 class FigurePropertiesPanel(QWidget):
     """Title/axis/tick/spine/grid/legend controls for a GnoviFigure's
-    currently active Panel.
+    currently active Panel, or (when the active panel is a `Panel3D`)
+    title/X-Y-Z labels/limits/grid/camera controls for it instead.
 
-    Every field here reads/writes `figure.active_panel`, so switching the
-    active panel (multi-panel layouts) just requires calling `refresh()`
-    again to reload the widgets for the newly active panel -- the panel
-    being edited changes, not the widget wiring.
+    Every 2D field here reads/writes `figure.active_panel` when it's a
+    `Panel`; every 3D field reads/writes it when it's a `Panel3D`. Switching
+    the active panel (multi-panel layouts) just requires calling
+    `refresh()` again -- it picks the right internal page AND reloads the
+    widgets for the newly active panel's actual type.
+
+    Internally a `QStackedWidget` of two pages, mirroring
+    `plot_series_panel.PlotSeriesPanel`'s own adaptive-page pattern (see
+    that class's docstring for why): every EXISTING widget attribute this
+    class exposed before 3D support (`title_edit`, `x_min_spin`, etc.)
+    stays a direct attribute of this outer object, unmoved -- only which
+    container widget currently parents it changed.
 
     `changed` is emitted after every mutation so the owner can re-render.
     """
 
     changed = Signal()
+    # "Set Current View" needs the LIVE rendered Axes3D's current elev/azim
+    # -- something only `gui.widgets.plot_canvas.PlotCanvas` holds, not this
+    # panel (which only ever reads/writes the declarative `Panel3D` model) --
+    # so committing it is delegated to the owner (`MainWindow`) via this
+    # signal, exactly like `set_figure`/`refresh` keep this panel itself
+    # model-only. See `MainWindow._on_set_current_3d_view_requested`.
+    set_current_view_requested = Signal()
 
     def __init__(
         self,
@@ -104,6 +127,22 @@ class FigurePropertiesPanel(QWidget):
 
         self.active_panel_label = ActivePanelLabel(figure, get_graph_library)
 
+        self._stack = QStackedWidget()
+        self._page_2d = self._build_2d_page()
+        self._page_3d = self._build_3d_page()
+        self._stack.addWidget(self._page_2d)
+        self._stack.addWidget(self._page_3d)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.active_panel_label)
+        layout.addWidget(self._stack)
+        layout.addStretch(1)
+
+        self.refresh()
+
+    # --- 2D page (Panel) -----------------------------------------------------
+
+    def _build_2d_page(self) -> QWidget:
         # --- Labels ---
         self.title_edit = QLineEdit()
         self.xlabel_edit = QLineEdit()
@@ -260,8 +299,9 @@ class FigurePropertiesPanel(QWidget):
 
         self.reset_all_button = QPushButton("Reset to Defaults")
 
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.active_panel_label)
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(labels_group)
         layout.addWidget(limits_group)
         layout.addWidget(ticks_group)
@@ -319,7 +359,109 @@ class FigurePropertiesPanel(QWidget):
         self.legend_title_edit.editingFinished.connect(self._apply_legend_title)
         self.reset_all_button.clicked.connect(self.reset_to_defaults)
 
-        self.refresh()
+        return page
+
+    # --- 3D page (Panel3D) ----------------------------------------------------
+
+    def _build_3d_page(self) -> QWidget:
+        """`Panel3D`'s deliberately smaller field set (see that class's own
+        docstring): title/X-Y-Z labels, X/Y/Z limits, a plain grid on/off,
+        and the camera (elevation/azimuth) -- no ticks/spines/legend, none
+        of which `Panel3D` has."""
+        self.d3_title_edit = QLineEdit()
+        self.d3_xlabel_edit = QLineEdit()
+        self.d3_ylabel_edit = QLineEdit()
+        self.d3_zlabel_edit = QLineEdit()
+
+        self.d3_x_manual_check = QCheckBox("Manual X limits")
+        self.d3_x_min_spin = self._make_limit_spin()
+        self.d3_x_max_spin = self._make_limit_spin()
+        self.d3_y_manual_check = QCheckBox("Manual Y limits")
+        self.d3_y_min_spin = self._make_limit_spin()
+        self.d3_y_max_spin = self._make_limit_spin()
+        self.d3_z_manual_check = QCheckBox("Manual Z limits")
+        self.d3_z_min_spin = self._make_limit_spin()
+        self.d3_z_max_spin = self._make_limit_spin()
+        self.d3_reset_limits_button = QPushButton("Reset / Auto Limits")
+
+        self.d3_grid_check = QCheckBox("Show grid")
+
+        self.d3_elevation_spin = QDoubleSpinBox()
+        self.d3_elevation_spin.setRange(-180.0, 180.0)
+        self.d3_azimuth_spin = QDoubleSpinBox()
+        self.d3_azimuth_spin.setRange(-360.0, 360.0)
+        self.d3_set_current_view_button = QPushButton("Set Current View")
+        self.d3_reset_view_button = QPushButton("Reset View")
+
+        labels_group = QGroupBox("Labels")
+        labels_form = QFormLayout(labels_group)
+        labels_form.addRow("Title", self.d3_title_edit)
+        labels_form.addRow("X label", self.d3_xlabel_edit)
+        labels_form.addRow("Y label", self.d3_ylabel_edit)
+        labels_form.addRow("Z label", self.d3_zlabel_edit)
+
+        view_group = QGroupBox("3D View / Camera")
+        view_form = QFormLayout(view_group)
+        view_form.addRow("Elevation", self.d3_elevation_spin)
+        view_form.addRow("Azimuth", self.d3_azimuth_spin)
+        view_buttons = QHBoxLayout()
+        view_buttons.addWidget(self.d3_set_current_view_button)
+        view_buttons.addWidget(self.d3_reset_view_button)
+        view_form.addRow(view_buttons)
+
+        limits_group = QGroupBox("Limits")
+        limits_layout = QVBoxLayout(limits_group)
+        limits_layout.addWidget(self.d3_x_manual_check)
+        x_row = QHBoxLayout()
+        x_row.addWidget(self.d3_x_min_spin)
+        x_row.addWidget(self.d3_x_max_spin)
+        limits_layout.addLayout(x_row)
+        limits_layout.addWidget(self.d3_y_manual_check)
+        y_row = QHBoxLayout()
+        y_row.addWidget(self.d3_y_min_spin)
+        y_row.addWidget(self.d3_y_max_spin)
+        limits_layout.addLayout(y_row)
+        limits_layout.addWidget(self.d3_z_manual_check)
+        z_row = QHBoxLayout()
+        z_row.addWidget(self.d3_z_min_spin)
+        z_row.addWidget(self.d3_z_max_spin)
+        limits_layout.addLayout(z_row)
+        limits_layout.addWidget(self.d3_reset_limits_button)
+
+        grid_group = QGroupBox("Grid")
+        grid_form = QFormLayout(grid_group)
+        grid_form.addRow(self.d3_grid_check)
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(labels_group)
+        layout.addWidget(view_group)
+        layout.addWidget(limits_group)
+        layout.addWidget(grid_group)
+        layout.addStretch(1)
+
+        self.d3_title_edit.editingFinished.connect(self._apply_3d_title)
+        self.d3_xlabel_edit.editingFinished.connect(self._apply_3d_xlabel)
+        self.d3_ylabel_edit.editingFinished.connect(self._apply_3d_ylabel)
+        self.d3_zlabel_edit.editingFinished.connect(self._apply_3d_zlabel)
+        self.d3_x_manual_check.toggled.connect(self._apply_3d_x_manual)
+        self.d3_x_min_spin.valueChanged.connect(self._apply_3d_x_limits)
+        self.d3_x_max_spin.valueChanged.connect(self._apply_3d_x_limits)
+        self.d3_y_manual_check.toggled.connect(self._apply_3d_y_manual)
+        self.d3_y_min_spin.valueChanged.connect(self._apply_3d_y_limits)
+        self.d3_y_max_spin.valueChanged.connect(self._apply_3d_y_limits)
+        self.d3_z_manual_check.toggled.connect(self._apply_3d_z_manual)
+        self.d3_z_min_spin.valueChanged.connect(self._apply_3d_z_limits)
+        self.d3_z_max_spin.valueChanged.connect(self._apply_3d_z_limits)
+        self.d3_reset_limits_button.clicked.connect(self._on_reset_3d_limits)
+        self.d3_grid_check.toggled.connect(self._apply_3d_grid)
+        self.d3_elevation_spin.valueChanged.connect(self._apply_3d_elevation)
+        self.d3_azimuth_spin.valueChanged.connect(self._apply_3d_azimuth)
+        self.d3_set_current_view_button.clicked.connect(self.set_current_view_requested)
+        self.d3_reset_view_button.clicked.connect(self._on_reset_3d_view)
+
+        return page
 
     @staticmethod
     def _make_limit_spin() -> QDoubleSpinBox:
@@ -387,17 +529,14 @@ class FigurePropertiesPanel(QWidget):
     def _sync_from_figure(self) -> None:
         panel = self._panel
         self.active_panel_label.refresh(self._figure)
-        # This entire page is 2D-`Panel`-specific (xlabel/xscale/box-aspect/
-        # tick settings etc. that a `Panel3D` has no equivalent of -- see
-        # `plotting.figure.Panel3D`'s own docstring). A 3D scatter Panel's
-        # properties are edited through `Add3DScatterDialog` instead (see
-        # `MainWindow._on_add_3d_scatter_requested`); disabling this whole
-        # page when a `Panel3D` is active avoids both a crash reading 2D-
-        # only fields below AND the user editing now-meaningless stale
-        # widgets that don't belong to the actual active panel at all.
-        self.setEnabled(isinstance(panel, Panel))
-        if not isinstance(panel, Panel):
-            return
+        if isinstance(panel, Panel3D):
+            self._stack.setCurrentWidget(self._page_3d)
+            self._sync_3d_from_figure(panel)
+        else:
+            self._stack.setCurrentWidget(self._page_2d)
+            self._sync_2d_from_figure(panel)
+
+    def _sync_2d_from_figure(self, panel: Panel) -> None:
         self._updating = True
         self.title_edit.setText(panel.title)
         self.xlabel_edit.setText(panel.xlabel)
@@ -462,7 +601,13 @@ class FigurePropertiesPanel(QWidget):
 
     def sync_axes_limits(self, xlim: tuple[float, float], ylim: tuple[float, float]) -> None:
         """Reflect the canvas' live (auto-computed) limits into the disabled
-        spin boxes, so they show sensible values before the user goes manual."""
+        spin boxes, so they show sensible values before the user goes
+        manual. 2D panels only -- a `Panel3D`'s Z limit has no 2D-canvas
+        equivalent to read live values from, and `MainWindow._rerender`
+        only ever calls this with a 2D Axes' own xlim/ylim in the first
+        place."""
+        if not isinstance(self._panel, Panel):
+            return
         panel = self._panel
         self._updating = True
         if panel.xlim is None:
@@ -723,7 +868,8 @@ class FigurePropertiesPanel(QWidget):
     # active panel elsewhere while this non-modal dialog stays open, Cancel
     # still reverts the panel it was actually opened for, and Reset (which
     # intentionally acts on whatever panel is showing right now) can't be
-    # confused with it.
+    # confused with it. 2D-panel-only: reachable in practice only via
+    # `reset_all_button`, itself only visible/clickable on the 2D page.
 
     def capture_state(self) -> tuple[Panel, dict, dict]:
         panel = self._panel
@@ -757,5 +903,141 @@ class FigurePropertiesPanel(QWidget):
         defaults_figure = GnoviFigure()
         for name in _FIGURE_GRID_FIELDS:
             setattr(self._figure, name, getattr(defaults_figure, name))
+        self._sync_from_figure()
+        self.changed.emit()
+
+    # --- 3D page behavior ------------------------------------------------------
+
+    def _sync_3d_from_figure(self, panel: Panel3D) -> None:
+        self._updating = True
+        self.d3_title_edit.setText(panel.title)
+        self.d3_xlabel_edit.setText(panel.x_label)
+        self.d3_ylabel_edit.setText(panel.y_label)
+        self.d3_zlabel_edit.setText(panel.z_label)
+
+        self.d3_x_manual_check.setChecked(panel.xlim is not None)
+        self.d3_x_min_spin.setEnabled(panel.xlim is not None)
+        self.d3_x_max_spin.setEnabled(panel.xlim is not None)
+        if panel.xlim is not None:
+            self.d3_x_min_spin.setValue(panel.xlim[0])
+            self.d3_x_max_spin.setValue(panel.xlim[1])
+
+        self.d3_y_manual_check.setChecked(panel.ylim is not None)
+        self.d3_y_min_spin.setEnabled(panel.ylim is not None)
+        self.d3_y_max_spin.setEnabled(panel.ylim is not None)
+        if panel.ylim is not None:
+            self.d3_y_min_spin.setValue(panel.ylim[0])
+            self.d3_y_max_spin.setValue(panel.ylim[1])
+
+        self.d3_z_manual_check.setChecked(panel.zlim is not None)
+        self.d3_z_min_spin.setEnabled(panel.zlim is not None)
+        self.d3_z_max_spin.setEnabled(panel.zlim is not None)
+        if panel.zlim is not None:
+            self.d3_z_min_spin.setValue(panel.zlim[0])
+            self.d3_z_max_spin.setValue(panel.zlim[1])
+
+        self.d3_grid_check.setChecked(panel.grid)
+        self.d3_elevation_spin.setValue(panel.elevation)
+        self.d3_azimuth_spin.setValue(panel.azimuth)
+        self._updating = False
+
+    def _apply_3d_title(self) -> None:
+        if self._updating:
+            return
+        self._panel.title = self.d3_title_edit.text()
+        self.changed.emit()
+
+    def _apply_3d_xlabel(self) -> None:
+        if self._updating:
+            return
+        self._panel.x_label = self.d3_xlabel_edit.text()
+        self.changed.emit()
+
+    def _apply_3d_ylabel(self) -> None:
+        if self._updating:
+            return
+        self._panel.y_label = self.d3_ylabel_edit.text()
+        self.changed.emit()
+
+    def _apply_3d_zlabel(self) -> None:
+        if self._updating:
+            return
+        self._panel.z_label = self.d3_zlabel_edit.text()
+        self.changed.emit()
+
+    def _apply_3d_x_manual(self, checked: bool) -> None:
+        self.d3_x_min_spin.setEnabled(checked)
+        self.d3_x_max_spin.setEnabled(checked)
+        if self._updating:
+            return
+        self._panel.xlim = (self.d3_x_min_spin.value(), self.d3_x_max_spin.value()) if checked else None
+        self.changed.emit()
+
+    def _apply_3d_x_limits(self, _value: float) -> None:
+        if self._updating or not self.d3_x_manual_check.isChecked():
+            return
+        self._panel.xlim = (self.d3_x_min_spin.value(), self.d3_x_max_spin.value())
+        self.changed.emit()
+
+    def _apply_3d_y_manual(self, checked: bool) -> None:
+        self.d3_y_min_spin.setEnabled(checked)
+        self.d3_y_max_spin.setEnabled(checked)
+        if self._updating:
+            return
+        self._panel.ylim = (self.d3_y_min_spin.value(), self.d3_y_max_spin.value()) if checked else None
+        self.changed.emit()
+
+    def _apply_3d_y_limits(self, _value: float) -> None:
+        if self._updating or not self.d3_y_manual_check.isChecked():
+            return
+        self._panel.ylim = (self.d3_y_min_spin.value(), self.d3_y_max_spin.value())
+        self.changed.emit()
+
+    def _apply_3d_z_manual(self, checked: bool) -> None:
+        self.d3_z_min_spin.setEnabled(checked)
+        self.d3_z_max_spin.setEnabled(checked)
+        if self._updating:
+            return
+        self._panel.zlim = (self.d3_z_min_spin.value(), self.d3_z_max_spin.value()) if checked else None
+        self.changed.emit()
+
+    def _apply_3d_z_limits(self, _value: float) -> None:
+        if self._updating or not self.d3_z_manual_check.isChecked():
+            return
+        self._panel.zlim = (self.d3_z_min_spin.value(), self.d3_z_max_spin.value())
+        self.changed.emit()
+
+    def _on_reset_3d_limits(self) -> None:
+        self._panel.reset_limits()
+        self._sync_from_figure()
+        self.changed.emit()
+
+    def _apply_3d_grid(self, checked: bool) -> None:
+        if self._updating:
+            return
+        self._panel.grid = checked
+        self.changed.emit()
+
+    def _apply_3d_elevation(self, value: float) -> None:
+        if self._updating:
+            return
+        self._panel.elevation = value
+        self.changed.emit()
+
+    def _apply_3d_azimuth(self, value: float) -> None:
+        if self._updating:
+            return
+        self._panel.azimuth = value
+        self.changed.emit()
+
+    def _on_reset_3d_view(self) -> None:
+        """Restore the camera to `Panel3D()`'s own defaults -- a normal,
+        immediate, undoable model edit (via `changed`), same convention as
+        `_on_reset_limits`. Unlike "Set Current View" this needs no live
+        canvas access, so it's fully self-contained here."""
+        if self._updating:
+            return
+        self._panel.elevation = _PANEL3D_DEFAULTS.elevation
+        self._panel.azimuth = _PANEL3D_DEFAULTS.azimuth
         self._sync_from_figure()
         self.changed.emit()
