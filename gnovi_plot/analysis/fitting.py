@@ -8,7 +8,8 @@ from typing import ClassVar
 import numpy as np
 from scipy.optimize import curve_fit
 
-from gnovi_plot.analysis.results import AnalysisResult, register_result_kind
+from gnovi_plot.analysis.results import ENGINE_GNOVI, AnalysisResult, register_result_kind
+from gnovi_plot.core.app_info import __version__ as _APP_VERSION
 
 LINEAR = "linear"
 POLYNOMIAL = "polynomial"
@@ -168,6 +169,10 @@ class FitResult(AnalysisResult):
             row_range=tuple(row_range) if row_range is not None else None,
             source_panel_id=data.get("source_panel_id"),
             result_id=data.get("result_id") or uuid.uuid4().hex,
+            engine=data.get("engine", ENGINE_GNOVI),
+            engine_version=data.get("engine_version"),
+            operation=data.get("operation", "curve_fit"),
+            parameters=dict(data.get("parameters", {})),
             model=data["model"],
             params=dict(data["params"]),
             param_errors=dict(data["param_errors"]) if data.get("param_errors") is not None else None,
@@ -384,6 +389,10 @@ def fit_curve(
         row_range=row_range,
         source_panel_id=source_panel_id,
         result_id=uuid.uuid4().hex,
+        engine=ENGINE_GNOVI,
+        engine_version=_APP_VERSION,
+        operation="curve_fit",
+        parameters={"model": model} if model != POLYNOMIAL else {"model": model, "degree": degree},
         model=model,
         params=params,
         param_errors=errors,

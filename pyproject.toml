@@ -21,6 +21,12 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest", "pytest-cov"]
 build = ["pyinstaller"]
+# arPLS baseline correction (gnovi_plot.modules.xrd.preprocessing.arpls_baseline)
+# only -- everything else in modules.xrd runs on the already-core NumPy/
+# SciPy/pandas stack. Kept as its own extra rather than core so a basic
+# GNOVI install stays lightweight; its absence is detected at call time
+# and raises a clear PybaselinesNotAvailableError, never breaks startup.
+xrd = ["pybaselines"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["gnovi_plot"]

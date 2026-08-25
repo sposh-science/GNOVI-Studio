@@ -8,7 +8,7 @@ import pandas as pd
 from PySide6.QtGui import QGuiApplication
 
 from gnovi_plot.analysis.fitting import LINEAR, fit_curve
-from gnovi_plot.analysis.results import AnalysisResult
+from gnovi_plot.analysis.results import ENGINE_GNOVI, AnalysisResult
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.gui.widgets.analysis_result_view import AnalysisResultView
@@ -44,6 +44,10 @@ def _make_dummy(**overrides) -> _DummyResult:
         row_range=None,
         source_panel_id=None,
         result_id="dummy-result-1",
+        engine=ENGINE_GNOVI,
+        engine_version=None,
+        operation="test",
+        parameters={},
         note="hello",
     )
     defaults.update(overrides)
