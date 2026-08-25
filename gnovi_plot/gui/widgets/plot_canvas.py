@@ -142,6 +142,15 @@ class PlotCanvas(FigureCanvasQTAgg):
         self._last_focused_panel: Panel | Panel3D | None = None
         self._cursor_mode: ReferenceCursorMode = ReferenceCursorMode.OFF
         self._cursor_artists: list = []
+        # XRD peak-marker/label and background/smoothing-preview overlays
+        # (see gui.widgets.xrd_analysis_section.XRDAnalysisSection's own
+        # docstring for why these are LIVE-ONLY, reconstructed from the
+        # current XRDAnalysisResult rather than persisted Panel/figure
+        # state): plain Matplotlib artists drawn directly on the active
+        # panel's Axes, cleared and never reused across a render() (which
+        # already ax.cla()s every Axes -- same "drop stale refs, never
+        # .remove() them" convention as _cursor_artists above).
+        self._analysis_overlay_artists: list = []
         self._active_panel_badge = _ActivePanelBadge(self)
         self._ensure_layout((1, 1), [Panel()])
 
@@ -233,6 +242,7 @@ class PlotCanvas(FigureCanvasQTAgg):
         # our stale references too (without calling .remove() on them: cla()
         # already did, and doing so again raises).
         self._cursor_artists = []
+        self._analysis_overlay_artists = []
         self._last_figure = figure
         self._last_dark_mode = dark_mode
         self._last_focused_panel = focused_panel
@@ -395,3 +405,81 @@ class PlotCanvas(FigureCanvasQTAgg):
         for artist in self._cursor_artists:
             artist.remove()
         self._cursor_artists = []
+
+    # --- XRD analysis overlay (peak markers/labels + background/smoothing
+    # preview) -- see gui.widgets.xrd_analysis_section.XRDAnalysisSection's
+    # own docstring for why this is deliberately transient/live-only,
+    # never a persisted Panel/figure annotation. Always drawn on the
+    # ACTIVE panel's Axes only -- XRDAnalysisSection.overlay_points()
+    # already returns None whenever the current XRD result's own
+    # source_panel_id doesn't match the active panel, so this never needs
+    # its own separate panel targeting. --------------------------------
+
+    def clear_analysis_overlay(self) -> None:
+        """Drop the overlay -- called whenever there's nothing to show
+        (no current XRD result, no preview). Never calls `.remove()` on
+        stale artist refs after a `render()` (that already `ax.cla()`'d
+        them away, same convention as `_clear_cursor_artists` above would
+        need if called post-render -- but unlike the cursor, this is
+        called independently of render, so removal here IS still valid
+        when the Axes haven't been cleared since the artists were added."""
+        for artist in self._analysis_overlay_artists:
+            try:
+                artist.remove()
+            except (ValueError, NotImplementedError):
+                pass  # already detached (e.g. a render() cla()'d it away)
+        self._analysis_overlay_artists = []
+        self.draw_idle()
+
+    def set_analysis_overlay(
+        self,
+        figure: GnoviFigure,
+        *,
+        peak_points: list[tuple[float, float, str]] | None,
+        preview_xy: tuple | None,
+    ) -> None:
+        """Redraw the XRD peak-marker/label overlay (`peak_points`, each
+        `(two_theta, intensity, label)`) and/or the background/smoothing
+        preview curve (`preview_xy`, `(x_array, y_array)`) on the active
+        panel's Axes -- always a full clear-and-redraw of whatever this
+        canvas drew before, never an incremental diff. A no-op (after
+        clearing) when both are `None`/empty, or the active panel is a
+        `Panel3D` (XRD overlays never apply to 3D)."""
+        self.clear_analysis_overlay()
+        if isinstance(figure.active_panel, Panel3D):
+            return
+        if not peak_points and preview_xy is None:
+            return
+        if not (0 <= figure.active_panel_index < len(self.axes_list)) or self.is_focused:
+            ax = self.axes_list[0] if self.is_focused else None
+        else:
+            ax = self.axes_list[figure.active_panel_index]
+        if ax is None:
+            return
+
+        if preview_xy is not None:
+            x, y = preview_xy
+            (line,) = ax.plot(x, y, linestyle="--", linewidth=1.0, color="#8a8f99", zorder=999)
+            self._analysis_overlay_artists.append(line)
+
+        if peak_points:
+            xs = [p[0] for p in peak_points]
+            ys = [p[1] for p in peak_points]
+            scatter = ax.scatter(xs, ys, marker="v", s=40, color="#d64545", zorder=1000)
+            self._analysis_overlay_artists.append(scatter)
+            for x, y, label in peak_points:
+                if not label:
+                    continue
+                annotation = ax.annotate(
+                    label,
+                    (x, y),
+                    textcoords="offset points",
+                    xytext=(0, 8),
+                    ha="center",
+                    fontsize=8,
+                    color="#d64545",
+                    zorder=1000,
+                )
+                self._analysis_overlay_artists.append(annotation)
+
+        self.draw_idle()

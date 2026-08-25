@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pandas as pd
 
-SUPPORTED_EXTENSIONS = {".csv", ".txt", ".tsv", ".dat"}
+# .xy/.xye are plain XRD-pattern text exports (2-column 2theta/intensity,
+# or 3-column 2theta/intensity/esd-uncertainty) -- whitespace-delimited,
+# usually headerless, with no format of their own beyond that: they need no
+# dedicated parser, just delimiter auto-detection same as any other
+# whitespace-separated file (see _detect_delimiter/resolve_delimiter, which
+# already handle a purely-numeric, headerless table via WHITESPACE).
+SUPPORTED_EXTENSIONS = {".csv", ".txt", ".tsv", ".dat", ".xy", ".xye"}
 
 _EXPLICIT_DELIMITERS = {
     ".csv": ",",

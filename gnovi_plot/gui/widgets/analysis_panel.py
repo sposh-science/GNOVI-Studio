@@ -33,8 +33,13 @@ from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.analysis_result_view import resolve_live_xy
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
+from gnovi_plot.gui.widgets.xrd_analysis_section import XRDAnalysisSection
+from gnovi_plot.modules.xrd.results import XRDAnalysisResult
 from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.series import PlotSeries
+
+_TOOL_CURVE_FITTING = "Curve Fitting"
+_TOOL_XRD = "XRD Peak Analysis"
 
 _HISTORY_EMPTY_TEXT = "No completed analysis results for this panel yet."
 
@@ -123,6 +128,28 @@ class AnalysisPanel(QWidget):
     # `sync_history()` rebuild (panel/Workbench switch, undo/redo, project
     # load) -- only for an actual click, via `_on_history_row_changed`.
     history_result_selected = Signal(AnalysisResult)
+    # XRD-only: an in-place edit to the current XRDAnalysisResult (manual
+    # peak add/remove/enable, radiation change) -- dirty + redisplay,
+    # never a new Analysis History entry (see XRDAnalysisSection's own
+    # docstring for why this is a separate signal from
+    # `analysis_result_ready`, which always means "brand new result").
+    xrd_result_updated = Signal(AnalysisResult)
+    # XRD-only: the peak-marker/label overlay for the active panel may
+    # have changed (new/edited peaks, a label-mode change, a preview
+    # curve change) -- MainWindow re-pulls `xrd_overlay_points()`/
+    # `xrd_preview_curve()` and redraws; never carries the data itself,
+    # since MainWindow always wants the CURRENT state at redraw time, not
+    # a stale snapshot from when the signal fired.
+    xrd_overlay_changed = Signal()
+    # XRD-only: True right after "Add Peak" is toggled on -- the next
+    # canvas click inside the active panel should add a manual peak seed
+    # instead of activating/focusing a panel (see MainWindow._on_canvas_
+    # click). False when toggled off or after a click is consumed.
+    xrd_manual_peak_mode_changed = Signal(bool)
+    # XRD-only: a short researcher-facing status string (e.g. "Added to
+    # plot: ...") -- MainWindow may show it on the status bar; purely
+    # informational, no state change.
+    xrd_status_message = Signal(str)
 
     def __init__(self, figure: GnoviFigure, dataset_manager: DatasetManager, parent=None):
         super().__init__(parent)
@@ -155,6 +182,17 @@ class AnalysisPanel(QWidget):
         self._history_results: list[AnalysisResult] = []
 
         self.active_panel_label = ActivePanelLabel(figure)
+
+        # One Analysis destination, multiple analysis workflows (see this
+        # class's own docstring) -- a tool selector switches which
+        # CollapsibleSection group is visible; Analysis History below is
+        # shared by every tool, never duplicated per tool.
+        self.tool_label = QLabel("Analysis Tool")
+        self.tool_combo = QComboBox()
+        self.tool_combo.addItems([_TOOL_CURVE_FITTING, _TOOL_XRD])
+
+        self.xrd_section_widget = XRDAnalysisSection(figure, dataset_manager)
+        self.xrd_section = CollapsibleSection("XRD Peak Analysis", self.xrd_section_widget)
 
         self.source_label = QLabel("Source series")
         self.source_combo = QComboBox()
@@ -221,7 +259,10 @@ class AnalysisPanel(QWidget):
         self.history_section = CollapsibleSection("Analysis History", history_group)
 
         layout = QVBoxLayout(self)
+        layout.addWidget(self.tool_label)
+        layout.addWidget(self.tool_combo)
         layout.addWidget(self.fit_section)
+        layout.addWidget(self.xrd_section)
         layout.addWidget(self.history_section)
         layout.addStretch(1)
 
@@ -232,9 +273,43 @@ class AnalysisPanel(QWidget):
         self.add_fit_curve_button.clicked.connect(self._on_add_fit_curve_clicked)
         self.remove_fit_curve_button.clicked.connect(self._on_remove_fit_curve_clicked)
         self.history_list.currentRowChanged.connect(self._on_history_row_changed)
+        self.tool_combo.currentIndexChanged.connect(self._update_tool_visibility)
+
+        self.xrd_section_widget.analysis_result_ready.connect(self.analysis_result_ready.emit)
+        self.xrd_section_widget.add_to_plot_requested.connect(self.add_to_plot_requested.emit)
+        self.xrd_section_widget.result_updated.connect(self._on_xrd_result_updated)
+        self.xrd_section_widget.overlay_changed.connect(self.xrd_overlay_changed.emit)
+        self.xrd_section_widget.manual_peak_mode_changed.connect(self.xrd_manual_peak_mode_changed.emit)
+        self.xrd_section_widget.status_message.connect(self.xrd_status_message.emit)
 
         self._update_model_controls()
+        self._update_tool_visibility()
         self.refresh()
+
+    def _update_tool_visibility(self) -> None:
+        is_xrd = self.tool_combo.currentText() == _TOOL_XRD
+        self.fit_section.setVisible(not is_xrd)
+        self.xrd_section.setVisible(is_xrd)
+
+    def _on_xrd_result_updated(self, result: AnalysisResult) -> None:
+        """An in-place edit to the current XRDAnalysisResult (manual peak
+        add/remove/enable, radiation change) -- same object already in
+        history (see XRDAnalysisSection's own docstring), so this never
+        touches `_history_results`/re-syncs the History list itself;
+        MainWindow re-displays it and marks the project dirty."""
+        self.xrd_result_updated.emit(result)
+
+    def xrd_overlay_points(self):
+        return self.xrd_section_widget.overlay_points()
+
+    def xrd_preview_curve(self):
+        return self.xrd_section_widget.preview_curve()
+
+    def xrd_is_manual_peak_mode(self) -> bool:
+        return self.xrd_section_widget.is_manual_peak_mode()
+
+    def xrd_add_manual_peak(self, two_theta: float, intensity: float) -> None:
+        self.xrd_section_widget.add_manual_peak(two_theta, intensity)
 
     def set_figure(self, figure: GnoviFigure) -> None:
         """Repoint this panel at a different `GnoviFigure` (e.g. a
@@ -251,6 +326,7 @@ class AnalysisPanel(QWidget):
         self.history_list.blockSignals(False)
         self.history_status_label.setVisible(True)
         self._invalidate_pending_fit()  # also refreshes Add/Remove button state
+        self.xrd_section_widget.set_figure(figure)
         self.refresh()
 
     def set_manager(self, dataset_manager: DatasetManager) -> None:
@@ -258,6 +334,7 @@ class AnalysisPanel(QWidget):
         Project only -- datasets are project-scoped, not figure-scoped;
         see the class docstring)."""
         self._manager = dataset_manager
+        self.xrd_section_widget.set_manager(dataset_manager)
 
     def refresh(self) -> None:
         """Rebuild the source-series list from the active panel's current
@@ -265,6 +342,7 @@ class AnalysisPanel(QWidget):
         exists. Call after anything that can change which series are
         plotted in the active panel, or which panel is active."""
         self.active_panel_label.refresh(self._figure)
+        self.xrd_section_widget.refresh()
 
         previous_id = self.source_combo.currentData()
         eligible = _eligible_series(self._figure)
@@ -523,6 +601,15 @@ class AnalysisPanel(QWidget):
 
         self._current_result = current if isinstance(current, FitResult) else None
         self._refresh_fit_curve_buttons()
+        self.xrd_section_widget.load_result(current if isinstance(current, XRDAnalysisResult) else None)
+        # Selecting a result switches the visible tool to match it, so
+        # "restore/display its result table and peak overlays" (an XRD
+        # result) or the Curve Fitting controls (a FitResult) is always
+        # what's actually on screen -- see this class's own docstring.
+        if isinstance(current, XRDAnalysisResult):
+            self.tool_combo.setCurrentText(_TOOL_XRD)
+        elif isinstance(current, FitResult):
+            self.tool_combo.setCurrentText(_TOOL_CURVE_FITTING)
 
     def _on_history_row_changed(self, row: int) -> None:
         """The scientist selected a different Analysis History entry --

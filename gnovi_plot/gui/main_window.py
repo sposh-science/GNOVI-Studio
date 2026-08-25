@@ -523,6 +523,9 @@ class MainWindow(QMainWindow):
         self._current_workbench_id = self._project.active_workbench.id
         self.figure_model = self._project.active_workbench.figure
         self._dirty = False
+        # True right after XRD Peak Analysis's "Add Peak" is toggled on --
+        # see `_on_canvas_click`/`AnalysisPanel.xrd_manual_peak_mode_changed`.
+        self._xrd_manual_peak_mode = False
 
         # `_pending_undo_snapshot` always holds a snapshot of the figure as
         # of the last committed checkpoint; see `_commit_undo_checkpoint`.
@@ -885,6 +888,10 @@ class MainWindow(QMainWindow):
         self.analysis_panel.add_to_plot_requested.connect(self._on_add_to_plot)
         self.analysis_panel.remove_fit_curve_requested.connect(self._on_remove_fit_curve)
         self.analysis_panel.history_result_selected.connect(self._on_history_result_selected)
+        self.analysis_panel.xrd_result_updated.connect(self._on_xrd_result_updated)
+        self.analysis_panel.xrd_overlay_changed.connect(self._refresh_xrd_overlay)
+        self.analysis_panel.xrd_manual_peak_mode_changed.connect(self._on_xrd_manual_peak_mode_changed)
+        self.analysis_panel.xrd_status_message.connect(lambda msg: self.statusBar().showMessage(msg, 4000))
 
         self.workbench_tab_bar.workbench_selected.connect(self._on_workbench_tab_selected)
         self.workbench_tab_bar.new_workbench_requested.connect(self._on_new_workbench_requested)
@@ -1624,6 +1631,21 @@ class MainWindow(QMainWindow):
         self.analysis_result_view.show_result(result)
         self._set_dirty(True)
 
+    def _on_xrd_result_updated(self, result) -> None:
+        """An in-place edit to the current XRDAnalysisResult (manual peak
+        add/remove/enable, radiation change -- see `AnalysisPanel.
+        xrd_result_updated`'s own docstring): the exact object already in
+        `PanelResultHistory` was mutated, not replaced, so this only
+        re-displays it and marks the project dirty -- never a new
+        History entry, never an undo checkpoint (analysis-result edits
+        aren't part of the figure/series undo snapshot, same as any
+        other result selection)."""
+        self.analysis_result_view.show_result(result)
+        self._set_dirty(True)
+
+    def _on_xrd_manual_peak_mode_changed(self, active: bool) -> None:
+        self._xrd_manual_peak_mode = active
+
     def _on_mouse_move(self, event) -> None:
         if event.inaxes is None or event.xdata is None or event.ydata is None:
             self.coord_label.setText("")
@@ -1649,6 +1671,13 @@ class MainWindow(QMainWindow):
         wired up here, never conflicting with anything else: GNOVI has no
         other double-click behavior on the canvas."""
         if event.inaxes is None:
+            return
+        if self._xrd_manual_peak_mode and event.button == 1 and event.xdata is not None and event.ydata is not None:
+            # Consumes the click entirely -- never also activates/focuses
+            # a panel (see AnalysisPanel.xrd_add_manual_peak's own
+            # docstring: this is a SEED near the click, not a claim about
+            # a measured peak center).
+            self.analysis_panel.xrd_add_manual_peak(event.xdata, event.ydata)
             return
         if event.dblclick and event.button == 1 and self._is_current_workbench_focused():
             self._restore_multi_panel_view()
@@ -1944,6 +1973,24 @@ class MainWindow(QMainWindow):
         active_axes = self.plot_canvas.active_axes(self.figure_model)
         self.properties_panel.sync_axes_limits(active_axes.get_xlim(), active_axes.get_ylim())
         self.series_panel.update_contrast_warnings(dark_mode)
+        self._refresh_xrd_overlay()
+
+    def _refresh_xrd_overlay(self) -> None:
+        """Redraw the XRD peak-marker/label + background/smoothing-preview
+        overlay (see `gui.widgets.xrd_analysis_section.XRDAnalysisSection`'s
+        own docstring) on top of whatever `_rerender()` just drew -- always
+        pulled fresh from `AnalysisPanel` (never cached here), since the
+        overlay is reconstructed from the current XRDAnalysisResult, not
+        persisted state. Called after every `_rerender()` (a render() would
+        otherwise `ax.cla()` away any previous overlay silently) and
+        whenever `AnalysisPanel.xrd_overlay_changed` fires on its own
+        (peak edits, label-mode change, a fresh preview) without a full
+        figure re-render."""
+        self.plot_canvas.set_analysis_overlay(
+            self.figure_model,
+            peak_points=self.analysis_panel.xrd_overlay_points(),
+            preview_xy=self.analysis_panel.xrd_preview_curve(),
+        )
 
     # --- Focus Panel (session/view state only -- see `self._focused_panel_ids`) --
 
