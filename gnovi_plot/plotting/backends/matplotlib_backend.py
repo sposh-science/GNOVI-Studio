@@ -445,12 +445,36 @@ def render_panel_3d(ax, panel: Panel3D, figure: GnoviFigure | None = None, *, da
     _apply_3d_grid_style(ax, panel, dark_mode)
 
     # The deterministic default/exported camera -- see `Panel3D`'s own
-    # docstring for why only elev/azim are modeled, and why interactive
-    # mouse rotation (Matplotlib's own built-in 3D navigation, active on
-    # any live Axes3D with no GNOVI code involved) never writes back here:
-    # every render starts from this same stored view, exactly like a 2D
-    # Panel's stored xlim/ylim (or "auto" if never explicitly set).
-    ax.view_init(elev=panel.elevation, azim=panel.azimuth)
+    # docstring for why only elev/azim are modeled. `panel.elevation`/
+    # `.azimuth` is applied to the Axes ONLY when it differs from what
+    # GNOVI last applied to this same Axes (tracked in
+    # `ax._gnovi_applied_view`), so an incidental re-render (a
+    # grid/label/legend edit, a panel switch, undo/redo, a theme change,
+    # an XRD overlay refresh) never disturbs the live view -- including a
+    # rotation the user just did with the mouse. Interactive mouse
+    # rotation is Matplotlib `Axes3D`'s own native click-drag navigation:
+    # it never routes through GNOVI, never writes into the `Panel3D`
+    # model, and stays a purely transient live-view operation, exactly
+    # like interactive 2D pan/zoom (`render_panel` likewise only forces
+    # `set_xlim`/`set_ylim` for an explicitly-set 2D limit).
+    #
+    # An explicit camera change that moves the stored fields -- typing in
+    # the Elevation/Azimuth controls, a project load, a graph load -- is
+    # honored on the next render because the target no longer matches the
+    # last applied value. "Set Current View" and "Reset View" go further
+    # and clear `ax._gnovi_applied_view` on the live Axes first (see
+    # `MainWindow._on_set_current_3d_view_requested` /
+    # `_on_reset_3d_view_requested`), so they re-apply even when the new
+    # stored value happens to equal the last applied one -- e.g. "Reset
+    # View" straight after a mouse rotation, where the model never left
+    # its default. A fresh Axes (first render, or a rebuild for a
+    # layout/projection change -- see `PlotCanvas._ensure_layout`) has no
+    # `_gnovi_applied_view`, so the stored camera is always applied then.
+    _applied_view = getattr(ax, "_gnovi_applied_view", None)
+    _target_view = (panel.elevation, panel.azimuth)
+    if _applied_view != _target_view:
+        ax.view_init(elev=panel.elevation, azim=panel.azimuth)
+        ax._gnovi_applied_view = _target_view
 
     # Deliberately minimal (see `Panel3D`'s own docstring): `loc`/`ncols`/
     # `frameon` + figure-level font size, no title/outside-bbox/per-panel

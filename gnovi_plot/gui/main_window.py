@@ -564,6 +564,12 @@ class MainWindow(QMainWindow):
         self.plot_canvas.mpl_connect("figure_leave_event", self._on_mouse_leave)
         self.plot_canvas.mpl_connect("button_press_event", self._on_canvas_click)
         self.plot_canvas.mpl_connect("button_press_event", self._on_canvas_context_menu)
+        # Keeps the Axes-page Elevation/Azimuth readout in sync with a
+        # completed mouse rotation of a 3D panel (see `_on_canvas_release`).
+        # The rotation itself is Matplotlib `Axes3D`'s own native
+        # navigation, which GNOVI never intercepts -- this handler consumes
+        # nothing, runs after it, and never touches the model.
+        self.plot_canvas.mpl_connect("button_release_event", self._on_canvas_release)
         self.plot_canvas.set_cursor_mode(self._cursor_mode)
 
         self.preview_table = QTableView()
@@ -884,6 +890,7 @@ class MainWindow(QMainWindow):
         self.series_panel.changed.connect(self._on_figure_content_changed)
         self.properties_panel.changed.connect(self._on_figure_content_changed)
         self.properties_panel.set_current_view_requested.connect(self._on_set_current_3d_view_requested)
+        self.properties_panel.reset_view_requested.connect(self._on_reset_3d_view_requested)
         self.figure_size_panel.changed.connect(self._on_figure_content_changed)
         self.figure_layout_panel.changed.connect(self._on_figure_content_changed)
         self.figure_size_panel.panel_switched.connect(self._on_panel_switched)
@@ -1391,8 +1398,44 @@ class MainWindow(QMainWindow):
         ax = self.plot_canvas.active_axes(self.figure_model)
         panel.elevation = float(ax.elev)
         panel.azimuth = float(ax.azim)
+        self._invalidate_3d_view_guard(ax)
         self.properties_panel.refresh()
         self._on_figure_content_changed()
+
+    def _on_reset_3d_view_requested(self) -> None:
+        """`FigurePropertiesPanel.reset_view_requested` -- restores the
+        camera to `Panel3D()`'s own defaults. A normal, undoable,
+        dirty-marking model edit via `_on_figure_content_changed`, the
+        same status as "Set Current View" -- just to a fixed value rather
+        than the live one.
+
+        The default elevation/azimuth is very often exactly what GNOVI
+        last applied to the live Axes (the user only ever mouse-rotated,
+        never touched the camera controls), so without clearing
+        `_gnovi_applied_view` first `render_panel_3d`'s guard would see
+        "no change" and skip `view_init`, leaving the interactively
+        rotated view on screen -- i.e. Reset View would do nothing. This
+        and "Set Current View" are the only paths that deliberately
+        override that guard."""
+        panel = self.figure_model.active_panel
+        if not isinstance(panel, Panel3D):
+            return
+        defaults = Panel3D()
+        panel.elevation = defaults.elevation
+        panel.azimuth = defaults.azimuth
+        self._invalidate_3d_view_guard(self.plot_canvas.active_axes(self.figure_model))
+        self.properties_panel.refresh()
+        self._on_figure_content_changed()
+
+    @staticmethod
+    def _invalidate_3d_view_guard(ax) -> None:
+        """Drop `render_panel_3d`'s per-Axes "camera already applied"
+        marker so the next render re-applies `Panel3D.elevation`/`.azimuth`
+        unconditionally -- used by the two explicit camera commits that
+        must win even when the new stored value equals the last applied
+        one (see `render_panel_3d`)."""
+        if hasattr(ax, "_gnovi_applied_view"):
+            del ax._gnovi_applied_view
 
     def _on_toggle_panel_labels(self, checked: bool) -> None:
         self.figure_size_panel.panel_labels_check.setChecked(checked)
@@ -1732,6 +1775,31 @@ class MainWindow(QMainWindow):
         if not (math.isfinite(event.xdata) and math.isfinite(event.ydata)):
             return
         self.analysis_panel.xrd_add_manual_peak(event.xdata, event.ydata)
+
+    def _on_canvas_release(self, event) -> None:
+        """A left-button release on the canvas. Interactive mouse rotation
+        of a 3D panel is Matplotlib `Axes3D`'s own native click-drag
+        navigation -- GNOVI never implements or intercepts it -- and it
+        stays a purely transient, live-view operation, exactly like
+        interactive 2D pan/zoom: it does NOT write into
+        `Panel3D.elevation`/`.azimuth`, does NOT mark the project dirty,
+        and adds NO undo checkpoint. "Set Current View" remains the one
+        explicit, undoable action that commits the live view into the
+        model; "Reset View" restores the default camera.
+
+        This handler's only job is to keep the Axes-page Elevation/Azimuth
+        readout showing the angles that are actually on screen after a
+        drag. `render_panel_3d`'s `ax._gnovi_applied_view` guard is what
+        keeps the rotated view itself alive across an incidental
+        re-render; nothing here touches that guard or the model, so a
+        release with no rotation behind it (a plain click) just re-writes
+        the readout with the value it already holds."""
+        if event.button != 1 or not isinstance(self.figure_model.active_panel, Panel3D):
+            return
+        ax = self.plot_canvas.active_axes(self.figure_model)
+        if not (hasattr(ax, "elev") and hasattr(ax, "azim")):
+            return
+        self.properties_panel.sync_3d_camera_display(float(ax.elev), float(ax.azim))
 
     def _on_canvas_context_menu(self, event) -> None:
         """Right-click inside a Panel's Axes opens a context menu targeting

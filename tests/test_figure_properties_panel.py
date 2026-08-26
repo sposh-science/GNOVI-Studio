@@ -238,17 +238,25 @@ def test_3d_elevation_and_azimuth_spins_update_the_panel(qapp):
     assert figure.active_panel.azimuth == pytest.approx(200.0)
 
 
-def test_reset_view_button_restores_camera_defaults(qapp):
+def test_reset_view_button_emits_a_signal_rather_than_mutating_directly(qapp):
+    """`FigurePropertiesPanel` never reads or re-applies the live canvas
+    itself (see the class docstring on the two `*_view_requested` signals)
+    -- clicking "Reset View" must only emit the signal, leaving
+    elevation/azimuth untouched until the owner (`MainWindow`) restores
+    the default camera on both the model and the live Axes3D."""
     figure = _make_3d_figure()
     figure.active_panel.elevation = 5.0
     figure.active_panel.azimuth = 5.0
     panel = FigurePropertiesPanel(figure)
     panel.refresh()
+    received = []
+    panel.reset_view_requested.connect(lambda: received.append(True))
 
     panel.d3_reset_view_button.click()
 
-    assert figure.active_panel.elevation == Panel3D().elevation
-    assert figure.active_panel.azimuth == Panel3D().azimuth
+    assert received == [True]
+    assert figure.active_panel.elevation == 5.0
+    assert figure.active_panel.azimuth == 5.0
 
 
 def test_set_current_view_button_emits_a_signal_rather_than_mutating_directly(qapp):

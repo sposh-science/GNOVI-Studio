@@ -189,6 +189,65 @@ def test_camera_elevation_and_azimuth_are_applied():
     assert ax.azim == pytest.approx(100.0)
 
 
+def test_a_rerender_with_an_unchanged_camera_keeps_an_interactively_rotated_view():
+    """The 3D-mouse-rotation regression: `render_panel_3d` used to call
+    `ax.view_init(panel.elevation, panel.azimuth)` on EVERY render, so any
+    incidental re-render (a grid toggle, a panel switch, undo/redo) reset
+    a view the user had just click-dragged with Matplotlib's native 3D
+    navigation. It now re-applies the stored camera only when
+    `panel.elevation`/`.azimuth` actually changed since it last applied
+    them to this Axes."""
+    dataset = _make_dataset()
+    panel = _panel3d_with_series(dataset, elevation=30.0, azimuth=-60.0)
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+
+    render_panel_3d(ax, panel)  # first render applies the stored camera
+    assert (ax.elev, ax.azim) == pytest.approx((30.0, -60.0))
+
+    ax.view_init(elev=12.5, azim=143.0)  # exactly what Axes3D._on_move does during a drag
+
+    render_panel_3d(ax, panel)  # panel camera unchanged -> live view left alone
+    assert ax.elev == pytest.approx(12.5)
+    assert ax.azim == pytest.approx(143.0)
+
+
+def test_an_explicit_camera_change_is_still_applied_on_the_next_render():
+    dataset = _make_dataset()
+    panel = _panel3d_with_series(dataset, elevation=30.0, azimuth=-60.0)
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+
+    render_panel_3d(ax, panel)
+    ax.view_init(elev=12.5, azim=143.0)  # user mouse-rotated
+
+    panel.elevation = 45.0  # then used the Elevation control / Set Current View / Reset View
+    panel.azimuth = 20.0
+    render_panel_3d(ax, panel)
+
+    assert ax.elev == pytest.approx(45.0)
+    assert ax.azim == pytest.approx(20.0)
+
+
+def test_a_freshly_built_axes_always_receives_the_stored_camera():
+    """A rebuild for a layout/projection change (see
+    `PlotCanvas._ensure_layout`) makes a brand-new Axes with no
+    `_gnovi_applied_view`, so the stored camera must always be applied
+    then -- an interactively-rotated view is not expected to survive a
+    structural rebuild, only an ordinary re-render."""
+    dataset = _make_dataset()
+    figure = GnoviFigure()
+    figure.panels[0] = _panel3d_with_series(dataset, elevation=17.0, azimuth=88.0)
+    _mpl_figure, axes_list = _canvas_and_axes(figure)
+
+    render_panel_3d(axes_list[0], figure.panels[0])
+
+    assert axes_list[0].elev == pytest.approx(17.0)
+    assert axes_list[0].azim == pytest.approx(88.0)
+
+
 def test_xyz_limits_are_applied_when_set():
     dataset = _make_dataset()
     panel = _panel3d_with_series(dataset, xlim=(0.0, 500.0), ylim=(0.0, 1.0), zlim=(0.0, 5.0))

@@ -12,6 +12,7 @@ with them, not to re-prove those mechanisms work at all.
 import re
 
 import pandas as pd
+import pytest
 from PySide6.QtWidgets import QMessageBox
 
 from gnovi_plot.data.dataset import Dataset
@@ -335,7 +336,11 @@ def test_set_current_view_commits_the_live_camera_and_marks_dirty_and_undoable(q
     window.close()
 
 
-def test_ordinary_rotation_never_marks_dirty_or_touches_the_model(qapp, monkeypatch):
+def test_a_programmatic_view_init_with_no_drag_never_touches_the_model(qapp, monkeypatch):
+    """A bare `ax.view_init(...)` must not change the model or dirty the
+    project. Neither does a real mouse-drag rotation on its own (see
+    `test_mouse_drag_rotation_stays_transient`) -- only "Set Current
+    View" / "Reset View" ever write the camera into `Panel3D`."""
     window, dataset = _make_3_panel_window()
     panel3d = _make_3d_panel_at(window, dataset, 1, monkeypatch)
     window.toolbar_panel_combo.setCurrentIndex(1)
@@ -344,7 +349,7 @@ def test_ordinary_rotation_never_marks_dirty_or_touches_the_model(qapp, monkeypa
     window._set_dirty(False)
 
     ax = window.plot_canvas.active_axes(window.figure_model)
-    ax.view_init(elev=55.0, azim=155.0)  # interactive rotation -- never committed on its own
+    ax.view_init(elev=55.0, azim=155.0)
 
     assert panel3d.elevation == before_elev
     assert panel3d.azimuth == before_azim
@@ -364,6 +369,213 @@ def test_reset_view_restores_default_camera(qapp, monkeypatch):
 
     assert panel3d.elevation == Panel3D().elevation
     assert panel3d.azimuth == Panel3D().azimuth
+    window.close()
+
+
+# --- 3D interactive mouse rotation (regression: it used to visibly snap back) -------
+
+
+def _drag_on_axes(window, ax, dx=80, dy=40, steps=5):
+    """Replay a left-button press/drag/release across `ax` through the
+    canvas callback registry -- the same path a real Qt mouse event takes
+    into Matplotlib (`FigureCanvasBase` -> `callbacks.process`). Enough to
+    exercise `Axes3D`'s own native rotation + GNOVI's display-only release
+    handler (`MainWindow._on_canvas_release`); genuine interactive
+    navigation still needs the human check noted in this PR's report."""
+    from matplotlib.backend_bases import MouseButton, MouseEvent
+    from PySide6.QtWidgets import QApplication
+
+    bbox = ax.get_window_extent()
+    x0, y0 = (bbox.x0 + bbox.x1) / 2, (bbox.y0 + bbox.y1) / 2
+    MouseEvent("button_press_event", window.plot_canvas, x0, y0, button=MouseButton.LEFT)._process()
+    for i in range(1, steps + 1):
+        MouseEvent(
+            "motion_notify_event", window.plot_canvas, x0 + dx * i / steps, y0 + dy * i / steps, button=MouseButton.LEFT
+        )._process()
+    MouseEvent("button_release_event", window.plot_canvas, x0 + dx, y0 + dy, button=MouseButton.LEFT)._process()
+    QApplication.instance().processEvents()
+
+
+def test_mouse_drag_rotates_a_3d_panel(qapp, monkeypatch):
+    window, dataset = _make_3_panel_window()
+    _make_3d_panel_at(window, dataset, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window._rerender()
+    ax = window.plot_canvas.active_axes(window.figure_model)
+    before = (ax.elev, ax.azim)
+
+    _drag_on_axes(window, ax)
+
+    ax = window.plot_canvas.active_axes(window.figure_model)
+    assert (ax.elev, ax.azim) != before  # the drag actually rotated the Axes3D
+    window.close()
+
+
+def test_interactive_rotation_survives_an_incidental_rerender(qapp, monkeypatch):
+    """THE regression this PR fixes: a click-drag rotates the 3D panel,
+    then any unrelated re-render (here: toggling the grid checkbox) must
+    NOT snap the view back to the stored camera."""
+    window, dataset = _make_3_panel_window()
+    _make_3d_panel_at(window, dataset, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.properties_panel.refresh()
+    window._rerender()
+    ax = window.plot_canvas.active_axes(window.figure_model)
+
+    _drag_on_axes(window, ax, dx=100, dy=30)
+    rotated = (ax.elev, ax.azim)
+
+    # An incidental re-render via a real, unrelated content change.
+    window.properties_panel.d3_grid_check.setChecked(not window.properties_panel.d3_grid_check.isChecked())
+    qapp.processEvents()
+
+    ax = window.plot_canvas.active_axes(window.figure_model)
+    assert ax.elev == pytest.approx(rotated[0])
+    assert ax.azim == pytest.approx(rotated[1])
+    window.close()
+
+
+def test_mouse_drag_rotation_stays_transient(qapp, monkeypatch):
+    """A completed click-drag rotation is a purely transient live-view
+    operation: it does NOT write into `Panel3D.elevation`/`.azimuth`, does
+    NOT mark the project dirty, and adds NO undo checkpoint. It DOES
+    refresh the Axes-page Elevation/Azimuth readout so the numbers match
+    what's on screen ("Set Current View" is the explicit commit)."""
+    window, dataset = _make_3_panel_window()
+    panel3d = _make_3d_panel_at(window, dataset, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.properties_panel.refresh()
+    window._rerender()
+    window._set_dirty(False)
+    before_model = (panel3d.elevation, panel3d.azimuth)
+    undo_before = len(window._undo_manager._undo)
+
+    ax = window.plot_canvas.active_axes(window.figure_model)
+    _drag_on_axes(window, ax, dx=90, dy=45)
+    ax = window.plot_canvas.active_axes(window.figure_model)
+
+    # Model, dirty flag and undo stack are all untouched by the rotation...
+    assert (panel3d.elevation, panel3d.azimuth) == before_model
+    assert window._dirty is False
+    assert len(window._undo_manager._undo) == undo_before
+    # ...but the readout tracks the live Axes.
+    assert window.properties_panel.d3_elevation_spin.value() == pytest.approx(ax.elev, abs=0.05)
+    assert window.properties_panel.d3_azimuth_spin.value() == pytest.approx(ax.azim, abs=0.05)
+    window.close()
+
+
+def test_reset_view_works_immediately_after_a_mouse_rotation(qapp, monkeypatch):
+    """The second half of the remaining bug: "Reset View" clicked straight
+    after a mouse rotation (with no "Set Current View" in between, so the
+    model never left its default and `render_panel_3d`'s re-apply guard
+    would otherwise skip) must actually restore the default camera on the
+    live Axes and re-sync the Elevation/Azimuth readout."""
+    window, dataset = _make_3_panel_window()
+    panel3d = _make_3d_panel_at(window, dataset, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.properties_panel.refresh()
+    window._rerender()
+    default_view = (Panel3D().elevation, Panel3D().azimuth)
+    assert (panel3d.elevation, panel3d.azimuth) == default_view  # model at default -> guard would skip
+
+    ax = window.plot_canvas.active_axes(window.figure_model)
+    _drag_on_axes(window, ax, dx=110, dy=60)
+    assert (ax.elev, ax.azim) != default_view
+
+    window.properties_panel.d3_reset_view_button.click()
+    qapp.processEvents()
+
+    ax = window.plot_canvas.active_axes(window.figure_model)
+    assert ax.elev == pytest.approx(default_view[0])
+    assert ax.azim == pytest.approx(default_view[1])
+    assert (panel3d.elevation, panel3d.azimuth) == default_view
+    assert window.properties_panel.d3_elevation_spin.value() == pytest.approx(default_view[0])
+    assert window.properties_panel.d3_azimuth_spin.value() == pytest.approx(default_view[1])
+    window.close()
+
+
+def test_elevation_control_and_set_current_view_still_work_after_a_mouse_rotation(qapp, monkeypatch):
+    window, dataset = _make_3_panel_window()
+    panel3d = _make_3d_panel_at(window, dataset, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.properties_panel.refresh()
+    window._rerender()
+
+    ax = window.plot_canvas.active_axes(window.figure_model)
+    _drag_on_axes(window, ax, dx=70, dy=50)
+    rotated_azimuth = window.properties_panel.d3_azimuth_spin.value()  # readout tracked the drag
+
+    # Nudging the Elevation control commits the WHOLE displayed camera:
+    # elevation takes the typed value, azimuth keeps the mouse-rotated
+    # angle the box is already showing -- not a stale stored value.
+    window.properties_panel.d3_elevation_spin.setValue(42.0)
+    qapp.processEvents()
+    ax = window.plot_canvas.active_axes(window.figure_model)
+    assert ax.elev == pytest.approx(42.0)
+    assert ax.azim == pytest.approx(rotated_azimuth, abs=0.05)
+    assert panel3d.elevation == 42.0
+    assert panel3d.azimuth == pytest.approx(rotated_azimuth, abs=0.05)
+
+    # Set Current View still commits whatever is live now.
+    _drag_on_axes(window, ax, dx=-40, dy=20)
+    ax = window.plot_canvas.active_axes(window.figure_model)
+    live = (ax.elev, ax.azim)
+    window._on_set_current_3d_view_requested()
+    assert (panel3d.elevation, panel3d.azimuth) == pytest.approx(live)
+    window.close()
+
+
+def test_2d_panel_mouse_behaviour_is_unchanged_by_the_release_handler(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()  # every panel starts as a populated 2D Panel
+    window.toolbar_panel_combo.setCurrentIndex(0)
+    window._rerender()
+    ax = window.plot_canvas.active_axes(window.figure_model)
+    window._set_dirty(False)
+
+    _drag_on_axes(window, ax)  # a drag on a 2D panel
+
+    assert window.figure_model.active_panel_index == 0
+    assert window._dirty is False  # release handler is a no-op for 2D
+    window.close()
+
+
+def test_mouse_rotation_and_reset_work_after_switching_workbenches(qapp, monkeypatch):
+    """Re-check of the older "3D camera non-functional in another
+    Workbench" report. Create a 3D panel in Workbench A, open a fresh
+    Workbench B, switch back to A, and confirm on that switched-back
+    Workbench: (1) mouse rotation still rotates the live Axes, (2) the
+    Elevation/Azimuth readout tracks it without touching the model, and
+    (3) "Reset View" restores the default camera. The switch back rebuilds
+    the Axes (layout 1x1 -> 1x3), so this also covers the fresh-Axes
+    render path picking the stored camera back up first."""
+    window, dataset = _make_3_panel_window()
+    panel3d = _make_3d_panel_at(window, dataset, 1, monkeypatch)
+    workbench_a_id = window._project.active_workbench_id
+
+    window.workbench_tab_bar.new_button.click()          # Workbench B (fresh 1x1)
+    window._on_workbench_tab_selected(workbench_a_id)     # back to A
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.properties_panel.refresh()
+    window._rerender()
+    window._set_dirty(False)
+    default_view = (Panel3D().elevation, Panel3D().azimuth)
+
+    ax = window.plot_canvas.active_axes(window.figure_model)
+    before = (ax.elev, ax.azim)
+    _drag_on_axes(window, ax, dx=95, dy=40)
+    ax = window.plot_canvas.active_axes(window.figure_model)
+
+    assert (ax.elev, ax.azim) != before  # rotation works on the switched-back Workbench
+    assert window.properties_panel.d3_elevation_spin.value() == pytest.approx(ax.elev, abs=0.05)
+    assert window.properties_panel.d3_azimuth_spin.value() == pytest.approx(ax.azim, abs=0.05)
+    assert (panel3d.elevation, panel3d.azimuth) == default_view  # still transient
+    assert window._dirty is False
+
+    window.properties_panel.d3_reset_view_button.click()
+    qapp.processEvents()
+    ax = window.plot_canvas.active_axes(window.figure_model)
+    assert ax.elev == pytest.approx(default_view[0])
+    assert ax.azim == pytest.approx(default_view[1])
     window.close()
 
 
