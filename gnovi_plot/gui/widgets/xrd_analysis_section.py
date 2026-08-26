@@ -94,6 +94,32 @@ _TABLE_COLUMNS = [
     "Enabled",
 ]
 
+# A bounded height for `peak_table` -- `QTableWidget` (a `QAbstractScrollArea`
+# subclass) already scrolls internally and its own `sizeHint`/
+# `minimumSizeHint` don't scale with row count (verified directly: 1200
+# rows still report a ~200px `sizeHint`), so this isn't fixing a layout
+# bug the way `bottom_panel.BottomPanel.set_results_widget`'s QScrollArea
+# wrap is -- it's just keeping the table itself from growing tall enough
+# on a large result to push the rest of the XRD workflow (Radiation/
+# Background/Smoothing/Peak Detection) out of comfortable reach above it
+# in the scrolling left panel (see `AnalysisPanel`'s own `workflow_scroll`).
+_PEAK_TABLE_MAX_HEIGHT = 220
+
+# A first-run Prominence of 0 is passed to `detect_peaks` as `None` (no
+# threshold at all -- see `_on_find_peaks_clicked`), which on real noisy
+# data returns essentially every local maximum, including noise
+# fluctuations, as a "peak" (one real run produced 1,118 candidates from
+# a raw pattern with about a dozen actual peaks). This multiplier turns a
+# robust estimate of the signal's own local noise scale (see
+# `_default_prominence_from_signal`) into a conservative first-run
+# threshold -- large enough that ordinary sample-to-sample noise rarely
+# clears it, small enough that a real diffraction peak (which towers over
+# noise by design) still does. A STARTING POINT only: shown in the
+# Prominence field, freely editable, and never recomputed once the
+# researcher has touched either detection spinbox (see
+# `_detection_defaults_touched`).
+_PROMINENCE_NOISE_MULTIPLIER = 5.0
+
 
 def _eligible_series(figure: GnoviFigure) -> list[PlotSeries]:
     """Line/scatter series in the active panel -- empty if the active
@@ -102,6 +128,37 @@ def _eligible_series(figure: GnoviFigure) -> list[PlotSeries]:
     if isinstance(figure.active_panel, Panel3D):
         return []
     return [s for s in figure.series if isinstance(s, PlotSeries) and s.y_column is not None and not s.stale]
+
+
+def _default_prominence_from_signal(y: np.ndarray) -> float:
+    """A conservative, transparent, data-dependent STARTING Prominence for
+    `scipy.signal.find_peaks` -- see `_PROMINENCE_NOISE_MULTIPLIER`'s own
+    docstring for why a first-run default of 0/"no threshold" is unusable
+    on real data.
+
+    Uses `1.4826 * median(abs(d - median(d)))` of the signal's first
+    differences `d` -- the standard robust estimator of a signal's local
+    noise standard deviation (the constant makes it consistent with the
+    standard deviation for normally-distributed noise; using the MEDIAN
+    absolute deviation rather than the plain standard deviation of the
+    differences means a handful of large jumps -- real peak edges, not
+    noise -- don't inflate the estimate the way `np.std` would). This is
+    NOT an automatic "correct" prominence, an AI/statistical peak
+    classifier, or a claim about how many real peaks exist -- it is one
+    simple, reproducible number the researcher sees in the Prominence
+    field and can freely override before or after running Find Peaks.
+
+    Deliberately computed from the RAW (x, y) regardless of the currently
+    selected Detection Input -- background correction/smoothing may
+    improve detection quality once used, but the first-run default must
+    already be usable directly on raw, unprocessed input (see this
+    module's own bug-report notes: the real failure case that motivated
+    this function was raw input, no background, no smoothing)."""
+    if y.size < 2:
+        return 0.0
+    diffs = np.diff(y)
+    noise_scale = 1.4826 * float(np.median(np.abs(diffs - np.median(diffs))))
+    return max(noise_scale * _PROMINENCE_NOISE_MULTIPLIER, 0.0)
 
 
 def _parse_index_ranges(text: str, max_index: int) -> list[int]:
@@ -185,6 +242,12 @@ class XRDAnalysisSection(QWidget):
         self._background_preview = None
         self._smooth_preview = None
         self._manual_peak_mode = False
+        # See `_maybe_apply_default_detection_params`'s own docstring --
+        # True once the researcher has edited Prominence/Minimum
+        # separation themselves for the currently-selected source series,
+        # so a freshly computed data-dependent default never silently
+        # overwrites a deliberate choice.
+        self._detection_defaults_touched = False
 
         # --- Source -----------------------------------------------------
         self.source_label = QLabel("Source series")
@@ -326,6 +389,11 @@ class XRDAnalysisSection(QWidget):
         self.peak_table = QTableWidget(0, len(_TABLE_COLUMNS))
         self.peak_table.setHorizontalHeaderLabels(_TABLE_COLUMNS)
         self.peak_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        # See `_PEAK_TABLE_MAX_HEIGHT`'s own docstring -- the table
+        # already scrolls internally regardless (headers stay visible)
+        # for any row count; this just keeps the rest of the XRD
+        # workflow comfortably reachable above it.
+        self.peak_table.setMaximumHeight(_PEAK_TABLE_MAX_HEIGHT)
 
         # --- Labels -----------------------------------------------------
         self.label_mode_combo = QComboBox()
@@ -364,6 +432,8 @@ class XRDAnalysisSection(QWidget):
         self.smoothing_enabled_check.toggled.connect(self._on_smoothing_toggled)
         self.preview_smoothed_button.clicked.connect(self._on_preview_smoothed_clicked)
         self.add_smoothed_button.clicked.connect(self._on_add_smoothed_clicked)
+        self.prominence_spin.valueChanged.connect(self._on_detection_param_edited)
+        self.distance_spin.valueChanged.connect(self._on_detection_param_edited)
         self.find_peaks_button.clicked.connect(self._on_find_peaks_clicked)
         self.add_peak_button.toggled.connect(self._on_add_peak_toggled)
         self.remove_peak_button.clicked.connect(self._on_remove_selected_clicked)
@@ -440,6 +510,25 @@ class XRDAnalysisSection(QWidget):
         if target_index < 0 and previous_id is not None:
             self._invalidate_previews()
 
+        # `setCurrentIndex` above does NOT reliably emit `currentIndexChanged`
+        # (so `_on_source_changed` does NOT reliably fire) for two real
+        # cases: the very first population of an empty combo (Qt silently
+        # auto-selects index 0 as items are added, before the explicit
+        # `setCurrentIndex(0)` call above even runs -- which is then a
+        # no-op, since the index isn't actually changing), and a
+        # resolved-series change that happens to land on the same INDEX
+        # (e.g. series A at index 0 is gone, eligible[0] is now series B --
+        # `setCurrentIndex(0)` doesn't change the index value, so no
+        # signal fires, even though the actual series did change). Both
+        # would otherwise silently skip a fresh data-dependent detection
+        # default for a genuinely new series -- compare the resolved
+        # series id directly (not the index) and reset explicitly rather
+        # than relying on the signal.
+        current_source_id = self.source_combo.currentData()
+        if current_source_id != previous_id:
+            self._detection_defaults_touched = False
+        self._maybe_apply_default_detection_params()
+
         has_eligible = bool(eligible)
         enabled = has_eligible and not is_panel3d
         self.source_combo.setEnabled(enabled)
@@ -509,13 +598,27 @@ class XRDAnalysisSection(QWidget):
         with each spinbox's own current value as the fallback, so a result
         saved before a given key existed (or with that key `None`, meaning
         "not used") leaves the corresponding control alone/unchecked
-        rather than raising or zeroing it out."""
-        prominence = detection_params.get("prominence")
-        if prominence is not None:
-            self.prominence_spin.setValue(prominence)
-        distance = detection_params.get("distance")
-        if distance is not None:
-            self.distance_spin.setValue(distance)
+        rather than raising or zeroing it out.
+
+        Signals are blocked for the duration: this reflects a HISTORICAL
+        choice back into the controls, not a fresh edit by the researcher
+        right now, so it must not itself set `_detection_defaults_touched`
+        (see `_on_detection_param_edited`) -- restoring an old result and
+        then switching to a different source series should still get a
+        freshly computed data-dependent default for that series, exactly
+        as if nothing had been restored."""
+        self.prominence_spin.blockSignals(True)
+        self.distance_spin.blockSignals(True)
+        try:
+            prominence = detection_params.get("prominence")
+            if prominence is not None:
+                self.prominence_spin.setValue(prominence)
+            distance = detection_params.get("distance")
+            if distance is not None:
+                self.distance_spin.setValue(distance)
+        finally:
+            self.prominence_spin.blockSignals(False)
+            self.distance_spin.blockSignals(False)
         height = detection_params.get("height")
         self.height_check.setChecked(height is not None)
         if height is not None:
@@ -579,7 +682,46 @@ class XRDAnalysisSection(QWidget):
         return x.to_numpy(), y.to_numpy()
 
     def _on_source_changed(self) -> None:
+        # "Add Peak" armed for whatever series/panel was previously
+        # selected must not silently carry over to a different one --
+        # see `disarm_manual_peak_mode`'s own docstring.
+        self.disarm_manual_peak_mode()
         self._invalidate_previews()
+        # A new source series is new DATA -- its own noise/intensity
+        # scale deserves a freshly computed default (see `_detection_
+        # defaults_touched`'s own docstring), not whatever was left over
+        # from a previously selected series.
+        self._detection_defaults_touched = False
+        self._maybe_apply_default_detection_params()
+
+    def _maybe_apply_default_detection_params(self) -> None:
+        """Sets a conservative, data-dependent first-run Prominence (see
+        `_default_prominence_from_signal`) from the newly-selected source
+        series' RAW data -- unless the researcher has already edited
+        Prominence/Minimum separation themselves for this series
+        (`_detection_defaults_touched`), in which case their value is
+        left alone. A no-op if no source is selected/resolvable yet."""
+        if self._detection_defaults_touched:
+            return
+        xy = self._raw_xy()
+        if xy is None:
+            return
+        _, y = xy
+        prominence = _default_prominence_from_signal(y)
+        self.prominence_spin.blockSignals(True)
+        self.prominence_spin.setValue(prominence)
+        self.prominence_spin.blockSignals(False)
+
+    def _on_detection_param_edited(self, *_args) -> None:
+        """Marks Prominence/Minimum separation as deliberately set by the
+        researcher for the current source series -- see `_detection_
+        defaults_touched`'s own docstring. Only fires for a REAL edit:
+        `_maybe_apply_default_detection_params`/`_restore_detection_
+        settings` both block these spinboxes' signals while they set a
+        value programmatically, so this is never triggered by GNOVI's own
+        code, only by the researcher actually touching a spinbox (typing,
+        the up/down arrows, or the mouse wheel)."""
+        self._detection_defaults_touched = True
 
     def _invalidate_previews(self) -> None:
         """Clears any transient background/smoothing preview -- and
@@ -941,6 +1083,21 @@ class XRDAnalysisSection(QWidget):
 
     def _on_add_peak_toggled(self, checked: bool) -> None:
         self._set_manual_peak_mode(checked)
+
+    def disarm_manual_peak_mode(self) -> None:
+        """Publicly disarm "Add Peak" (a no-op if it wasn't armed) --
+        called from every context change where an already-armed click
+        target stops making sense: this widget's own `_on_source_changed`/
+        `set_figure` (source series/Workbench/project change), and
+        `AnalysisPanel` reaching in on an active-panel switch
+        (`disarm_xrd_manual_peak_mode`) or a switch away from the XRD
+        tool (`_update_tool_visibility`) -- see each call site's own
+        comment. A successful `add_manual_peak` or the researcher
+        toggling the button off both already disarm directly; this method
+        exists for every OTHER exit path Part 8 of this milestone's own
+        bug-report notes lists, so none of them can leave a stale armed
+        state (and its checked button/status text) behind."""
+        self._set_manual_peak_mode(False)
 
     def add_manual_peak(self, two_theta: float, intensity: float) -> None:
         """Called by MainWindow after a canvas click while manual-peak

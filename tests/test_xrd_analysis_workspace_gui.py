@@ -765,10 +765,16 @@ def test_manual_peak_click_ignores_when_active_panel_is_3d(qapp):
     window, xrd = _two_panel_xrd_window()
     window.figure_model.panels[1] = Panel3D()
     window._on_figure_content_changed()
-    # Add Peak was armed while Panel 1 (2D) was active; switching active
-    # panel to the now-3D Panel 2 does not itself disarm it -- the click
-    # handler's own Panel3D guard is what must reject a click there.
+    # Add Peak was armed while Panel 1 (2D) was active. An active-panel
+    # switch now disarms "Add Peak" itself (see `AnalysisPanel.
+    # disarm_xrd_manual_peak_mode`, wired from `MainWindow._on_panel_
+    # switched`) -- belt-and-suspenders with the click handler's own
+    # Panel3D guard, which is what this test still exercises: a click
+    # landing on a Panel3D must be rejected regardless of whether
+    # something re-arms Add Peak afterward.
     window._set_active_panel(1)
+    window.analysis_panel.xrd_section_widget._set_manual_peak_mode(True)
+    window._xrd_manual_peak_mode = True
     axes_3d = window.plot_canvas.axes_list[1]
     window._on_canvas_click(_FakeClickEvent(inaxes=axes_3d, xdata=45.0, ydata=200.0))
     assert xrd.current_result() is None

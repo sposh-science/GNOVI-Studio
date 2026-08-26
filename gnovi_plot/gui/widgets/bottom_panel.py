@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QObject, Signal
-from PySide6.QtWidgets import QPlainTextEdit, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtWidgets import QFrame, QPlainTextEdit, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 
 class _QtLogHandler(logging.Handler, QObject):
@@ -90,8 +90,32 @@ class BottomPanel(QTabWidget):
 
     def set_results_widget(self, widget: QWidget) -> None:
         """Place `widget` (e.g. an `AnalysisResultView`) into the Results
-        tab. Reparents `widget` -- Qt moves it, it is not copied."""
-        self._results_tab.layout().addWidget(widget)
+        tab, wrapped in a `QScrollArea`. Reparents `widget` -- Qt moves it,
+        it is not copied.
+
+        This scroll wrapper is the structural half of the fix for a real
+        bug: an `AnalysisResult` whose `details()` (or any future result
+        view's content) is large -- e.g. hundreds/thousands of XRD peak
+        candidates -- gave this tab's content a `minimumSizeHint` that
+        scaled with that content, which `QTabWidget` (this class) and
+        GNOVI's central vertical `QSplitter` (see `MainWindow.
+        center_splitter`) both respect, permanently starving the plot
+        canvas of space with the splitter handle unable to restore it (a
+        widget's `minimumSizeHint` several times the screen height isn't
+        reachable by a normal drag). `QScrollArea.minimumSizeHint()` stays
+        small and FIXED regardless of its content's size -- this is
+        ordinary Qt layout behavior, not a size-clamping hack -- so no
+        result view placed here (this one or a future one) can do that
+        again, independent of whether that view's own domain data also
+        stays bounded (see `modules.xrd.results.XRDAnalysisResult.
+        details()`'s own docstring for the other, data-layer half of this
+        fix)."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(widget)
+        self._results_tab.layout().addWidget(scroll)
 
     def show_results_tab(self) -> None:
         """Switch to the Results tab -- e.g. right after an analysis tool
