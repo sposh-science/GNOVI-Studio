@@ -146,6 +146,26 @@ class AnalysisResult:
         list prominently and that one collapsed/secondary."""
         raise NotImplementedError
 
+    def detail_table(self) -> tuple[list[str], list[list[str]]] | None:
+        """An optional wide, row-per-record tabular view of this result --
+        `(column headers, row values)` -- for a results view able to render
+        a scrolling table below the bounded `details()` summary. `None`
+        (the default) means this result type has no such table and
+        `details()` alone is shown.
+
+        Unlike `details()`, this list MAY be long (one row per XRD peak
+        candidate, potentially thousands -- see `modules.xrd.results.
+        XRDAnalysisResult`). The rendering view is responsible for bounding
+        its own height and scrolling internally so row count never drives
+        parent layout (see `gui.widgets.analysis_result_view.
+        AnalysisResultView` / `gui.widgets.bottom_panel.BottomPanel`)."""
+        return None
+
+    def detail_table_title(self) -> str:
+        """Heading shown above `detail_table()` when it has content -- only
+        consulted when `detail_table()` returns non-`None`."""
+        return "Details"
+
     def provenance_details(self) -> list[tuple[str, str]]:
         """Label/value rows for raw structural provenance -- always ids,
         never names (see the class docstring / `AnalysisResultView` for

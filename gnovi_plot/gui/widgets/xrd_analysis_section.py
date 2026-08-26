@@ -4,21 +4,18 @@ import csv
 
 import numpy as np
 import pandas as pd
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
     QSpinBox,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -47,7 +44,11 @@ from gnovi_plot.modules.xrd.radiation import (
     InvalidRadiationError,
     Radiation,
 )
-from gnovi_plot.modules.xrd.results import XRDAnalysisResult, build_xrd_analysis_result
+from gnovi_plot.modules.xrd.results import (
+    PEAK_TABLE_COLUMNS,
+    XRDAnalysisResult,
+    build_xrd_analysis_result,
+)
 from gnovi_plot.plotting.figure import GnoviFigure, Panel3D
 from gnovi_plot.plotting.series import PlotSeries
 
@@ -80,30 +81,6 @@ _LABEL_MODE_OFF = "Off"
 _LABEL_MODE_NUMBER = "Peak number"
 _LABEL_MODE_TWO_THETA = "2θ"
 _LABEL_MODE_D_SPACING = "d-spacing"
-
-# Peak table columns -- deliberately excludes anything implying profile
-# fitting (fitted center, FWHM, area, fit model/quality) -- XRD-2 has no
-# fitting yet, see modules.xrd.results.XRDAnalysisResult's own docstring.
-_TABLE_COLUMNS = [
-    "Peak #",
-    "Seed 2θ (°)",
-    "Observed intensity",
-    "Prominence",
-    "d-spacing (Å)",
-    "Origin",
-    "Enabled",
-]
-
-# A bounded height for `peak_table` -- `QTableWidget` (a `QAbstractScrollArea`
-# subclass) already scrolls internally and its own `sizeHint`/
-# `minimumSizeHint` don't scale with row count (verified directly: 1200
-# rows still report a ~200px `sizeHint`), so this isn't fixing a layout
-# bug the way `bottom_panel.BottomPanel.set_results_widget`'s QScrollArea
-# wrap is -- it's just keeping the table itself from growing tall enough
-# on a large result to push the rest of the XRD workflow (Radiation/
-# Background/Smoothing/Peak Detection) out of comfortable reach above it
-# in the scrolling left panel (see `AnalysisPanel`'s own `workflow_scroll`).
-_PEAK_TABLE_MAX_HEIGHT = 220
 
 # A first-run Prominence of 0 is passed to `detect_peaks` as `None` (no
 # threshold at all -- see `_on_find_peaks_clicked`), which on real noisy
@@ -198,6 +175,18 @@ class XRDAnalysisSection(QWidget):
     phase ID, Rietveld, QPA, or any external engine (see
     PROJECT_GUIDE.md's XRD roadmap notes).
 
+    This narrow left drawer holds only the XRD *controls* (source series,
+    radiation, background, smoothing, peak detection, Find Peaks, and the
+    manual peak actions: Add Peak, Remove Selected, Enable/Disable, plus
+    graph-label mode and CSV export). The detailed peak table itself --
+    the one authoritative row-per-candidate view -- lives in the bottom
+    Results tab (`gui.widgets.analysis_result_view.AnalysisResultView`,
+    fed by `XRDAnalysisResult.detail_table()`), which is wide enough for
+    it and bounds/scrolls it correctly. Remove Selected / Enable-Disable
+    here act on whichever rows are selected in that Results-tab table,
+    pushed back in via `set_selected_peak_rows` -- one table, no hidden
+    duplicate.
+
     Peak markers/labels shown on the graph are a LIVE-ONLY overlay,
     reconstructed each time from whichever `XRDAnalysisResult` is current
     for the active panel (see `overlay_points()`) -- never a persisted
@@ -242,6 +231,14 @@ class XRDAnalysisSection(QWidget):
         self._background_preview = None
         self._smooth_preview = None
         self._manual_peak_mode = False
+        # Peak rows currently selected in the bottom Results-tab detail
+        # table (the authoritative detailed peak table; it moved there out
+        # of this narrow sidebar). Pushed in by `MainWindow` via
+        # `AnalysisPanel.xrd_set_selected_peak_rows` whenever that table's
+        # selection changes, and read by Remove Selected / Enable-Disable
+        # here so those actions act on exactly what the researcher selected
+        # in the Results table -- see `set_selected_peak_rows`.
+        self._results_selected_rows: list[int] = []
         # See `_maybe_apply_default_detection_params`'s own docstring --
         # True once the researcher has edited Prominence/Minimum
         # separation themselves for the currently-selected source series,
@@ -376,24 +373,27 @@ class XRDAnalysisSection(QWidget):
         detection_layout.addWidget(self.detection_status_label)
 
         # --- Manual peak editing -----------------------------------------
+        # The detailed peak table itself lives in the bottom Results tab
+        # now (`gui.widgets.analysis_result_view.AnalysisResultView`, fed by
+        # `XRDAnalysisResult.detail_table()`) -- this narrow sidebar keeps
+        # only the actions, which operate on whatever rows are selected
+        # there (see `set_selected_peak_rows`). One authoritative table, no
+        # hidden duplicate.
         self.add_peak_button = QPushButton("Add Peak (click graph)")
         self.add_peak_button.setCheckable(True)
         self.remove_peak_button = QPushButton("Remove Selected")
         self.toggle_enabled_button = QPushButton("Enable/Disable Selected")
-        manual_row = QHBoxLayout()
+        self.peak_actions_hint = QLabel(
+            "Select peak rows in the Results tab below, then use these actions."
+        )
+        self.peak_actions_hint.setWordWrap(True)
+        # Stacked vertically (not a wide button row) so this whole section
+        # fits the same ordinary drawer width Curve Fitting uses -- the one
+        # wide widget, the peak table, is in the bottom Results tab now.
+        manual_row = QVBoxLayout()
         manual_row.addWidget(self.add_peak_button)
         manual_row.addWidget(self.remove_peak_button)
         manual_row.addWidget(self.toggle_enabled_button)
-
-        # --- Peak table -----------------------------------------------------
-        self.peak_table = QTableWidget(0, len(_TABLE_COLUMNS))
-        self.peak_table.setHorizontalHeaderLabels(_TABLE_COLUMNS)
-        self.peak_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        # See `_PEAK_TABLE_MAX_HEIGHT`'s own docstring -- the table
-        # already scrolls internally regardless (headers stay visible)
-        # for any row count; this just keeps the rest of the XRD
-        # workflow comfortably reachable above it.
-        self.peak_table.setMaximumHeight(_PEAK_TABLE_MAX_HEIGHT)
 
         # --- Labels -----------------------------------------------------
         self.label_mode_combo = QComboBox()
@@ -407,7 +407,7 @@ class XRDAnalysisSection(QWidget):
         results_group = QGroupBox("Detected Peaks")
         results_layout = QVBoxLayout(results_group)
         results_layout.addLayout(manual_row)
-        results_layout.addWidget(self.peak_table)
+        results_layout.addWidget(self.peak_actions_hint)
         results_layout.addWidget(QLabel("Graph labels"))
         results_layout.addWidget(self.label_mode_combo)
         results_layout.addWidget(self.export_table_button)
@@ -466,9 +466,9 @@ class XRDAnalysisSection(QWidget):
         clears)."""
         self._figure = figure
         self._current_result = None
+        self._results_selected_rows = []
         self._invalidate_previews()
         self._set_manual_peak_mode(False)
-        self._refresh_peak_table()
         self.refresh()
 
     def set_manager(self, dataset_manager: DatasetManager) -> None:
@@ -566,10 +566,16 @@ class XRDAnalysisSection(QWidget):
     def load_result(self, result: AnalysisResult | None) -> None:
         """Called when the shared Analysis History selection changes --
         restores `result` (if it's an XRDAnalysisResult) as the working
-        peak table/radiation/detection settings/source selection, without
-        rerunning detection. Never called for a FitResult selection
-        (AnalysisPanel only calls this when the newly-current result is
-        an XRDAnalysisResult or None).
+        radiation/detection settings/source selection, without rerunning
+        detection. Never called for a FitResult selection (AnalysisPanel
+        only calls this when the newly-current result is an
+        XRDAnalysisResult or None).
+
+        The detailed peak table itself is redisplayed independently by
+        `AnalysisResultView` in the bottom Results tab (MainWindow drives
+        both from the same history-selection event) -- this method only
+        needs to drop any stale Results-table row selection carried over
+        from the previously-shown result.
 
         Deliberately does NOT restore a live background/smoothing
         PREVIEW: those are transient, computed artifacts (see `set_
@@ -588,7 +594,7 @@ class XRDAnalysisSection(QWidget):
             if source_index >= 0:
                 self.source_combo.setCurrentIndex(source_index)
             self._restore_detection_settings(self._current_result.parameters.get("detection", {}))
-        self._refresh_peak_table()
+        self._results_selected_rows = []
         self._refresh_detection_input_options()
         self.overlay_changed.emit()
 
@@ -765,7 +771,6 @@ class XRDAnalysisSection(QWidget):
 
         if self._current_result is not None and self._radiation is not None:
             self._current_result.radiation = self._radiation
-            self._refresh_peak_table()
             self.result_updated.emit(self._current_result)
             self.overlay_changed.emit()
 
@@ -1068,7 +1073,7 @@ class XRDAnalysisSection(QWidget):
             parameters=parameters,
         )
         self._current_result = result
-        self._refresh_peak_table()
+        self._results_selected_rows = []
         self.overlay_changed.emit()
         self.analysis_result_ready.emit(result)
 
@@ -1128,19 +1133,32 @@ class XRDAnalysisSection(QWidget):
                 source_panel_id=self._figure.active_panel.id,
                 parameters={"detection": None, "detection_input": _INPUT_RAW, "preprocessing": {"background": None, "smoothing": None}},
             )
+            self._results_selected_rows = []
             self._current_result.peaks.append(XRDPeakSeed.manual(two_theta, intensity))
-            self._refresh_peak_table()
             self.overlay_changed.emit()
             self.analysis_result_ready.emit(self._current_result)
             return
 
         self._current_result.peaks.append(XRDPeakSeed.manual(two_theta, intensity))
-        self._refresh_peak_table()
         self.overlay_changed.emit()
         self.result_updated.emit(self._current_result)
 
+    def set_selected_peak_rows(self, rows: list[int]) -> None:
+        """Record which peak rows are selected in the bottom Results-tab
+        detail table -- pushed in by `MainWindow` via `AnalysisPanel.
+        xrd_set_selected_peak_rows` whenever that table's selection
+        changes. Remove Selected / Enable-Disable act on exactly this
+        (see `_selected_peak_rows`)."""
+        self._results_selected_rows = sorted({int(r) for r in rows})
+
     def _selected_peak_rows(self) -> list[int]:
-        return sorted({item.row() for item in self.peak_table.selectedItems()})
+        """The currently-selected peak rows, clamped to the current
+        result's actual peak count -- guards against a stale selection
+        index surviving a change to the peak list."""
+        if self._current_result is None:
+            return []
+        count = len(self._current_result.peaks)
+        return [row for row in self._results_selected_rows if 0 <= row < count]
 
     def _on_remove_selected_clicked(self) -> None:
         if self._current_result is None:
@@ -1150,7 +1168,7 @@ class XRDAnalysisSection(QWidget):
             return
         for row in reversed(rows):
             del self._current_result.peaks[row]
-        self._refresh_peak_table()
+        self._results_selected_rows = []
         self.overlay_changed.emit()
         self.result_updated.emit(self._current_result)
 
@@ -1163,32 +1181,8 @@ class XRDAnalysisSection(QWidget):
         for row in rows:
             peak = self._current_result.peaks[row]
             peak.enabled = not peak.enabled
-        self._refresh_peak_table()
         self.overlay_changed.emit()
         self.result_updated.emit(self._current_result)
-
-    # --- peak table -----------------------------------------------------
-
-    def _refresh_peak_table(self) -> None:
-        self.peak_table.setRowCount(0)
-        if self._current_result is None:
-            return
-        self.peak_table.setRowCount(len(self._current_result.peaks))
-        for row, peak in enumerate(self._current_result.peaks):
-            d = self._peak_d_spacing(peak)
-            values = [
-                str(row + 1),
-                f"{peak.two_theta:.4f}",
-                f"{peak.intensity:.6g}",
-                f"{peak.prominence:.4g}" if peak.prominence is not None else "—",
-                f"{d:.4f}" if d is not None else "—",
-                peak.origin,
-                "Yes" if peak.enabled else "No",
-            ]
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self.peak_table.setItem(row, col, item)
 
     # --- export -----------------------------------------------------
 
@@ -1204,12 +1198,22 @@ class XRDAnalysisSection(QWidget):
     def export_peak_table_csv(self, path: str) -> None:
         """Write the current result's peak table to `path` as CSV --
         exposed as a plain method (not only the click handler) so tests
-        can exercise it without a file dialog."""
+        can exercise it without a file dialog.
+
+        Explicit ``utf-8-sig`` encoding (not the platform default): the
+        header row carries legitimate scientific characters -- ``θ`` (U+03B8),
+        ``°`` (U+00B0), ``Å`` (U+00C5) -- which cp1252, Python's default
+        text encoding on Windows, cannot represent, so the previous
+        default-encoding ``open`` raised ``UnicodeEncodeError`` on the
+        Windows CI runner during peak-table export. The ``-sig`` variant
+        also prepends a UTF-8 BOM so Windows Excel opens the file as UTF-8
+        rather than mojibake. ``newline=""`` stays for ``csv.writer``'s own
+        line-ending control."""
         if self._current_result is None:
             return
-        with open(path, "w", newline="") as f:
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(_TABLE_COLUMNS)
+            writer.writerow(PEAK_TABLE_COLUMNS)
             for row, peak in enumerate(self._current_result.peaks, start=1):
                 d = self._peak_d_spacing(peak)
                 writer.writerow(

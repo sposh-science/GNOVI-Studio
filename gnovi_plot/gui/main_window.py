@@ -899,6 +899,12 @@ class MainWindow(QMainWindow):
         self.analysis_panel.xrd_overlay_changed.connect(self._refresh_xrd_overlay)
         self.analysis_panel.xrd_manual_peak_mode_changed.connect(self._on_xrd_manual_peak_mode_changed)
         self.analysis_panel.xrd_status_message.connect(lambda msg: self.statusBar().showMessage(msg, 4000))
+        # The detailed XRD peak table lives in the bottom Results tab now
+        # (too wide for the left drawer); its row selection drives the
+        # left sidebar's Remove Selected / Enable-Disable actions.
+        self.analysis_result_view.detail_selection_changed.connect(
+            self.analysis_panel.xrd_set_selected_peak_rows
+        )
 
         self.workbench_tab_bar.workbench_selected.connect(self._on_workbench_tab_selected)
         self.workbench_tab_bar.new_workbench_requested.connect(self._on_new_workbench_requested)

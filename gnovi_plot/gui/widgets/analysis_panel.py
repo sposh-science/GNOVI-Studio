@@ -353,6 +353,13 @@ class AnalysisPanel(QWidget):
     def xrd_add_manual_peak(self, two_theta: float, intensity: float) -> None:
         self.xrd_section_widget.add_manual_peak(two_theta, intensity)
 
+    def xrd_set_selected_peak_rows(self, rows: list[int]) -> None:
+        """Forward the bottom Results-tab detail-table row selection to the
+        XRD section, so its Remove Selected / Enable-Disable act on exactly
+        what the researcher selected there (the detailed peak table moved
+        out of this narrow drawer into the Results tab)."""
+        self.xrd_section_widget.set_selected_peak_rows(rows)
+
     def set_figure(self, figure: GnoviFigure) -> None:
         """Repoint this panel at a different `GnoviFigure` (e.g. a
         Workbench switch) and reload from it. Also clears any pending fit,

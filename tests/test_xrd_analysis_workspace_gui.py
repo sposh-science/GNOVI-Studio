@@ -370,9 +370,13 @@ def _section_with_detected_peaks(seed=7, prominence=40.0):
 
 def test_peak_table_populated_with_expected_columns_no_fitted_columns(qapp):
     _figure, section = _section_with_detected_peaks()
-    assert section.peak_table.rowCount() == len(section.current_result().peaks)
-    headers = [section.peak_table.horizontalHeaderItem(i).text() for i in range(section.peak_table.columnCount())]
-    assert headers == [
+    result = section.current_result()
+    # The detailed peak table now renders in the bottom Results tab, from
+    # `XRDAnalysisResult.detail_table()` -- one row per peak candidate,
+    # seed-level columns only (no fitted center/FWHM/area/model).
+    columns, rows = result.detail_table()
+    assert len(rows) == len(result.peaks)
+    assert columns == [
         "Peak #",
         "Seed 2θ (°)",
         "Observed intensity",
@@ -382,7 +386,17 @@ def test_peak_table_populated_with_expected_columns_no_fitted_columns(qapp):
         "Enabled",
     ]
     for forbidden in ("FWHM", "Area", "Fit", "Crystallite"):
-        assert forbidden not in headers
+        assert forbidden not in columns
+
+    from gnovi_plot.gui.widgets.analysis_result_view import AnalysisResultView
+
+    view = AnalysisResultView(GnoviFigure(), DatasetManager())
+    view.show_result(result)
+    assert view._detail_table.rowCount() == len(result.peaks)
+    view_headers = [
+        view._detail_table.horizontalHeaderItem(i).text() for i in range(view._detail_table.columnCount())
+    ]
+    assert view_headers == columns
 
 
 def test_manual_add_peak_creates_a_seed_not_a_fitted_center(qapp):
@@ -415,14 +429,14 @@ def test_remove_selected_peak(qapp):
     _figure, section = _section_with_detected_peaks()
     before = len(section.current_result().peaks)
     assert before > 0
-    section.peak_table.selectRow(0)
+    section.set_selected_peak_rows([0])  # selection comes from the Results-tab table
     section._on_remove_selected_clicked()
     assert len(section.current_result().peaks) == before - 1
 
 
 def test_toggle_enabled_excludes_peak_from_overlay(qapp):
     _figure, section = _section_with_detected_peaks()
-    section.peak_table.selectRow(0)
+    section.set_selected_peak_rows([0])
     peak = section.current_result().peaks[0]
     assert peak.enabled
     section._on_toggle_enabled_clicked()
@@ -449,7 +463,7 @@ def test_manual_edits_emit_result_updated_not_a_new_history_entry(qapp):
 def test_overlay_points_reflect_only_enabled_peaks(qapp):
     _figure, section = _section_with_detected_peaks()
     total = len(section.current_result().peaks)
-    section.peak_table.selectRow(0)
+    section.set_selected_peak_rows([0])
     section._on_toggle_enabled_clicked()
     overlay = section.overlay_points()
     assert len(overlay) == total - 1
@@ -491,7 +505,7 @@ def test_xrd_result_summary_is_distinguishable_from_fit_result(qapp):
     assert "XRD" in summary or "peak" in summary.lower()
 
 
-def test_selecting_xrd_history_entry_restores_peak_table_and_switches_tool(qapp):
+def test_selecting_xrd_history_entry_restores_result_and_switches_tool(qapp):
     figure = GnoviFigure()
     ds = _synthetic_pattern_dataset(seed=7)
     series = _panel_with_series(figure, ds)
@@ -506,7 +520,10 @@ def test_selecting_xrd_history_entry_restores_peak_table_and_switches_tool(qapp)
     panel.tool_combo.setCurrentText("Curve Fitting")
     panel.sync_history([result], result)
     assert panel.tool_combo.currentText() == "XRD Peak Analysis"
-    assert xrd.peak_table.rowCount() == len(result.peaks)
+    assert xrd.current_result() is result
+    # The detailed table (bottom Results tab) renders one row per peak.
+    _columns, table_rows = result.detail_table()
+    assert len(table_rows) == len(result.peaks)
 
 
 # --- Focus / Extract ---------------------------------------------------------
@@ -649,7 +666,9 @@ def test_export_peak_table_csv_writes_expected_rows(qapp, tmp_path):
 
     import csv
 
-    with open(path, newline="") as f:
+    # The file is written as UTF-8 with a BOM (utf-8-sig) so the Unicode
+    # scientific headers survive on Windows too (see below).
+    with open(path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
     assert rows[0] == [
         "Peak #",
@@ -664,6 +683,51 @@ def test_export_peak_table_csv_writes_expected_rows(qapp, tmp_path):
     assert rows[1][5] == "automatic"
 
 
+def test_export_peak_table_csv_is_utf8_sig_and_preserves_unicode_headers(qapp, tmp_path):
+    """Windows CI regression: CSV export used the platform-default text
+    encoding, which is cp1252 on Windows and cannot encode 'θ' -- the
+    export raised UnicodeEncodeError. It now writes explicit utf-8-sig;
+    'θ' / '°' / 'Å' must survive and the file must carry a UTF-8 BOM."""
+    _figure, section = _section_with_detected_peaks()
+    result = section.current_result()
+    path = tmp_path / "peaks.csv"
+    section.export_peak_table_csv(str(path))
+
+    raw = path.read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")  # UTF-8 BOM (utf-8-sig), Excel-friendly on Windows
+
+    text = raw.decode("utf-8-sig")
+    header_line = text.splitlines()[0]
+    assert "Seed 2θ (°)" in header_line
+    assert "d-spacing (Å)" in header_line
+    assert "θ" in header_line and "°" in header_line and "Å" in header_line
+
+    import csv
+
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.reader(f))
+    # Row data intact and correct: one data row per peak, d-spacing column
+    # parses as a float, first data row keeps its origin.
+    assert len(rows) == len(result.peaks) + 1
+    first_d = rows[1][4]
+    assert first_d == "" or float(first_d) > 0.0
+    assert rows[1][5] in ("automatic", "manual")
+    # Enabled column round-trips as a bool string.
+    assert rows[1][6] in ("True", "False")
+
+
+def test_export_peak_table_csv_bytes_are_pure_utf8(qapp, tmp_path):
+    """Linux behavior is unchanged in substance -- the payload after the
+    BOM is plain UTF-8 and decodes losslessly."""
+    _figure, section = _section_with_detected_peaks()
+    path = tmp_path / "peaks.csv"
+    section.export_peak_table_csv(str(path))
+    raw = path.read_bytes()
+    # Whole file (BOM + body) is valid UTF-8; body alone is valid UTF-8 too.
+    raw.decode("utf-8")
+    raw[3:].decode("utf-8")
+
+
 def test_export_peak_table_with_no_result_is_a_safe_no_op(qapp, tmp_path):
     figure = GnoviFigure()
     ds = _synthetic_pattern_dataset()
@@ -672,6 +736,106 @@ def test_export_peak_table_with_no_result_is_a_safe_no_op(qapp, tmp_path):
     path = tmp_path / "peaks.csv"
     section.export_peak_table_csv(str(path))  # must not raise
     assert not path.exists()
+
+
+# --- Bottom Results-tab peak table: full-window synchronization --------------
+
+
+def _xrd_main_window(seed=7):
+    window = MainWindow()
+    ds = _synthetic_pattern_dataset(seed=seed)
+    window.dataset_manager.add(ds)
+    window.figure_model.active_panel.add_series(PlotSeries.line(ds, "2theta", "intensity", label="pattern"))
+    window._on_figure_content_changed()
+    window.analysis_panel.tool_combo.setCurrentText("XRD Peak Analysis")
+    xrd = window.analysis_panel.xrd_section_widget
+    xrd.radiation_combo.setCurrentIndex(xrd.radiation_combo.findData("cu_ka1"))
+    xrd.prominence_spin.setValue(40.0)
+    return window, xrd
+
+
+def test_find_peaks_populates_the_bottom_results_peak_table(qapp):
+    window, xrd = _xrd_main_window()
+    xrd._on_find_peaks_clicked()
+    result = xrd.current_result()
+    table = window.analysis_result_view._detail_table
+    assert table.rowCount() == len(result.peaks)
+    assert table.isVisibleTo(window.analysis_result_view)
+
+
+def test_results_table_selection_drives_enable_disable_through_full_wiring(qapp):
+    window, xrd = _xrd_main_window()
+    xrd._on_find_peaks_clicked()
+    result = xrd.current_result()
+    assert len(result.peaks) >= 2
+
+    window.analysis_result_view._detail_table.selectRow(1)
+    xrd._on_toggle_enabled_clicked()
+    assert result.peaks[1].enabled is False
+    # The re-displayed table keeps that row selected (same result, in-place edit).
+    assert window.analysis_result_view.selected_detail_rows() == [1]
+    assert window.analysis_result_view._detail_table.item(1, 6).text() == "No"
+
+
+def test_results_table_remove_selected_through_full_wiring(qapp):
+    window, xrd = _xrd_main_window()
+    xrd._on_find_peaks_clicked()
+    result = xrd.current_result()
+    before = len(result.peaks)
+    window.analysis_result_view._detail_table.selectRow(0)
+    xrd._on_remove_selected_clicked()
+    assert len(result.peaks) == before - 1
+    assert window.analysis_result_view._detail_table.rowCount() == before - 1
+
+
+def test_switching_xrd_history_shows_that_results_own_peak_table(qapp):
+    window, xrd = _xrd_main_window()
+    xrd._on_find_peaks_clicked()
+    result_a = xrd.current_result()
+    xrd.prominence_spin.setValue(150.0)
+    xrd._on_find_peaks_clicked()
+    result_b = xrd.current_result()
+    assert len(result_a.peaks) != len(result_b.peaks)
+
+    panel_id = window.figure_model.active_panel.id
+    history = window._project.active_workbench.analysis_results.all(panel_id)
+    window.analysis_panel.history_list.setCurrentRow(history.index(result_a))
+    assert window.analysis_result_view._detail_table.rowCount() == len(result_a.peaks)
+    window.analysis_panel.history_list.setCurrentRow(history.index(result_b))
+    assert window.analysis_result_view._detail_table.rowCount() == len(result_b.peaks)
+
+
+def test_manual_add_peak_updates_the_bottom_results_peak_table(qapp):
+    window, xrd = _xrd_main_window()
+    xrd._on_find_peaks_clicked()
+    before = window.analysis_result_view._detail_table.rowCount()
+    xrd.add_manual_peak(55.0, 42.0)
+    assert window.analysis_result_view._detail_table.rowCount() == before + 1
+    last = window.analysis_result_view._detail_table
+    assert last.item(last.rowCount() - 1, 5).text() == "manual"
+
+
+def test_radiation_change_refreshes_bottom_peak_table_d_spacing(qapp):
+    window, xrd = _xrd_main_window()
+    xrd._on_find_peaks_clicked()
+    table = window.analysis_result_view._detail_table
+    d_before = table.item(0, 4).text()
+    xrd.radiation_combo.setCurrentIndex(xrd.radiation_combo.findData("mo_ka1"))
+    d_after = window.analysis_result_view._detail_table.item(0, 4).text()
+    assert d_before != d_after
+
+
+def test_panel_switch_clears_bottom_peak_table_when_new_panel_has_no_result(qapp):
+    window, xrd = _xrd_main_window()
+    window.figure_size_panel.layout_combo.setCurrentIndex(
+        window.figure_size_panel.layout_combo.findText("1 x 2")
+    )
+    window._set_active_panel(0)
+    xrd._on_find_peaks_clicked()
+    assert window.analysis_result_view._detail_table.rowCount() > 0
+    window._set_active_panel(1)  # a fresh panel with no analysis history
+    assert window.analysis_result_view._detail_table.rowCount() == 0
+    assert not window.analysis_result_view._detail_table.isVisibleTo(window.analysis_result_view)
 
 
 # --- Save/reopen --------------------------------------------------------------
@@ -809,7 +973,7 @@ def test_clicking_an_xrd_history_row_reloads_the_xrd_section(qapp):
     panel.history_list.setCurrentRow(panel._history_results.index(result_a))
     assert panel.tool_combo.currentText() == "XRD Peak Analysis"
     assert xrd.current_result() is result_a
-    assert xrd.peak_table.rowCount() == len(result_a.peaks)
+    assert len(result_a.detail_table()[1]) == len(result_a.peaks)
 
     # Editing now must only ever touch result A, never result B.
     before_b = len(result_b.peaks)
@@ -819,7 +983,7 @@ def test_clicking_an_xrd_history_row_reloads_the_xrd_section(qapp):
 
     panel.history_list.setCurrentRow(panel._history_results.index(result_b))
     assert xrd.current_result() is result_b
-    assert xrd.peak_table.rowCount() == len(result_b.peaks)
+    assert len(result_b.detail_table()[1]) == len(result_b.peaks)
 
 
 def test_clicking_between_a_fit_result_and_an_xrd_result_in_the_same_history(qapp):

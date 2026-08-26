@@ -88,14 +88,18 @@ def _figure_with_series(dataset: Dataset) -> tuple[GnoviFigure, PlotSeries]:
 
 def _xrd_result_with_n_peaks(n: int):
     """A real `XRDAnalysisResult` with `n` manual peak seeds, built
-    directly with `build_xrd_analysis_result` and a single `_refresh_peak_
-    table()` call -- exactly the shape a real `find_peaks` run with `n`
-    candidates produces (peaks assembled in one batch, table rebuilt
-    once), not `n` individual `add_manual_peak` calls each rebuilding the
-    whole table from scratch (which is what a researcher actually
-    clicking "Add Peak" `n` times would do, and is correctly O(n^2) for
-    that interactive use case -- but is the wrong shape for a "given a
-    result with `n` peaks, does the LAYOUT behave" test)."""
+    directly with `build_xrd_analysis_result` -- exactly the shape a real
+    `find_peaks` run with `n` candidates produces (peaks assembled in one
+    batch), not `n` individual `add_manual_peak` calls (which is what a
+    researcher actually clicking "Add Peak" `n` times would do, but is the
+    wrong shape for a "given a result with `n` peaks, does the LAYOUT
+    behave" test).
+
+    The detailed peak table now lives in the bottom Results tab
+    (`AnalysisResultView`, fed by `XRDAnalysisResult.detail_table()`), not
+    the left `XRDAnalysisSection`, so no in-section table rebuild happens
+    here -- a test that needs the rendered table builds an
+    `AnalysisResultView` and calls `show_result(result)`."""
     from gnovi_plot.modules.xrd.radiation import RADIATION_PRESETS
     from gnovi_plot.modules.xrd.results import build_xrd_analysis_result
 
@@ -118,7 +122,6 @@ def _xrd_result_with_n_peaks(n: int):
         },
     )
     section._current_result = result
-    section._refresh_peak_table()
     return section, result
 
 
@@ -227,11 +230,13 @@ def test_center_splitter_stays_draggable_after_a_huge_xrd_result(qapp):
     xrd.radiation_combo.setCurrentIndex(xrd.radiation_combo.findData("cu_ka1"))
     _section, huge_result = _xrd_result_with_n_peaks(1200)
     xrd._current_result = huge_result
-    xrd._refresh_peak_table()
 
     window.analysis_result_view.show_result(huge_result)
     window.bottom_panel.show_results_tab()
 
+    # The detailed peak table now renders in the Results tab -- 1,200 rows
+    # in it must still not blow up the central splitter's minimum height.
+    assert window.analysis_result_view._detail_table.rowCount() == 1200
     assert window.center_splitter.minimumSizeHint().height() < 600
     # childrenCollapsible defaults to True in Qt -- confirm nothing in this
     # milestone turned that off, which is what makes the handle draggable
@@ -273,7 +278,11 @@ def test_xrd_workflow_controls_are_reachable_through_the_scroll_region(qapp):
         xrd.background_method_combo,
         xrd.smoothing_enabled_check,
         xrd.prominence_spin,
-        xrd.peak_table,
+        xrd.find_peaks_button,
+        xrd.remove_peak_button,
+        xrd.toggle_enabled_button,
+        xrd.label_mode_combo,
+        xrd.export_table_button,
     ):
         node = widget
         found_panel = False
@@ -300,38 +309,98 @@ def test_no_horizontal_scrollbar_policy_on_the_workflow_scroll_area(qapp):
     assert scroll.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
 
 
-# --- Part 5: peak table bounded height / large row counts -------------------
+# --- Part 5: detailed peak table moved to the bottom Results tab -----------
+
+
+def _results_view_showing(result):
+    """An `AnalysisResultView` (as it lives in the bottom Results tab)
+    with `result` displayed -- the authoritative detailed peak table now
+    renders here, not in the left `XRDAnalysisSection`."""
+    view = AnalysisResultView(GnoviFigure(), DatasetManager())
+    view.show_result(result)
+    return view
+
+
+def test_no_detailed_peak_table_widget_remains_in_the_left_xrd_sidebar(qapp):
+    """The wide peak table must not be in the narrow left drawer any more
+    -- no `QTableWidget` anywhere in the XRD section's own widget tree."""
+    from PySide6.QtWidgets import QTableView
+
+    figure, _series = _figure_with_series(synthetic_xrd_quartz_like(n_points=50, n_peaks=1)[0])
+    section = XRDAnalysisSection(figure, DatasetManager())
+    assert not hasattr(section, "peak_table")
+    assert section.findChildren(QTableView) == []
 
 
 @pytest.mark.parametrize("n_peaks", [5, 20, 50, 100, 1000])
-def test_peak_table_bounded_height_at_various_row_counts(qapp, n_peaks):
+def test_results_tab_peak_table_bounded_and_scrolling_at_various_row_counts(qapp, n_peaks):
     section, result = _xrd_result_with_n_peaks(n_peaks)
-    assert section.peak_table.rowCount() == n_peaks
-    # QTableWidget already scrolls internally regardless of row count (its
-    # own sizeHint/minimumSizeHint don't scale with rows -- verified
-    # directly against this Qt version); this is the explicit bound this
-    # milestone adds on top, for UX rather than correctness.
-    assert section.peak_table.maximumHeight() <= 220
-    headers = [section.peak_table.horizontalHeaderItem(i).text() for i in range(section.peak_table.columnCount())]
-    assert headers[0] == "Peak #"
+    view = _results_view_showing(result)
+    table = view._detail_table
+    assert table.rowCount() == n_peaks
+    assert table.isVisibleTo(view)  # shown in the Results tab whenever there's a table
+    # Bounded height + its own internal row scrolling with the header
+    # pinned, regardless of row count.
+    assert table.maximumHeight() <= 260
+    headers = [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())]
+    assert headers == [
+        "Peak #",
+        "Seed 2θ (°)",
+        "Observed intensity",
+        "Prominence",
+        "d-spacing (Å)",
+        "Origin",
+        "Enabled",
+    ]
 
 
-def test_peak_table_enable_disable_works_at_1000_rows(qapp):
+def test_results_tab_peak_table_uses_result_specific_data_not_stale(qapp):
+    _s5, result5 = _xrd_result_with_n_peaks(5)
+    _s99, result99 = _xrd_result_with_n_peaks(99)
+    view = AnalysisResultView(GnoviFigure(), DatasetManager())
+    view.show_result(result99)
+    assert view._detail_table.rowCount() == 99
+    view.show_result(result5)  # selecting an older/smaller result
+    assert view._detail_table.rowCount() == 5
+
+
+def test_results_table_selection_drives_left_sidebar_enable_disable_at_1000_rows(qapp):
     section, result = _xrd_result_with_n_peaks(1000)
-    section.peak_table.selectRow(500)
+    section.set_selected_peak_rows([500])
     section._on_toggle_enabled_clicked()
     assert result.peaks[500].enabled is False
-    section.peak_table.selectRow(500)
+    section.set_selected_peak_rows([500])
     section._on_toggle_enabled_clicked()
     assert result.peaks[500].enabled is True
 
 
-def test_peak_table_remove_works_at_1000_rows(qapp):
+def test_results_table_selection_drives_left_sidebar_remove_at_1000_rows(qapp):
     section, result = _xrd_result_with_n_peaks(1000)
-    section.peak_table.selectRow(999)
+    section.set_selected_peak_rows([999])
     section._on_remove_selected_clicked()
     assert len(result.peaks) == 999
-    assert section.peak_table.rowCount() == 999
+    view = _results_view_showing(result)
+    assert view._detail_table.rowCount() == 999
+
+
+def test_results_table_selection_round_trip_through_the_view_signal(qapp):
+    """A real selection in the Results-tab table must reach the left
+    section via `detail_selection_changed` -> `set_selected_peak_rows`."""
+    section, result = _xrd_result_with_n_peaks(20)
+    view = _results_view_showing(result)
+    view.detail_selection_changed.connect(section.set_selected_peak_rows)
+    view._detail_table.selectRow(7)
+    assert section._selected_peak_rows() == [7]
+    section._on_toggle_enabled_clicked()
+    assert result.peaks[7].enabled is False
+
+
+def test_fit_result_has_no_detail_table_in_the_results_view(qapp):
+    x = np.linspace(0, 10, 20)
+    fit_result = fit_curve(x, 2.0 * x + 1.0, LINEAR, source_dataset_id="ds1", x_column="x", y_column="y")
+    assert fit_result.detail_table() is None
+    view = _results_view_showing(fit_result)
+    assert not view._detail_table.isVisibleTo(view)
 
 
 # --- Part 6: peak-detection first-run defaults -------------------------------
