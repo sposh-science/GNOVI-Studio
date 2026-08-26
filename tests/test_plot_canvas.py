@@ -3,7 +3,7 @@ import pandas as pd
 from gnovi_plot.analysis.cycles import detect_cycles
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.gui.widgets.plot_canvas import PlotCanvas
-from gnovi_plot.plotting.figure import GnoviFigure
+from gnovi_plot.plotting.figure import GnoviFigure, Panel
 from gnovi_plot.plotting.series import PlotSeries
 
 
@@ -119,3 +119,71 @@ def test_render_does_not_mutate_dataset_dataframe(qapp):
     canvas.render(figure)
 
     pd.testing.assert_frame_equal(dataset.dataframe, original)
+
+
+# --- Review-fix regression: set_analysis_overlay's own Axes resolution
+# (code-review finding #5) ---------------------------------------------------
+#
+# Compared directly against active_axes(): equivalent for every in-bounds/
+# focused case (both resolve the identical Axes), but deliberately NOT
+# reused, because active_axes() has no bounds guard and would raise/
+# misbehave for an out-of-range active_panel_index -- a case
+# set_analysis_overlay must tolerate as a safe no-op, since an XRD overlay
+# refresh can be triggered independently of a matching render(). See
+# set_analysis_overlay's own docstring for the full reasoning.
+
+
+def _two_panel_figure_and_canvas():
+    figure = GnoviFigure(panels=[Panel(), Panel()], layout=(1, 2))
+    ds = _make_dataset()
+    figure.panels[0].add_series(PlotSeries.line(ds, "x", "y"))
+    figure.panels[1].add_series(PlotSeries.line(ds, "x", "y"))
+    canvas = PlotCanvas()
+    canvas.render(figure)
+    return figure, canvas
+
+
+def test_set_analysis_overlay_targets_the_same_axes_as_active_axes(qapp):
+    figure, canvas = _two_panel_figure_and_canvas()
+    figure.set_active_panel(1)
+    canvas.set_analysis_overlay(figure, peak_points=[(1.0, 2.0, "")], preview_xy=None)
+    assert canvas._analysis_overlay_artists
+    (artist,) = canvas._analysis_overlay_artists
+    assert artist.axes is canvas.active_axes(figure)
+    assert canvas.active_axes(figure) is canvas.axes_list[1]
+
+
+def test_set_analysis_overlay_is_a_safe_noop_when_axes_list_is_stale(qapp):
+    # The realistic version of "active_panel_index out of range for
+    # axes_list": figure.panels/active_panel_index stay self-consistent
+    # (GnoviFigure enforces that, see set_active_panel/remove_series), but
+    # a THIRD panel was just added to the model and made active before
+    # this canvas has re-rendered to match -- axes_list (still length 2)
+    # is what's actually stale, exactly the "independent of any render"
+    # case set_analysis_overlay's own docstring describes.
+    figure, canvas = _two_panel_figure_and_canvas()
+    figure.panels.append(Panel())
+    figure.panels[2].add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+    figure.set_active_panel(2)  # valid for figure.panels; NOT valid for canvas.axes_list yet
+    # Must not raise (active_axes() itself would IndexError here) and must
+    # leave no overlay artists behind.
+    canvas.set_analysis_overlay(figure, peak_points=[(1.0, 2.0, "")], preview_xy=None)
+    assert canvas._analysis_overlay_artists == []
+
+
+def test_set_analysis_overlay_is_a_safe_noop_for_a_negative_active_panel_index(qapp):
+    figure, canvas = _two_panel_figure_and_canvas()
+    figure.active_panel_index = -1  # active_axes() would silently wrap to axes_list[-1]
+    canvas.set_analysis_overlay(figure, peak_points=[(1.0, 2.0, "")], preview_xy=None)
+    assert canvas._analysis_overlay_artists == []
+
+
+def test_set_analysis_overlay_in_focus_mode_matches_active_axes(qapp):
+    figure, canvas = _two_panel_figure_and_canvas()
+    canvas.render(figure, focused_panel=figure.panels[1])
+    assert canvas.is_focused
+    canvas.set_analysis_overlay(figure, peak_points=[(1.0, 2.0, "")], preview_xy=None)
+    assert canvas._analysis_overlay_artists
+    (artist,) = canvas._analysis_overlay_artists
+    assert artist.axes is canvas.active_axes(figure)
+    assert canvas.active_axes(figure) is canvas.axes_list[0]

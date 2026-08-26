@@ -599,13 +599,24 @@ class AnalysisPanel(QWidget):
         self.history_status_label.setVisible(not results)
         self.history_list.setVisible(bool(results))
 
+        self._apply_current_result(current)
+
+    def _apply_current_result(self, current: AnalysisResult | None) -> None:
+        """Every current-result-dependent piece of this panel, synced from
+        exactly one place -- shared by `sync_history` (a programmatic
+        rebuild) and `_on_history_row_changed` (an actual click), so the
+        scientist can never see one result selected in the History list
+        while the XRD table/overlay/Curve-Fitting controls still show a
+        DIFFERENT, stale result: Curve Fitting's own `_current_result`/
+        Add-Remove-Fit-Curve state, the XRD section's loaded result
+        (table/radiation/detection settings/overlay -- see `XRDAnalysis
+        Section.load_result`'s own docstring), and which tool is visible,
+        so "restore/display its result table and peak overlays" (an XRD
+        result) or the Curve Fitting controls (a FitResult) is always
+        what's actually on screen."""
         self._current_result = current if isinstance(current, FitResult) else None
         self._refresh_fit_curve_buttons()
         self.xrd_section_widget.load_result(current if isinstance(current, XRDAnalysisResult) else None)
-        # Selecting a result switches the visible tool to match it, so
-        # "restore/display its result table and peak overlays" (an XRD
-        # result) or the Curve Fitting controls (a FitResult) is always
-        # what's actually on screen -- see this class's own docstring.
         if isinstance(current, XRDAnalysisResult):
             self.tool_combo.setCurrentText(_TOOL_XRD)
         elif isinstance(current, FitResult):
@@ -619,7 +630,7 @@ class AnalysisPanel(QWidget):
         if row < 0 or row >= len(self._history_results):
             return
         result = self._history_results[row]
-        self._current_result = result if isinstance(result, FitResult) else None
+        self._apply_current_result(result)
         # Reselecting a different result makes any "Ready to add: ..."/
         # "Added to plot: ..." label from a still-pending fresh fit stale
         # -- it described *that* fit, not whatever's selected now.
@@ -627,7 +638,6 @@ class AnalysisPanel(QWidget):
         self.pending_fit_label.setVisible(False)
         self.added_feedback_label.clear()
         self.added_feedback_label.setVisible(False)
-        self._refresh_fit_curve_buttons()
         self.history_result_selected.emit(result)
 
     def _matching_series(self, result: FitResult) -> list[PlotSeries]:
