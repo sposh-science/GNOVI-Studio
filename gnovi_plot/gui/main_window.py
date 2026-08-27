@@ -5,6 +5,7 @@ from matplotlib.backends import backend_qt
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSettings, Qt
 from PySide6.QtGui import (
+    QAction,
     QActionGroup,
     QColor,
     QGuiApplication,
@@ -61,6 +62,7 @@ from gnovi_plot.gui.widgets.tool_drawer import ToolDrawer
 from gnovi_plot.gui.widgets.workbench_header import WorkbenchHeader
 from gnovi_plot.gui.widgets.workbench_tabs import WorkbenchTabBar
 from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D
+from gnovi_plot.plotting.navigation import zoom_axes_out
 from gnovi_plot.plotting.series import PlotSeries
 from gnovi_plot.plotting.series3d import Series3D
 
@@ -155,6 +157,46 @@ def _make_undo_redo_icon(direction: str) -> QIcon:
 
     painter.end()
     return QIcon(pixmap)
+
+
+def _make_zoom_out_icon() -> QIcon:
+    """A magnifying-glass glyph with a "minus" bar across the lens -- drawn
+    in-process via QPainter, the same hand-drawn technique as
+    `_make_undo_redo_icon` (never an OS icon theme). Matplotlib's
+    navigation toolbar ships Home/Back/Forward/Pan/Zoom/Subplots/Save
+    icons but no "zoom out", so GNOVI draws its own to sit beside them."""
+    size = _UNDO_REDO_ICON_SIZE
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(_UNDO_REDO_ICON_COLOR))
+    pen.setWidthF(size * 0.11)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+
+    lens_diameter = size * 0.56
+    lens_rect = QRectF(size * 0.09, size * 0.09, lens_diameter, lens_diameter)
+    painter.drawEllipse(lens_rect)
+
+    center = lens_rect.center()
+    radius = lens_diameter / 2
+    # Handle: from the lens's lower-right edge out to the icon corner.
+    edge_offset = radius / math.sqrt(2)
+    painter.drawLine(
+        QPointF(center.x() + edge_offset, center.y() + edge_offset),
+        QPointF(size * 0.93, size * 0.93),
+    )
+    # The "minus" bar across the lens -- what makes it read as "zoom out".
+    bar_half = lens_diameter * 0.32
+    painter.drawLine(
+        QPointF(center.x() - bar_half, center.y()),
+        QPointF(center.x() + bar_half, center.y()),
+    )
+
+    painter.end()
+    return QIcon(pixmap)
+
 
 _PLOT_THEME_MENU_LABELS = ((PlotTheme.LIGHT, "Light"), (PlotTheme.DARK, "Dark"))
 
@@ -549,6 +591,23 @@ class MainWindow(QMainWindow):
         # (added further down) replaces it at a stable location instead.
         nav_toolbar = _CursorSafeNavigationToolbar(self.plot_canvas, self, coordinates=False)
         self.addToolBar(nav_toolbar)
+        self._nav_toolbar = nav_toolbar
+        # "Zoom Out": an incremental, view-only expansion of the active 2D
+        # panel's current X/Y ranges (see `_on_zoom_out`). It lives on
+        # Matplotlib's own navigation toolbar, right after its "Zoom"
+        # button, because it's the same kind of transient view navigation
+        # as Home/Back/Forward/Pan/Zoom -- never a GNOVI model edit.
+        # Disabled for a Panel3D (see `_refresh_active_panel_context`).
+        self._zoom_out_action = QAction(_make_zoom_out_icon(), "Zoom Out", self)
+        self._zoom_out_action.setToolTip("Zoom Out")
+        self._zoom_out_action.triggered.connect(self._on_zoom_out)
+        _zoom_out_anchor = (
+            nav_toolbar._actions.get("configure_subplots") if hasattr(nav_toolbar, "_actions") else None
+        )
+        if _zoom_out_anchor is not None:
+            nav_toolbar.insertAction(_zoom_out_anchor, self._zoom_out_action)
+        else:  # Matplotlib renamed/removed its private action registry -- still usable, just appended.
+            nav_toolbar.addAction(self._zoom_out_action)
         # Forces the Matplotlib toolbar and the custom "Main" toolbar (built
         # in _create_toolbar) onto separate rows unconditionally, so neither
         # ever reflows into the other at narrower widths.
@@ -1250,6 +1309,44 @@ class MainWindow(QMainWindow):
         if mode is None or mode == self._cursor_mode:
             return
         self._on_cursor_mode_changed(mode)
+
+    def _on_zoom_out(self) -> None:
+        """Navigation-toolbar "Zoom Out": widen the active 2D panel's
+        CURRENT visible X and Y ranges about their current centers by a
+        fixed step (`navigation.ZOOM_OUT_FACTOR`, ~1.25x per click), so
+        repeated clicks progressively zoom out. It deliberately never
+        jumps straight to the full data extent -- that's Home / Reset
+        View.
+
+        A pure VIEW operation, exactly like the Matplotlib toolbar's own
+        Pan/Zoom: it changes only the live Axes view limits. It never
+        touches the Dataset, PlotSeries, the Panel's scientific/model
+        properties (`xlim`/`yscale`/`invert_x`/...), the Project dirty
+        flag, the figure-content undo stack, or the analysis results.
+
+        It participates in the SAME Home/Back/Forward history the built-in
+        tools use: on the first navigation of the session the current
+        view is pushed as the baseline (so Home returns to it), then each
+        click's result is pushed on top (so Back steps out one click at a
+        time and Forward re-applies) -- the same `push_current()` protocol
+        `NavigationToolbar2`'s own pan/zoom follow.
+
+        No-op for a `Panel3D` (the button is also disabled then -- see
+        `_refresh_active_panel_context`); 3D navigation is Matplotlib
+        `Axes3D`'s own mouse handling and out of scope here. Inverted and
+        log axes are each handled correctly by `navigation.zoom_axes_out`
+        (order preserved, log widened multiplicatively)."""
+        figure = self.figure_model
+        if isinstance(figure.active_panel, Panel3D):
+            return
+        ax = self.plot_canvas.active_axes(figure)
+        toolbar = self._nav_toolbar
+        nav_stack = getattr(toolbar, "_nav_stack", None)
+        if callable(nav_stack) and nav_stack() is None:
+            toolbar.push_current()  # baseline the pre-zoom view for Home/Back
+        zoom_axes_out(ax)
+        toolbar.push_current()
+        self.plot_canvas.draw_idle()
 
     # --- Shared handlers (menu, toolbar, and sidebar controls all call these) --
 
@@ -2057,6 +2154,9 @@ class MainWindow(QMainWindow):
         self.properties_panel.active_panel_label.refresh(self.figure_model)
         self.workbench_header.refresh(self._project.active_workbench.name, self.figure_model)
         self.graph_library_panel.sync_active_panel_state()
+        # "Zoom Out" is a 2D-only view op (see `_on_zoom_out`); greyed out
+        # while a Panel3D is active rather than silently doing nothing.
+        self._zoom_out_action.setEnabled(not isinstance(self.figure_model.active_panel, Panel3D))
 
     def _on_export_figure(self):
         dialog = ExportFigureDialog(self.figure_model, self.plot_canvas, self)
