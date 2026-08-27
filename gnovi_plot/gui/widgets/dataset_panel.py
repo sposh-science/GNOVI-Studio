@@ -67,16 +67,48 @@ _CYCLE_SOURCE_OPTIONS = [
 
 _PLOT_PRESET_NONE = "none"
 _PLOT_PRESET_XRD = "xrd"
+_PLOT_PRESET_CV = "cv"
 
 _PLOT_PRESET_OPTIONS = [
     ("None", _PLOT_PRESET_NONE),
     ("XRD Pattern", _PLOT_PRESET_XRD),
+    ("CV (Potential vs Current)", _PLOT_PRESET_CV),
 ]
 
 # Applied only when the user explicitly picks the "XRD Pattern" preset --
 # never inferred from column names. General plotting stays domain-agnostic;
 # full XRD analysis (Scherrer, peak fitting, etc.) is a later milestone.
 _XRD_AXIS_PRESET = {"xlabel": "2θ (°)", "ylabel": "Intensity (a.u.)"}
+_CV_AXIS_PRESET = {"xlabel": "Potential (V)", "ylabel": "Current (A)"}
+
+# Substring patterns (case-insensitive, first match wins) used ONLY when
+# the "CV" preset is chosen, and only to pre-select the X/Y column combos.
+# Never reorders/renames columns; silently falls back to X=col 0 / Y=col 1
+# on no match. Covers CHI (Potential/V, Current/A), BioLogic (Ewe/V, I/mA,
+# <I>/mA, control/V), Autolab/NOVA (WE(1).Potential/Current), and plain
+# Voltage/Current.
+_CV_POTENTIAL_PATTERNS = ("potential", "ewe", "control/v", "voltage", "e /v", "e/v")
+_CV_CURRENT_PATTERNS = ("current", "<i>", "i/ma", "i /a", "i/a", "we(1).current")
+
+
+def _match_cv_columns(columns: list[str]) -> tuple[int, int] | None:
+    """``(x_index, y_index)`` for the first column matching a potential
+    pattern and the first matching a current pattern -- or ``None`` when
+    either side does not match (the caller keeps its default selection).
+    A pure function so it is trivially testable without a widget."""
+    lowered = [c.lower() for c in columns]
+
+    def _first(patterns: tuple[str, ...]) -> int | None:
+        for i, name in enumerate(lowered):
+            if any(p in name for p in patterns):
+                return i
+        return None
+
+    x = _first(_CV_POTENTIAL_PATTERNS)
+    y = _first(_CV_CURRENT_PATTERNS)
+    if x is None or y is None or x == y:
+        return None
+    return x, y
 
 # Shown as the Plot page's dataset combo's sole entry when the
 # DatasetManager is empty -- see `_sync_dataset_combo`.
@@ -335,12 +367,20 @@ class DatasetPanel(QWidget):
         return self.plot_preset_combo.currentData()
 
     def _on_preset_changed(self, *_args) -> None:
-        is_xrd = self._current_preset() == _PLOT_PRESET_XRD
+        preset = self._current_preset()
+        is_xrd = preset == _PLOT_PRESET_XRD
+        is_cv = preset == _PLOT_PRESET_CV
         if is_xrd:
             self.plot_type_combo.setCurrentIndex(self.plot_type_combo.findData(PlotType.LINE))
             self.plot_mode_combo.setCurrentIndex(self.plot_mode_combo.findData(_PLOT_MODE_ENTIRE))
-        self.plot_type_combo.setEnabled(not is_xrd)
+        elif is_cv:
+            # CV is always a line plot, but the "plot by cycles" mode stays
+            # available -- a CV is exactly the kind of repeating sweep it is for.
+            self.plot_type_combo.setCurrentIndex(self.plot_type_combo.findData(PlotType.LINE))
+        self.plot_type_combo.setEnabled(not is_xrd and not is_cv)
         self.plot_mode_combo.setEnabled(not is_xrd)
+        if is_cv:
+            self._populate_columns(self._current_dataset())
         self._on_plot_type_changed()
 
     def _on_selection_changed(self, current, previous) -> None:
@@ -443,6 +483,11 @@ class DatasetPanel(QWidget):
         self.y_combo.addItems(columns)
         if len(columns) > 1:
             self.y_combo.setCurrentIndex(1)
+        if self._current_preset() == _PLOT_PRESET_CV:
+            match = _match_cv_columns(columns)
+            if match is not None:
+                self.x_combo.setCurrentIndex(match[0])
+                self.y_combo.setCurrentIndex(match[1])
 
     def _on_plot_type_changed(self, *_args) -> None:
         is_histogram = self._current_plot_type() == PlotType.HISTOGRAM
@@ -635,3 +680,5 @@ class DatasetPanel(QWidget):
         self.add_to_plot_requested.emit(series_list)
         if self._current_preset() == _PLOT_PRESET_XRD:
             self.axis_preset_requested.emit(dict(_XRD_AXIS_PRESET))
+        elif self._current_preset() == _PLOT_PRESET_CV:
+            self.axis_preset_requested.emit(dict(_CV_AXIS_PRESET))

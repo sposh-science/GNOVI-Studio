@@ -178,7 +178,7 @@ class AnalysisResultView(QWidget):
         self._provenance_section = CollapsibleSection("Provenance", self._provenance_widget, expanded=False)
 
         self._view_residuals_button = QPushButton("View Residuals…")
-        self._copy_summary_button = QPushButton("Copy Fit Summary")
+        self._copy_summary_button = QPushButton("Copy Summary")
 
         button_row = QHBoxLayout()
         button_row.addWidget(self._view_residuals_button)

@@ -385,8 +385,17 @@ class ExportFigureDialog(QDialog):
         showing. Called immediately before every `export_live_figure` call
         (both the real export and the live preview) -- the cursor simply
         reappears on the user's next mouse move over the canvas, same as
-        any other redraw."""
+        any other redraw.
+
+        The XRD peak-marker/preview overlay and the CV cycle/sweep/peak
+        overlay are the same kind of live-only analysis aid (real
+        Matplotlib artists on the active Axes, see `PlotCanvas.set_analysis
+        _overlay`/`set_cv_overlay`) -- stripped here too so a publication
+        export never carries them; MainWindow redraws them on its next
+        `_rerender`."""
         self._plot_canvas.clear_reference_cursor()
+        self._plot_canvas.clear_analysis_overlay()
+        self._plot_canvas.clear_cv_overlay()
 
     def _on_accept(self) -> None:
         if not self.path_edit.text():

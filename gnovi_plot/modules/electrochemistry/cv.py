@@ -113,6 +113,29 @@ class Cycle:
 PARTIAL_SWEEP_FRACTION = 0.6
 
 
+def ambiguous_segmentation(sweeps: list[SweepSegment]) -> bool:
+    """Heuristic "the researcher should double-check this" flag for a
+    detected cycle segmentation.
+
+    ``True`` when the sweep count is odd (a dangling half-cycle somewhere
+    in the middle, not just a truncated end) or when an *interior* sweep
+    (not the first or last, which can legitimately be truncated) has a
+    potential span below :data:`PARTIAL_SWEEP_FRACTION` of the widest
+    sweep -- both signs of a held potential, a multi-rate segment, or a
+    mis-parsed multi-segment file. Purely advisory: it never blocks
+    analysis, it only drives a UI warning + the manual-override offer.
+    """
+    if len(sweeps) < 2:
+        return False
+    if len(sweeps) % 2 == 1:
+        return True
+    reference = max(s.potential_span for s in sweeps)
+    if reference <= 0:
+        return False
+    threshold = PARTIAL_SWEEP_FRACTION * reference
+    return any(s.potential_span < threshold for s in sweeps[1:-1])
+
+
 def pair_cycles(sweeps: list[SweepSegment]) -> list[Cycle]:
     """Group ``sweeps`` (as returned by
     :func:`gnovi_plot.modules.electrochemistry.common.segment_sweeps`, in
@@ -259,6 +282,71 @@ def _finite_pair(potential, current) -> tuple[np.ndarray, np.ndarray]:
     if e.ndim != 1:
         raise InvalidCVInputError("potential and current must be 1-dimensional.")
     return e, i
+
+
+#: Multiplier on the robust noise scale for the first-run prominence
+#: default (see :func:`default_prominence`). Lower than XRD's 5 -- a CV
+#: diffusion wave stands over the noise less sharply than an XRD
+#: reflection, so an aggressive default risks hiding a small quasi-
+#: reversible return peak. PROVISIONAL: validate on synthetic + real
+#: ferricyanide data before treating this as settled.
+DEFAULT_PROMINENCE_MULTIPLIER = 3.5
+
+#: Floor for the first-run prominence default, as a fraction of the
+#: sweep's peak-to-peak current range -- so a very clean sweep (tiny MAD)
+#: still gets a sane threshold rather than one that admits every ripple.
+DEFAULT_PROMINENCE_FLOOR_FRACTION = 0.02
+
+
+def default_prominence(
+    current,
+    *,
+    multiplier: float = DEFAULT_PROMINENCE_MULTIPLIER,
+    floor_fraction: float = DEFAULT_PROMINENCE_FLOOR_FRACTION,
+) -> float:
+    """A conservative, transparent, data-dependent STARTING prominence for
+    :func:`detect_cv_peaks` -- shown in the UI, freely editable, never
+    re-applied once the researcher has touched a detection control.
+
+    ``max(multiplier * 1.4826 * MAD(diff(current)), floor_fraction *
+    ptp(current))``. The first term is the standard robust estimate of the
+    signal's local noise standard deviation (median absolute deviation of
+    the first differences, so a few large faradaic steps do not inflate
+    it); the second is a floor against the sweep's own current span. Should
+    be computed from a SINGLE sweep's current, not a concatenated cycle
+    (the reversal step would inflate the MAD).
+
+    NOT an "automatic correct" prominence and NOT a claim about how many
+    real peaks exist -- one reproducible number the researcher overrides at
+    will.
+    """
+    i = np.asarray(current, dtype=float)
+    if i.size < 3:
+        return 0.0
+    diffs = np.diff(i)
+    mad = 1.4826 * float(np.median(np.abs(diffs - np.median(diffs))))
+    span = float(np.ptp(i))
+    return max(multiplier * mad, floor_fraction * span, 0.0)
+
+
+def mv_to_sample_distance(potential, min_separation_mv: float) -> int | None:
+    """Convert a minimum peak separation in millivolts to a ``find_peaks``
+    ``distance`` (in samples), using the median absolute step of
+    ``potential``. Returns ``None`` for a non-positive request (meaning
+    "no minimum") and always at least ``1`` otherwise -- ``scipy.signal.
+    find_peaks`` rejects a ``distance`` below 1.
+    """
+    if min_separation_mv is None or min_separation_mv <= 0:
+        return None
+    e = np.asarray(potential, dtype=float)
+    steps = np.abs(np.diff(e))
+    steps = steps[np.isfinite(steps) & (steps > 0)]
+    if steps.size == 0:
+        return None
+    step_v = float(np.median(steps))
+    if step_v <= 0:
+        return None
+    return max(1, int(round((min_separation_mv * 1e-3) / step_v)))
 
 
 def detect_cv_peaks(
