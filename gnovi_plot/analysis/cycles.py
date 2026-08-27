@@ -8,6 +8,58 @@ class CycleDetectionError(Exception):
     """Raised when repeating sweep cycles cannot be reliably detected."""
 
 
+DEFAULT_TOLERANCE_FRACTION = 0.25
+
+
+def carried_step_directions(
+    values: np.ndarray,
+    noise_tolerance: float | None = None,
+    tolerance_fraction: float = DEFAULT_TOLERANCE_FRACTION,
+) -> np.ndarray:
+    """Per-step direction (+1 rising / -1 falling / 0 only before the first
+    genuine step) for a 1-D numeric sweep signal.
+
+    Returns an array of length ``len(values) - 1``: entry ``i`` is the
+    direction of the move from ``values[i]`` to ``values[i + 1]``, with the
+    last genuine direction carried forward across sub-tolerance steps
+    (sensor noise, repeated values, brief holds near a turning point) so a
+    plateau at a vertex never registers as a spurious reversal.
+
+    ``noise_tolerance`` is the minimum ``|delta|`` that counts as a genuine
+    directional step. When ``None`` it is derived from the data itself as
+    ``tolerance_fraction`` of the characteristic sampling step (the median
+    of the non-zero absolute consecutive differences) -- robust on a finely,
+    densely sampled sweep where a fraction of the column's full range would
+    be far larger than a real step and swallow every genuine move.
+
+    This is the shared, domain-independent direction primitive behind both
+    ``detect_cycles`` (here) and ``gnovi_plot.modules.electrochemistry.
+    common.segment_sweeps`` -- neither reimplements it, so "which way is the
+    signal going" is decided in exactly one place.
+    """
+    diffs = np.diff(values)
+
+    if noise_tolerance is None:
+        abs_diffs = np.abs(diffs)
+        genuine_steps = abs_diffs[np.isfinite(abs_diffs) & (abs_diffs > 0)]
+        characteristic_step = float(np.median(genuine_steps)) if genuine_steps.size > 0 else 0.0
+        noise_tolerance = characteristic_step * tolerance_fraction
+
+    raw_sign = np.where(diffs > noise_tolerance, 1, np.where(diffs < -noise_tolerance, -1, 0))
+
+    # Carry the last genuine direction forward across noise/plateau steps so
+    # repeated or near-repeated values near a turning point don't register
+    # as spurious reversals.
+    sign = raw_sign.copy()
+    last = 0
+    for i, s in enumerate(raw_sign):
+        if s == 0:
+            sign[i] = last
+        else:
+            last = s
+    return sign
+
+
 def detect_cycles(
     dataframe: pd.DataFrame,
     x_column: str,
@@ -58,26 +110,8 @@ def detect_cycles(
         )
 
     values = x.to_numpy()[valid_positions]
-    diffs = np.diff(values)
 
-    if noise_tolerance is None:
-        abs_diffs = np.abs(diffs)
-        genuine_steps = abs_diffs[np.isfinite(abs_diffs) & (abs_diffs > 0)]
-        characteristic_step = float(np.median(genuine_steps)) if genuine_steps.size > 0 else 0.0
-        noise_tolerance = characteristic_step * tolerance_fraction
-
-    raw_sign = np.where(diffs > noise_tolerance, 1, np.where(diffs < -noise_tolerance, -1, 0))
-
-    # Carry the last genuine direction forward across noise/plateau steps so
-    # repeated or near-repeated values near a turning point don't register
-    # as spurious reversals.
-    sign = raw_sign.copy()
-    last = 0
-    for i, s in enumerate(raw_sign):
-        if s == 0:
-            sign[i] = last
-        else:
-            last = s
+    sign = carried_step_directions(values, noise_tolerance, tolerance_fraction)
 
     if not np.any(sign != 0):
         raise CycleDetectionError(
