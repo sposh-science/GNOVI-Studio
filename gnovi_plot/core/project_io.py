@@ -11,14 +11,15 @@ from pathlib import Path
 
 import pandas as pd
 
-# Registers FitResult (kind "fit") with `analysis.results.result_from_dict`'s
-# polymorphic dispatch table -- imported here, not just relied upon
-# transitively via the GUI layer, so that `load_project` alone (no GUI
-# import required, e.g. a script or a headless test) is guaranteed to
-# recognize every analysis-result kind this app currently ships. A future
-# analysis tool (peak analysis, statistics, FFT, smoothing, ...) needs
-# exactly one more import here, nothing else in this module.
+# Registers FitResult (kind "fit") and XRDAnalysisResult (kind
+# "xrd_peaks") with `analysis.results.result_from_dict`'s polymorphic
+# dispatch table -- imported here, not just relied upon transitively via
+# the GUI layer, so that `load_project` alone (no GUI import required,
+# e.g. a script or a headless test) is guaranteed to recognize every
+# analysis-result kind this app currently ships. A future analysis tool
+# needs exactly one more import here, nothing else in this module.
 import gnovi_plot.analysis.fitting  # noqa: F401
+import gnovi_plot.modules.xrd.results  # noqa: F401
 from gnovi_plot.core.app_info import __version__ as APP_VERSION
 from gnovi_plot.core.project import Project
 from gnovi_plot.core.workbench import DEFAULT_WORKBENCH_NAME, Workbench
@@ -51,6 +52,19 @@ _logger = logging.getLogger("gnovi_plot")
 # skip it and would silently misparse it -- `_check_format_version`
 # refusing the file outright (a clear, understood error) is safer than
 # that silent misparse would be.
+#
+# No bump for XRDAnalysisResult (`analysis.panel_results.
+# PanelResultHistory` gaining a new `AnalysisResult` "xrd_peaks" kind) or
+# for the engine/engine_version/operation/parameters fields added to
+# `AnalysisResult` itself: both are additive within the ALREADY
+# polymorphic, already-free-form `analysis_results` dict `Workbench.
+# to_dict()` writes (see `PanelResultHistory.to_dict`/`result_from_dict`).
+# An older app's `result_from_dict` simply doesn't recognize `"xrd_peaks"`
+# and skips that one entry (the same per-entry tolerance an unknown
+# `kind` already gets, see `PanelResultHistory.from_dict`'s own
+# docstring) rather than misparsing it -- unlike a v2 app's fixed, non-
+# polymorphic `Panel.from_dict`, there is no old code path here that would
+# silently mishandle the new data instead of just not recognizing it.
 PROJECT_FORMAT_VERSION = 3
 
 _MANIFEST_NAME = "project.json"

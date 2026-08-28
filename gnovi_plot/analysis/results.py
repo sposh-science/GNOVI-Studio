@@ -3,6 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+# The `engine` value every result GNOVI computes itself uses -- see
+# `AnalysisResult.engine`'s own docstring. Every result in this codebase
+# sets `engine=ENGINE_GNOVI` today; a future external-engine integration
+# (none exists yet) would use its own short identifier instead.
+ENGINE_GNOVI = "gnovi"
+
 
 @dataclass
 class AnalysisResult:
@@ -65,6 +71,47 @@ class AnalysisResult:
     generates a fresh `result_id` for every new fit; `FitResult.from_dict`
     restores the one that was persisted, so identity survives reload.
 
+    `engine`/`engine_version`/`operation`/`parameters` are engine-neutral
+    provenance, added ahead of any tool that actually needs them (see
+    `modules.xrd.results.XRDAnalysisResult`, the first consumer) so every
+    `AnalysisResult` -- present and future -- records the same four things
+    about *how* it was produced, not just *from what data*. `engine` is a
+    short, stable identifier: `"gnovi"` (`ENGINE_GNOVI`, below) for every
+    result this app computes itself (all of `FitResult` today), reserved
+    for a future non-native value (`"gsas2"`, `"pyfai"`, `"bgmn"`, ...) once
+    GNOVI actually calls out to an external scientific engine -- which it
+    does not yet; nothing in this codebase sets `engine` to anything but
+    `ENGINE_GNOVI` today. `engine_version` is that engine's own version
+    string (GNOVI's own `__version__` for `ENGINE_GNOVI`), `None` only for
+    a result persisted before this field existed. `operation` is a short,
+    engine-scoped label for which computation actually ran (e.g.
+    `"curve_fit"`, `"xrd_peak_detection"`) -- coarser than `kind` (which
+    identifies the *result type* for polymorphic reconstruction) and not a
+    substitute for it. `parameters` is a small, JSON-safe dict of the
+    inputs that operation actually ran with; values should be plain
+    `str`/`int`/`float`/`bool`/`None`/nested `dict`/`list` (never a NumPy
+    scalar -- callers should `float(...)`/`int(...)` first) so two results
+    computed from identical parameters always compare equal after a
+    save/reload round trip. Deliberately no timestamp: nothing here
+    depends on wall-clock time for its scientific identity, and adding one
+    would only make otherwise-deterministic results/tests non-reproducible
+    for no present benefit.
+
+    These four are required (no default), for the same reason every other
+    field on this class is: a dataclass can't place a defaulted field
+    ahead of a subclass's own required fields (`FitResult.model` and
+    friends), so making them optional-with-a-default here would force
+    *every* subclass field after them to also default -- backward
+    compatibility for an *old saved project* missing these keys belongs in
+    each subclass's own `from_dict` (`data.get("engine", ENGINE_GNOVI)`
+    etc.), not in the dataclass field declaration; see `FitResult.
+    from_dict` for exactly that pattern. No `PROJECT_FORMAT_VERSION` bump
+    was needed to add these: an older app's `from_dict` simply never
+    reads the new keys (extra dict keys are harmless), and this app's own
+    `from_dict` methods default them for a file saved before they existed
+    -- the same one-directional-compatibility precedent `Panel3D`'s own
+    fields-added-since-v3 already established.
+
     Pure data plus a small display contract (`summary`/`details`/
     `provenance_details`/`report_text`) any results view can render
     without knowing the concrete subclass. No Qt, no plotting, no project
@@ -80,6 +127,10 @@ class AnalysisResult:
     row_range: tuple[int, int] | None
     source_panel_id: str | None
     result_id: str
+    engine: str
+    engine_version: str | None
+    operation: str
+    parameters: dict
 
     kind: ClassVar[str] = "analysis"
 
@@ -100,13 +151,20 @@ class AnalysisResult:
         never names (see the class docstring / `AnalysisResultView` for
         name resolution). One correct default implementation every
         subclass shares, since the fields it reads are already on this
-        base class."""
+        base class. Includes engine/operation last -- for `ENGINE_GNOVI`
+        this is simply confirming a native result, but once a non-native
+        `engine` value exists this is exactly what makes it "obvious [...]
+        whether a result came from GNOVI native [or] an external engine"
+        in a saved project, directly from this one shared method."""
         rows = [("Source dataset ID", self.source_dataset_id)]
         if self.source_series_id is not None:
             rows.append(("Source series ID", self.source_series_id))
         rows.append(("Columns", f"{self.x_column} → {self.y_column}"))
         if self.row_range is not None:
             rows.append(("Row range", f"{self.row_range[0]}–{self.row_range[1]}"))
+        engine_text = f"{self.engine} {self.engine_version}" if self.engine_version else self.engine
+        rows.append(("Engine", engine_text))
+        rows.append(("Operation", self.operation))
         return rows
 
     def supports_residuals(self) -> bool:
@@ -169,6 +227,10 @@ class AnalysisResult:
             "row_range": list(self.row_range) if self.row_range is not None else None,
             "source_panel_id": self.source_panel_id,
             "result_id": self.result_id,
+            "engine": self.engine,
+            "engine_version": self.engine_version,
+            "operation": self.operation,
+            "parameters": dict(self.parameters),
         }
 
 

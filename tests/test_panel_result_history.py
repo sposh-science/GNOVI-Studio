@@ -5,7 +5,7 @@ import uuid
 import pytest
 
 from gnovi_plot.analysis.panel_results import PanelResultHistory
-from gnovi_plot.analysis.results import AnalysisResult
+from gnovi_plot.analysis.results import ENGINE_GNOVI, AnalysisResult
 
 
 def _result(**overrides) -> AnalysisResult:
@@ -19,6 +19,10 @@ def _result(**overrides) -> AnalysisResult:
         row_range=None,
         source_panel_id=None,
         result_id=uuid.uuid4().hex,
+        engine=ENGINE_GNOVI,
+        engine_version=None,
+        operation="test",
+        parameters={},
     )
     defaults.update(overrides)
     return AnalysisResult(**defaults)

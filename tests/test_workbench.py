@@ -237,7 +237,7 @@ def test_duplicate_workbench_does_not_inherit_the_originals_analysis_history():
     though the panels are structurally identical, they have fresh ids
     (see `test_duplicate_workbench_gives_the_cloned_panel_a_new_id`), so
     there is nothing to correctly remap anyway."""
-    from gnovi_plot.analysis.results import AnalysisResult
+    from gnovi_plot.analysis.results import ENGINE_GNOVI, AnalysisResult
 
     dataset = _make_dataset()
     project = Project.new()
@@ -254,6 +254,10 @@ def test_duplicate_workbench_does_not_inherit_the_originals_analysis_history():
         row_range=None,
         source_panel_id=original_panel_id,
         result_id="result-1",
+        engine=ENGINE_GNOVI,
+        engine_version=None,
+        operation="test",
+        parameters={},
     )
     original.analysis_results.add(original_panel_id, result)
 

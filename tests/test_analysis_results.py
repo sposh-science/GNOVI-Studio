@@ -6,7 +6,7 @@ from typing import ClassVar
 
 import pytest
 
-from gnovi_plot.analysis.results import AnalysisResult
+from gnovi_plot.analysis.results import ENGINE_GNOVI, AnalysisResult
 
 
 @dataclass
@@ -41,6 +41,10 @@ def _make(**overrides) -> _DummyResult:
         row_range=(2, 8),
         source_panel_id="panel-1",
         result_id="result-1",
+        engine=ENGINE_GNOVI,
+        engine_version="0.9.0",
+        operation="dummy_op",
+        parameters={},
     )
     defaults.update(overrides)
     return _DummyResult(**defaults)
@@ -57,6 +61,10 @@ def test_base_class_summary_and_details_are_not_implemented():
         row_range=None,
         source_panel_id=None,
         result_id="result-1",
+        engine=ENGINE_GNOVI,
+        engine_version=None,
+        operation="test",
+        parameters={},
     )
     with pytest.raises(NotImplementedError):
         result.summary()
@@ -78,12 +86,18 @@ def test_base_class_provenance_details_has_a_real_default_implementation():
         row_range=(2, 8),
         source_panel_id="panel-1",
         result_id="result-1",
+        engine=ENGINE_GNOVI,
+        engine_version="0.9.0",
+        operation="test",
+        parameters={},
     )
     rows = dict(result.provenance_details())
     assert rows["Source dataset ID"] == "dataset-123"
     assert rows["Source series ID"] == "series-456"
     assert rows["Columns"] == "x → y"
     assert rows["Row range"] == "2–8"
+    assert rows["Engine"] == "gnovi 0.9.0"
+    assert rows["Operation"] == "test"
     # Never names -- provenance_details() is always raw ids.
     assert "Ferricyanide" not in str(rows)
 
@@ -99,10 +113,43 @@ def test_base_class_provenance_details_omits_optional_rows():
         row_range=None,
         source_panel_id=None,
         result_id="result-1",
+        engine=ENGINE_GNOVI,
+        engine_version=None,
+        operation="test",
+        parameters={},
     )
     rows = dict(result.provenance_details())
     assert "Source series ID" not in rows
     assert "Row range" not in rows
+
+
+def test_provenance_details_omits_engine_version_when_none():
+    result = _make(engine_version=None)
+    rows = dict(result.provenance_details())
+    assert rows["Engine"] == "gnovi"
+
+
+def test_engine_defaults_are_native_gnovi_and_round_trip_through_to_dict():
+    result = _make(engine=ENGINE_GNOVI, engine_version="0.9.0", operation="dummy_op", parameters={"a": 1})
+    assert result.engine == "gnovi"
+    data = result.to_dict()
+    assert data["engine"] == "gnovi"
+    assert data["engine_version"] == "0.9.0"
+    assert data["operation"] == "dummy_op"
+    assert data["parameters"] == {"a": 1}
+    json.dumps(data)  # parameters must stay JSON-safe
+
+
+def test_engine_provenance_survives_deepcopy():
+    import copy
+
+    result = _make(parameters={"lam": 100000.0, "nested": {"x": 1}})
+    cloned = copy.deepcopy(result)
+    assert cloned.engine == result.engine
+    assert cloned.parameters == result.parameters
+    assert cloned.parameters is not result.parameters
+    cloned.parameters["lam"] = -1.0
+    assert result.parameters["lam"] == 100000.0  # independent copy, not shared
 
 
 def test_base_class_does_not_support_residuals_by_default():
@@ -147,6 +194,10 @@ def test_provenance_also_carries_a_descriptive_name_snapshot():
         "row_range",
         "source_panel_id",
         "result_id",
+        "engine",
+        "engine_version",
+        "operation",
+        "parameters",
         "value",
     }
 
@@ -291,6 +342,10 @@ def test_register_result_kind_makes_a_subclass_dispatchable():
                 row_range=None,
                 source_panel_id=None,
                 result_id=data["result_id"],
+                engine=data.get("engine", ENGINE_GNOVI),
+                engine_version=data.get("engine_version"),
+                operation=data.get("operation", ""),
+                parameters=dict(data.get("parameters", {})),
                 note=data["note"],
             )
 
@@ -305,6 +360,10 @@ def test_register_result_kind_makes_a_subclass_dispatchable():
         row_range=None,
         source_panel_id=None,
         result_id="r1",
+        engine=ENGINE_GNOVI,
+        engine_version=None,
+        operation="test",
+        parameters={},
         note="hello",
     )
 
@@ -313,3 +372,17 @@ def test_register_result_kind_makes_a_subclass_dispatchable():
     assert isinstance(restored, _RegisteredDummy)
     assert restored.result_id == "r1"
     assert restored.note == "hello"
+
+    # A project saved before engine/operation/parameters existed has none
+    # of those keys at all -- from_dict must still reconstruct cleanly
+    # (see AnalysisResult's own docstring on why this needed no
+    # PROJECT_FORMAT_VERSION bump).
+    old_saved_dict = original.to_dict()
+    del old_saved_dict["engine"]
+    del old_saved_dict["engine_version"]
+    del old_saved_dict["operation"]
+    del old_saved_dict["parameters"]
+    restored_old = result_from_dict(old_saved_dict)
+    assert restored_old.engine == ENGINE_GNOVI
+    assert restored_old.engine_version is None
+    assert restored_old.parameters == {}
