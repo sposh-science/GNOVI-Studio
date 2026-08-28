@@ -949,6 +949,9 @@ class MainWindow(QMainWindow):
         self.panel_labels_action = self.panels_menu.addAction("Panel Labels On/Off")
         self.panel_labels_action.setCheckable(True)
         self.panel_labels_action.toggled.connect(self._on_toggle_panel_labels)
+        self.panels_menu.addSeparator()
+        self.extract_panel_action = self.panels_menu.addAction("Extract Active Panel to New Workbench")
+        self.extract_panel_action.triggered.connect(self._on_extract_panel_requested)
 
         # Dedicated top-level menu (not nested under File) -- these act on
         # whichever Workbench is currently active, exactly mirroring what
@@ -1967,6 +1970,28 @@ class MainWindow(QMainWindow):
             return
         self._project.active_workbench_id = copy_workbench.id
         self._activate_workbench(copy_workbench)
+        self.workbench_tab_bar.set_workbenches(self._project.workbenches, self._project.active_workbench_id)
+        self._sync_workbench_menu_state()
+        self._set_dirty(True)
+
+    def _on_extract_panel_requested(self) -> None:
+        """"Panels -> Extract Active Panel to New Workbench" -- copies the
+        active panel into a brand new, independent 1x1 Workbench (see
+        `core.project.Project.extract_panel_to_workbench`) and switches to
+        it, the same shape as `_on_duplicate_workbench_requested`: the
+        domain operation does all the copying, this only activates the
+        result and refreshes chrome. Enabled regardless of the source
+        Workbench's panel count (even a 1x1 source) -- "copy this panel
+        into its own independent Workbench" is meaningful either way. Not
+        part of the Figure undo stack, same as New/Duplicate/Delete
+        Workbench (see `_activate_workbench`'s docstring)."""
+        new_workbench = self._project.extract_panel_to_workbench(
+            self._project.active_workbench_id, self.figure_model.active_panel.id
+        )
+        if new_workbench is None:
+            return
+        self._project.active_workbench_id = new_workbench.id
+        self._activate_workbench(new_workbench)
         self.workbench_tab_bar.set_workbenches(self._project.workbenches, self._project.active_workbench_id)
         self._sync_workbench_menu_state()
         self._set_dirty(True)

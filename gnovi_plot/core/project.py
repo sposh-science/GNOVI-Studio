@@ -4,7 +4,7 @@ from pathlib import Path
 
 from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.plotting.figure import GnoviFigure
-from gnovi_plot.plotting.graph import clone_figure_with_shared_datasets
+from gnovi_plot.plotting.graph import clone_figure_with_shared_datasets, clone_panel_with_shared_datasets
 from gnovi_plot.plotting.graph_library import GraphLibrary
 from gnovi_plot.core.workbench import DEFAULT_WORKBENCH_NAME, Workbench
 
@@ -90,6 +90,44 @@ class Project:
         )
         self.add_workbench(copy_workbench)
         return copy_workbench
+
+    def extract_panel_to_workbench(self, workbench_id: str, panel_id: str) -> Workbench | None:
+        """Copy Panel `panel_id` (from Workbench `workbench_id`) into a
+        brand new, independent 1x1 Workbench -- added to this Project and
+        returned. Returns None (no-op) if either id doesn't resolve.
+
+        Deliberately distinct from `duplicate_workbench`: that clones a
+        whole Figure (every panel) and always starts the copy with an
+        empty analysis history; this clones exactly one Panel -- via
+        `plotting.graph.clone_panel_with_shared_datasets`, the same
+        shared-Dataset-identity trick, same "fresh Panel.id" convention --
+        and carries that one panel's own analysis history along with it,
+        remapped onto the new Panel.id (see
+        `analysis.panel_results.PanelResultHistory.copy_panel`, which also
+        documents why `result_id` is preserved rather than regenerated).
+        The extracted Workbench's Figure copies the source Figure's Plot
+        Theme so the extracted panel renders identically to how it looked
+        in its source Workbench."""
+        workbench = self.get_workbench(workbench_id)
+        if workbench is None:
+            return None
+        panel_index = next(
+            (i for i, p in enumerate(workbench.figure.panels) if p.id == panel_id), None
+        )
+        if panel_index is None:
+            return None
+        source_panel = workbench.figure.panels[panel_index]
+
+        extracted_panel = clone_panel_with_shared_datasets(source_panel, self.dataset_manager)
+        extracted_history = workbench.analysis_results.copy_panel(panel_id, extracted_panel.id)
+
+        extracted_workbench = Workbench(
+            name=f"{workbench.name} — Panel {panel_index + 1}",
+            figure=GnoviFigure(panels=[extracted_panel], plot_theme=workbench.figure.plot_theme),
+            analysis_results=extracted_history,
+        )
+        self.add_workbench(extracted_workbench)
+        return extracted_workbench
 
     def remove_workbench(self, workbench_id: str) -> bool:
         """Remove Workbench `workbench_id`. Refuses (returns False, no-op)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 from dataclasses import dataclass, field
 
@@ -100,6 +101,42 @@ class PanelResultHistory:
         for stale_id in set(self._by_panel) - valid_panel_ids:
             self._by_panel.pop(stale_id, None)
             self._current.pop(stale_id, None)
+
+    def copy_panel(self, panel_id: str, new_panel_id: str) -> "PanelResultHistory":
+        """An independent `PanelResultHistory` holding a copy of `panel_id`'s
+        entries only, keyed under `new_panel_id` instead -- used by
+        `core.project.Project.extract_panel_to_workbench` to give a newly
+        extracted Workbench its own history for the extracted Panel's fresh
+        id, without disturbing `self` (the source Workbench's history) at
+        all. Order is preserved (same oldest-first order as `all()`); the
+        current-selection marker is restored explicitly via `set_current`
+        rather than assumed to be the last entry, since an older result may
+        have been explicitly selected.
+
+        Each entry is an independent `copy.deepcopy` (never the same
+        `AnalysisResult` instance `self` holds) with `source_panel_id`
+        remapped to `new_panel_id` -- the one field that must change.
+        `result_id` is deliberately left untouched: `plotting.graph.
+        clone_panel_with_shared_datasets` (the extracted Panel's own clone
+        path) shares the source panel's `Dataset` objects by identity
+        rather than duplicating them, so a fit-derived `PlotSeries` in the
+        extracted panel points at the *same* Dataset whose
+        `metadata["result_id"]` was stamped at fit time -- regenerating
+        `result_id` here would break that link. This is safe only because
+        every `result_id` lookup in the app (`AnalysisPanel._matching_series`,
+        `PanelResultHistory.set_current`/`current`) is scoped to one
+        Workbench's active panel at a time, never resolved Project-wide --
+        see `plotting.graph.clone_panel_with_shared_datasets`'s own
+        docstring for the shared-Dataset side of this invariant."""
+        copied = PanelResultHistory()
+        for result in self.all(panel_id):
+            new_result = copy.deepcopy(result)
+            new_result.source_panel_id = new_panel_id
+            copied.add(new_panel_id, new_result)
+        current = self.current(panel_id)
+        if current is not None:
+            copied.set_current(new_panel_id, current.result_id)
+        return copied
 
     def to_dict(self) -> dict:
         """Project-save representation: `{panel_id: {"history": [...],
