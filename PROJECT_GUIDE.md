@@ -7,7 +7,7 @@ project's design decisions, and follow it for all work in this repository.
 
 ## Project overview
 
-GNOVI Studio (repository: Gnovi-Plot, package name `gnovi-plot`, currently version 0.9.0 "Beta") is a cross-platform, open-source Python desktop application for scientific plotting and analysis. It combines experimental data visualization, mathematical equation graphing, and publication-quality figure creation in a single tool.
+GNOVI Studio (repository: GNOVI-Studio, package name `gnovi-plot`, currently version 0.9.0 "Beta") is a cross-platform, open-source Python desktop application for scientific plotting and analysis. It combines experimental data visualization, mathematical equation graphing, and publication-quality figure creation in a single tool.
 
 The project is past the pre-code phase: it is a working PySide6 application (`python -m gnovi_plot`) with an implemented `gui`/`data`/`plotting`/`equations`/`analysis`/`export`/`core` package structure, a 67-file pytest suite (1,270 tests), and cross-platform CI + CodeQL running on every push/PR. This file still records the agreed vision and constraints so implementation stays consistent as the codebase grows; see "Current implementation status" below for what's actually built versus still planned.
 
