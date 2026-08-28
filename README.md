@@ -20,12 +20,15 @@ implemented and covered by automated tests on Linux (Ubuntu) and Windows.
 ## Platform Support
 
 Linux is the primary development platform. Ubuntu is the reference Linux
-environment validated by continuous integration. Windows is also CI-tested on
-every push and pull request.
+environment validated by continuous integration, with full test coverage
+reporting. Windows is also CI-tested on every push and pull request.
 
-GNOVI Studio is designed to remain distribution-independent and is intended
-to work on other Linux distributions, although Ubuntu is currently the Linux
-distribution validated automatically.
+GNOVI Studio is designed to remain distribution-independent. This is now
+verified by continuous integration: Fedora is also CI-tested on every push
+and pull request, running the full test suite in a pinned Fedora container.
+Fedora validation is newer than the Ubuntu and Windows checks and is not yet
+a required check for merging, but it exercises the same test suite as the
+reference platform.
 
 ## Development setup (Linux)
 
