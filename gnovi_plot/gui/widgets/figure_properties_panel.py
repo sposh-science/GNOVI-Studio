@@ -101,12 +101,6 @@ _ASPECT_OPTIONS = [("Auto", "auto"), ("Equal", "equal")]
 # `reset_to_defaults`.
 _FIGURE_GRID_FIELDS = ["grid_linestyle", "grid_linewidth", "grid_alpha", "grid_color"]
 
-# mplot3d's own `Axes3D.view_init()` defaults -- see `Panel3D`'s own
-# docstring. "Reset View" restores exactly these, read off a fresh
-# `Panel3D()` rather than hardcoded here, so it can never drift from the
-# dataclass's own defaults.
-_PANEL3D_DEFAULTS = Panel3D()
-
 
 class FigurePropertiesPanel(QWidget):
     """Title/axis/tick/spine/grid/legend controls for a GnoviFigure's
@@ -130,13 +124,16 @@ class FigurePropertiesPanel(QWidget):
     """
 
     changed = Signal()
-    # "Set Current View" needs the LIVE rendered Axes3D's current elev/azim
-    # -- something only `gui.widgets.plot_canvas.PlotCanvas` holds, not this
-    # panel (which only ever reads/writes the declarative `Panel3D` model) --
-    # so committing it is delegated to the owner (`MainWindow`) via this
-    # signal, exactly like `set_figure`/`refresh` keep this panel itself
-    # model-only. See `MainWindow._on_set_current_3d_view_requested`.
+    # Both 3D "view" buttons are delegated to the owner (`MainWindow`)
+    # rather than handled here: this panel only ever reads/writes the
+    # declarative `Panel3D` model, but committing a camera also needs the
+    # LIVE rendered `Axes3D` (its current elev/azim for "Set Current
+    # View", and its `render_panel_3d` re-apply guard for both) --
+    # something only `gui.widgets.plot_canvas.PlotCanvas` holds. See
+    # `MainWindow._on_set_current_3d_view_requested` /
+    # `_on_reset_3d_view_requested`.
     set_current_view_requested = Signal()
+    reset_view_requested = Signal()
 
     def __init__(
         self,
@@ -612,7 +609,7 @@ class FigurePropertiesPanel(QWidget):
         self.d3_elevation_spin.valueChanged.connect(self._apply_3d_elevation)
         self.d3_azimuth_spin.valueChanged.connect(self._apply_3d_azimuth)
         self.d3_set_current_view_button.clicked.connect(self.set_current_view_requested)
-        self.d3_reset_view_button.clicked.connect(self._on_reset_3d_view)
+        self.d3_reset_view_button.clicked.connect(self.reset_view_requested)
 
         return page
 
@@ -770,6 +767,28 @@ class FigurePropertiesPanel(QWidget):
             self.y_min_spin.setValue(ylim[0])
             self.y_max_spin.setValue(ylim[1])
         self._updating = False
+
+    def sync_3d_camera_display(self, elevation: float, azimuth: float) -> None:
+        """Push the LIVE `Axes3D`'s `elevation`/`azimuth` into the
+        Axes-page Elevation/Azimuth spin boxes with their signals BLOCKED.
+        Called by `MainWindow._on_canvas_release` after a completed mouse
+        rotation so the readout shows what's on screen -- a display-only
+        sync: the rotation is transient live-view state and this must NOT
+        write it into `Panel3D` (only "Set Current View" does that).
+
+        `blockSignals` rather than the usual `_updating` flag: this runs
+        inside a Matplotlib `button_release_event` callback, and from that
+        re-entrant context a `valueChanged` emission has been observed to
+        slip past the `_updating` guard and spuriously re-fire
+        `_apply_3d_elevation`/`_apply_3d_azimuth` -- which WOULD write the
+        transient angle into the model and emit `changed`. Blocking the
+        signal makes that structurally impossible."""
+        if not isinstance(self._panel, Panel3D):
+            return
+        for spin, value in ((self.d3_elevation_spin, elevation), (self.d3_azimuth_spin, azimuth)):
+            was_blocked = spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(was_blocked)
 
     def _apply_title(self) -> None:
         if self._updating:
@@ -1344,26 +1363,26 @@ class FigurePropertiesPanel(QWidget):
         self._panel.legend_frameon = checked
         self.changed.emit()
 
-    def _apply_3d_elevation(self, value: float) -> None:
+    def _apply_3d_elevation(self, _value: float) -> None:
         if self._updating:
             return
-        self._panel.elevation = value
-        self.changed.emit()
+        self._commit_3d_camera_from_spins()
 
-    def _apply_3d_azimuth(self, value: float) -> None:
+    def _apply_3d_azimuth(self, _value: float) -> None:
         if self._updating:
             return
-        self._panel.azimuth = value
-        self.changed.emit()
+        self._commit_3d_camera_from_spins()
 
-    def _on_reset_3d_view(self) -> None:
-        """Restore the camera to `Panel3D()`'s own defaults -- a normal,
-        immediate, undoable model edit (via `changed`), same convention as
-        `_on_reset_limits`. Unlike "Set Current View" this needs no live
-        canvas access, so it's fully self-contained here."""
-        if self._updating:
-            return
-        self._panel.elevation = _PANEL3D_DEFAULTS.elevation
-        self._panel.azimuth = _PANEL3D_DEFAULTS.azimuth
-        self._sync_from_figure()
+    def _commit_3d_camera_from_spins(self) -> None:
+        """Commit the WHOLE camera -- both angles, straight from the two
+        spin boxes -- whenever EITHER is edited. After a transient mouse
+        rotation both boxes track the live Axes3D (see
+        `sync_3d_camera_display`), so this keeps "what the boxes show" ==
+        "what renders": nudging Elevation to fine-tune a view must not
+        also throw away the Azimuth the user just mouse-rotated to. This
+        is an explicit, undoable, dirty-marking commit (via `changed`) --
+        the same status as "Set Current View", just sourced from the
+        typed boxes."""
+        self._panel.elevation = self.d3_elevation_spin.value()
+        self._panel.azimuth = self.d3_azimuth_spin.value()
         self.changed.emit()
