@@ -1,7 +1,7 @@
 """`Plot3DPanel` -- the "3D" sidebar page's own widget-level behavior
-(dataset/column selection, validation, series-list summary, signal
-emission). Creation-safety decisions (empty vs. populated 2D panel,
-append-to-existing-Panel3D) are NOT this panel's concern -- see
+(dataset/column selection, plot type, Group by, validation, series-list
+summary, signal emission). Creation-safety decisions (empty vs. populated
+2D panel, append-to-existing-Panel3D) are NOT this panel's concern -- see
 `gui.main_window.MainWindow._on_add_3d_series_requested` and
 `test_3d_scatter_gui.py` for those, since they need `GnoviFigure.
 active_panel`'s type/content, which only the owner resolves.
@@ -13,12 +13,26 @@ from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.gui.widgets.plot3d_panel import Plot3DPanel
 from gnovi_plot.plotting.figure import GnoviFigure, Panel3D
-from gnovi_plot.plotting.series3d import Series3D
+from gnovi_plot.plotting.series3d import Plot3DType, Series3D
 
 
 def _make_dataset(name="mat"):
     df = pd.DataFrame(
         {"temperature": [300.0, 350.0, 400.0], "composition": [0.1, 0.15, 0.2], "conductivity": [2.4, 2.9, 3.5]}
+    )
+    return Dataset(name=name, dataframe=df)
+
+
+def _make_diode_dataset(name="diode"):
+    """Voltage/Temperature/Current -- the milestone's own worked example:
+    two temperatures, 3 rows each, interleaved (not block-sorted) so
+    grouping tests genuinely exercise non-contiguous row selection."""
+    df = pd.DataFrame(
+        {
+            "Voltage_V": [0.1, 0.1, 0.2, 0.2, 0.3, 0.3],
+            "Temperature_C": [25.0, 35.0, 25.0, 35.0, 25.0, 35.0],
+            "Current_mA": [1.0, 1.5, 2.0, 2.5, 3.0, 3.5],
+        }
     )
     return Dataset(name=name, dataframe=df)
 
@@ -30,6 +44,12 @@ def _make_panel(*datasets, figure=None):
     figure = figure if figure is not None else GnoviFigure()
     panel = Plot3DPanel(manager, figure)
     return panel, manager, figure
+
+
+def _fill_xyz(panel, x, y, z):
+    panel.x_combo.setCurrentText(x)
+    panel.y_combo.setCurrentText(y)
+    panel.z_combo.setCurrentText(z)
 
 
 # --- Dataset/column selection --------------------------------------------------------
@@ -55,6 +75,17 @@ def test_selecting_a_dataset_populates_xyz_column_combos(qapp):
     panel.close()
 
 
+def test_group_by_combo_lists_none_and_every_column(qapp):
+    dataset = _make_dataset()
+    panel, _manager, _figure = _make_panel(dataset)
+
+    labels = [panel.group_by_combo.itemText(i) for i in range(panel.group_by_combo.count())]
+
+    assert labels[0] == "None"
+    assert set(labels[1:]) == {"temperature", "composition", "conductivity"}
+    panel.close()
+
+
 def test_set_manager_refreshes_the_dataset_combo(qapp):
     panel, _manager, _figure = _make_panel()
     assert panel.dataset_combo.count() == 0
@@ -67,27 +98,40 @@ def test_set_manager_refreshes_the_dataset_combo(qapp):
     panel.close()
 
 
-# --- Add 3D Series: validation, emitted Series3D --------------------------------------
+# --- Plot type combo ------------------------------------------------------------------
 
 
-def test_add_clicked_with_valid_selection_emits_a_series3d(qapp):
+def test_plot_type_combo_offers_scatter_line_and_line_markers(qapp):
+    panel, _manager, _figure = _make_panel(_make_dataset())
+
+    options = [panel.plot_type_combo.itemText(i) for i in range(panel.plot_type_combo.count())]
+
+    assert options == ["Scatter", "Line", "Line + Markers"]
+    panel.close()
+
+
+# --- Add 3D Series: validation, emitted Series3D list ---------------------------------
+
+
+def test_add_clicked_with_valid_selection_emits_one_series3d_when_ungrouped(qapp):
     dataset = _make_dataset()
     panel, _manager, _figure = _make_panel(dataset)
-    panel.x_combo.setCurrentText("temperature")
-    panel.y_combo.setCurrentText("composition")
-    panel.z_combo.setCurrentText("conductivity")
+    _fill_xyz(panel, "temperature", "composition", "conductivity")
     emitted = []
     panel.add_3d_series_requested.connect(emitted.append)
 
     panel.add_button.click()
 
     assert len(emitted) == 1
-    series = emitted[0]
+    series_list = emitted[0]
+    assert len(series_list) == 1
+    series = series_list[0]
     assert isinstance(series, Series3D)
     assert series.dataset is dataset
     assert series.x_column == "temperature"
     assert series.y_column == "composition"
     assert series.z_column == "conductivity"
+    assert series.row_indices is None  # ungrouped -- whole dataset, matches pre-grouping behavior
     assert series.color is None  # assigned later by Panel3D.add_series
     panel.close()
 
@@ -107,9 +151,7 @@ def test_add_clicked_with_no_dataset_shows_an_error_and_emits_nothing(qapp):
 def test_add_clicked_with_non_numeric_columns_shows_a_controlled_error(qapp):
     bad = Dataset(name="bad", dataframe=pd.DataFrame({"a": ["p", "q"], "b": ["p", "q"], "c": ["p", "q"]}))
     panel, _manager, _figure = _make_panel(bad)
-    panel.x_combo.setCurrentText("a")
-    panel.y_combo.setCurrentText("b")
-    panel.z_combo.setCurrentText("c")
+    _fill_xyz(panel, "a", "b", "c")
     emitted = []
     panel.add_3d_series_requested.connect(emitted.append)
 
@@ -120,12 +162,166 @@ def test_add_clicked_with_non_numeric_columns_shows_a_controlled_error(qapp):
     panel.close()
 
 
-def test_plot_type_combo_offers_only_scatter_this_milestone(qapp):
-    panel, _manager, _figure = _make_panel(_make_dataset())
+def test_add_clicked_default_plot_type_is_scatter_with_a_real_marker(qapp):
+    dataset = _make_dataset()
+    panel, _manager, _figure = _make_panel(dataset)
+    _fill_xyz(panel, "temperature", "composition", "conductivity")
+    emitted = []
+    panel.add_3d_series_requested.connect(emitted.append)
 
-    options = [panel.plot_type_combo.itemText(i) for i in range(panel.plot_type_combo.count())]
+    panel.add_button.click()
 
-    assert options == ["Scatter"]
+    series = emitted[0][0]
+    assert series.plot_type == Plot3DType.SCATTER
+    assert series.marker == "o"
+    panel.close()
+
+
+def test_add_clicked_line_plot_type_has_no_marker(qapp):
+    dataset = _make_dataset()
+    panel, _manager, _figure = _make_panel(dataset)
+    _fill_xyz(panel, "temperature", "composition", "conductivity")
+    panel.plot_type_combo.setCurrentIndex(panel.plot_type_combo.findData(Plot3DType.LINE))
+    emitted = []
+    panel.add_3d_series_requested.connect(emitted.append)
+
+    panel.add_button.click()
+
+    series = emitted[0][0]
+    assert series.plot_type == Plot3DType.LINE
+    assert series.marker == ""
+    panel.close()
+
+
+def test_add_clicked_line_marker_plot_type_has_a_real_marker(qapp):
+    dataset = _make_dataset()
+    panel, _manager, _figure = _make_panel(dataset)
+    _fill_xyz(panel, "temperature", "composition", "conductivity")
+    panel.plot_type_combo.setCurrentIndex(panel.plot_type_combo.findData(Plot3DType.LINE_MARKER))
+    emitted = []
+    panel.add_3d_series_requested.connect(emitted.append)
+
+    panel.add_button.click()
+
+    series = emitted[0][0]
+    assert series.plot_type == Plot3DType.LINE_MARKER
+    assert series.marker == "o"
+    panel.close()
+
+
+def test_add_clicked_plot_type_is_a_genuine_enum_member_not_just_equal_to_one(qapp):
+    """Regression test: `QComboBox.currentData()` round-trips a
+    str-subclassed Enum through QVariant and can hand back a plain `str`
+    that merely `==`-compares equal to the right `Plot3DType` member (so a
+    test using only `==` would pass even if this were broken) -- the real
+    failure only shows up in `Series3D.to_dict()`, which calls `.value` and
+    crashes on a plain string. Caught originally via manual GUI validation,
+    not by the (insufficiently strict) tests above."""
+    dataset = _make_dataset()
+    panel, _manager, _figure = _make_panel(dataset)
+    _fill_xyz(panel, "temperature", "composition", "conductivity")
+    panel.plot_type_combo.setCurrentIndex(panel.plot_type_combo.findData(Plot3DType.LINE_MARKER))
+    emitted = []
+    panel.add_3d_series_requested.connect(emitted.append)
+
+    panel.add_button.click()
+
+    series = emitted[0][0]
+    assert isinstance(series.plot_type, Plot3DType)
+    series.to_dict()  # must not raise AttributeError
+    panel.close()
+
+
+# --- Group by: emits multiple Series3D, correct membership/order ----------------------
+
+
+def test_group_by_creates_one_series3d_per_distinct_group_value(qapp):
+    dataset = _make_diode_dataset()
+    panel, _manager, _figure = _make_panel(dataset)
+    _fill_xyz(panel, "Voltage_V", "Temperature_C", "Current_mA")
+    panel.group_by_combo.setCurrentIndex(panel.group_by_combo.findData("Temperature_C"))
+    emitted = []
+    panel.add_3d_series_requested.connect(emitted.append)
+
+    panel.add_button.click()
+
+    series_list = emitted[0]
+    assert len(series_list) == 2
+    assert {s.label for s in series_list} == {"25", "35"}
+    panel.close()
+
+
+def test_group_by_each_series_references_only_its_own_rows_in_source_order(qapp):
+    dataset = _make_diode_dataset()
+    panel, _manager, _figure = _make_panel(dataset)
+    _fill_xyz(panel, "Voltage_V", "Temperature_C", "Current_mA")
+    panel.group_by_combo.setCurrentIndex(panel.group_by_combo.findData("Temperature_C"))
+    emitted = []
+    panel.add_3d_series_requested.connect(emitted.append)
+
+    panel.add_button.click()
+
+    by_label = {s.label: s for s in emitted[0]}
+    # Rows 0,2,4 are 25C; rows 1,3,5 are 35C -- interleaved in the source.
+    assert by_label["25"].row_indices == (0, 2, 4)
+    assert by_label["35"].row_indices == (1, 3, 5)
+    panel.close()
+
+
+def test_group_by_shares_the_same_dataset_identity_across_the_family(qapp):
+    dataset = _make_diode_dataset()
+    panel, _manager, _figure = _make_panel(dataset)
+    _fill_xyz(panel, "Voltage_V", "Temperature_C", "Current_mA")
+    panel.group_by_combo.setCurrentIndex(panel.group_by_combo.findData("Temperature_C"))
+    emitted = []
+    panel.add_3d_series_requested.connect(emitted.append)
+
+    panel.add_button.click()
+
+    series_list = emitted[0]
+    assert all(s.dataset is dataset for s in series_list)
+    panel.close()
+
+
+def test_group_by_none_ignores_group_by_combo_selection(qapp):
+    dataset = _make_diode_dataset()
+    panel, _manager, _figure = _make_panel(dataset)
+    _fill_xyz(panel, "Voltage_V", "Temperature_C", "Current_mA")
+    # group_by_combo left at its default "None" -- explicit for clarity.
+    assert panel.group_by_combo.currentText() == "None"
+    emitted = []
+    panel.add_3d_series_requested.connect(emitted.append)
+
+    panel.add_button.click()
+
+    series_list = emitted[0]
+    assert len(series_list) == 1
+    assert series_list[0].row_indices is None
+    panel.close()
+
+
+def test_group_by_a_string_categorical_column_works(qapp):
+    dataset = Dataset(
+        name="cat",
+        dataframe=pd.DataFrame(
+            {
+                "x": [1.0, 2.0, 3.0, 4.0],
+                "y": [1.0, 2.0, 3.0, 4.0],
+                "z": [1.0, 2.0, 3.0, 4.0],
+                "material": ["Si", "Ge", "Si", "Ge"],
+            }
+        ),
+    )
+    panel, _manager, _figure = _make_panel(dataset)
+    _fill_xyz(panel, "x", "y", "z")
+    panel.group_by_combo.setCurrentIndex(panel.group_by_combo.findData("material"))
+    emitted = []
+    panel.add_3d_series_requested.connect(emitted.append)
+
+    panel.add_button.click()
+
+    series_list = emitted[0]
+    assert {s.label for s in series_list} == {"Si", "Ge"}
     panel.close()
 
 
@@ -170,6 +366,26 @@ def test_refresh_lists_the_active_panel3ds_series_and_enables_clear(qapp):
     assert panel.series_list.count() == 1
     assert panel.series_list.item(0).text() == "mat"
     assert panel.clear_button.isEnabled() is True
+    panel.close()
+
+
+def test_refresh_lists_multiple_grouped_families_together(qapp):
+    """Multiple 3D Series list entries when several grouped families
+    coexist in one Panel3D -- see this milestone's own "multiple grouped
+    families can coexist" requirement."""
+    dataset = _make_diode_dataset()
+    panel3d = Panel3D()
+    panel3d.add_series(
+        Series3D(dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", label="25", row_indices=(0, 2, 4))
+    )
+    panel3d.add_series(
+        Series3D(dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", label="35", row_indices=(1, 3, 5))
+    )
+    figure = GnoviFigure(panels=[panel3d])
+    panel, _manager, _figure = _make_panel(dataset, figure=figure)
+
+    assert panel.series_list.count() == 2
+    assert {panel.series_list.item(i).text() for i in range(2)} == {"25", "35"}
     panel.close()
 
 

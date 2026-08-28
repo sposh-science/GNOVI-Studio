@@ -305,3 +305,46 @@ def test_switching_from_2d_to_3d_panel_swaps_the_stack_page_on_refresh(qapp):
     panel.refresh()
 
     assert panel._stack.currentWidget() is panel._page_3d
+
+
+# --- 3D legend controls ---------------------------------------------------------------
+
+
+def test_3d_legend_check_defaults_to_the_panels_current_state(qapp):
+    figure = _make_3d_figure()
+    figure.active_panel.legend_visible = False
+    panel = FigurePropertiesPanel(figure)
+    panel.refresh()
+
+    assert panel.d3_legend_check.isChecked() is False
+
+
+def test_toggling_3d_legend_check_updates_the_panel(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    panel.d3_legend_check.setChecked(False)
+
+    assert figure.active_panel.legend_visible is False
+
+
+def test_3d_legend_location_combo_updates_the_panel(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    panel.d3_legend_loc_combo.setCurrentText("upper right")
+
+    assert figure.active_panel.legend_loc == "upper right"
+
+
+def test_3d_legend_location_combo_excludes_outside_placements(qapp):
+    """The 3D legend renderer doesn't implement `bbox_to_anchor` placement
+    (see `matplotlib_backend.render_panel_3d`'s own legend block) -- "outside
+    right"/"outside bottom" must never be offered as a 3D legend location."""
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    items = [panel.d3_legend_loc_combo.itemText(i) for i in range(panel.d3_legend_loc_combo.count())]
+
+    assert "outside right" not in items
+    assert "outside bottom" not in items

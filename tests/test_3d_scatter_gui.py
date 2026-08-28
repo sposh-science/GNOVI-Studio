@@ -19,6 +19,7 @@ from gnovi_plot.gui.dialogs.export_figure_dialog import ExportFigureDialog
 from gnovi_plot.gui.main_window import MainWindow
 from gnovi_plot.plotting.figure import Panel, Panel3D
 from gnovi_plot.plotting.series import PlotSeries
+from gnovi_plot.plotting.series3d import Plot3DType
 
 
 def _make_dataset(name="mat"):
@@ -88,6 +89,21 @@ def _fill_3d_form(window, dataset, **overrides):
     plot3d.x_combo.setCurrentText(overrides.get("x_column", "temperature"))
     plot3d.y_combo.setCurrentText(overrides.get("y_column", "composition"))
     plot3d.z_combo.setCurrentText(overrides.get("z_column", "conductivity"))
+    if "plot_type" in overrides:
+        plot3d.plot_type_combo.setCurrentIndex(plot3d.plot_type_combo.findData(overrides["plot_type"]))
+    if "group_by" in overrides:
+        plot3d.group_by_combo.setCurrentIndex(plot3d.group_by_combo.findData(overrides["group_by"]))
+
+
+def _make_diode_dataset(name="diode"):
+    df = pd.DataFrame(
+        {
+            "Voltage_V": [0.1, 0.1, 0.2, 0.2, 0.3, 0.3],
+            "Temperature_C": [25.0, 35.0, 25.0, 35.0, 25.0, 35.0],
+            "Current_mA": [1.0, 1.5, 2.0, 2.5, 3.0, 3.5],
+        }
+    )
+    return Dataset(name=name, dataframe=df)
 
 
 def _make_3d_panel_at(window, dataset, index, monkeypatch, **overrides):
@@ -548,4 +564,274 @@ def test_add_3d_scatter_menu_action_opens_the_3d_sidebar_page(qapp, monkeypatch)
     window._on_add_3d_scatter_requested()
 
     assert window.tool_drawer.active_key == "3d"
+    window.close()
+
+
+# --- Group by: creation, undo, dirty state, adaptive editors ------------------------
+
+
+def _make_grouped_panel_at(window, dataset, index, monkeypatch, group_by="Temperature_C", **overrides):
+    window.toolbar_panel_combo.setCurrentIndex(index)
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+    _fill_3d_form(
+        window, dataset,
+        x_column=overrides.get("x_column", "Voltage_V"),
+        y_column=overrides.get("y_column", "Temperature_C"),
+        z_column=overrides.get("z_column", "Current_mA"),
+        group_by=group_by,
+        **({"plot_type": overrides["plot_type"]} if "plot_type" in overrides else {}),
+    )
+    window.plot3d_panel.add_button.click()
+    return window.figure_model.panels[index]
+
+
+def test_group_by_populates_the_3d_series_list_with_one_entry_per_group(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+
+    assert isinstance(panel, Panel3D)
+    assert len(panel.series) == 2
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.plot3d_panel.refresh()
+    assert window.plot3d_panel.series_list.count() == 2
+    window.close()
+
+
+def test_selecting_each_generated_series_shows_its_own_properties(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.series_panel.refresh()
+
+    by_label = {s.label: i for i, s in enumerate(panel.series)}
+    window.series_panel.series3d_list.setCurrentRow(by_label["25"])
+    assert window.series_panel.d3_label_edit.text() == "25"
+    window.series_panel.series3d_list.setCurrentRow(by_label["35"])
+    assert window.series_panel.d3_label_edit.text() == "35"
+    window.close()
+
+
+def test_editing_color_affects_only_the_selected_series(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.series_panel.refresh()
+
+    series_25 = next(s for s in panel.series if s.label == "25")
+    series_35 = next(s for s in panel.series if s.label == "35")
+    original_35_color = series_35.color
+
+    window.series_panel.series3d_list.setCurrentRow(panel.series.index(series_25))
+    series_25.color = "#00ff00"  # simulate the color-picker's own assignment
+    series_25.color_is_manual = True
+
+    assert series_25.color == "#00ff00"
+    assert series_35.color == original_35_color
+    window.close()
+
+
+def test_toggling_visibility_affects_only_the_selected_series(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.series_panel.refresh()
+
+    series_25 = next(s for s in panel.series if s.label == "25")
+    series_35 = next(s for s in panel.series if s.label == "35")
+    window.series_panel.series3d_list.setCurrentRow(panel.series.index(series_25))
+    window.series_panel.d3_visible_check.setChecked(False)
+
+    assert series_25.visible is False
+    assert series_35.visible is True
+    window.close()
+
+
+def test_editing_a_label_updates_the_series_list_item_text(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.series_panel.refresh()
+
+    series_25 = next(s for s in panel.series if s.label == "25")
+    window.series_panel.series3d_list.setCurrentRow(panel.series.index(series_25))
+    window.series_panel.d3_label_edit.setText("25 °C")
+    window.series_panel._apply_3d_label()
+
+    assert series_25.label == "25 °C"
+    assert window.series_panel.series3d_list.currentItem().text() == "25 °C"
+    window.close()
+
+
+def test_multiple_grouped_families_can_coexist_in_one_panel3d(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)  # 2 series (Temperature_C)
+    # A second "Add to 3D Plot" with a DIFFERENT grouping, on the now-Panel3D active panel -- appends.
+    _fill_3d_form(window, diode, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", group_by="__none__")
+    window.plot3d_panel.add_button.click()
+
+    assert len(panel.series) == 3  # 2 grouped + 1 ungrouped, all coexisting
+    window.close()
+
+
+def test_undo_removes_the_whole_grouped_add_operation_in_one_step(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    undo_count_before = len(window._undo_manager._undo)
+
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    assert len(panel.series) == 2
+    assert len(window._undo_manager._undo) == undo_count_before + 1  # ONE checkpoint, not 2
+
+    window._on_undo()
+
+    restored_panel = window.figure_model.panels[1]
+    # Undo reverts the whole Add in one step: the panel goes back to being
+    # a plain 2D `Panel` again -- never a `Panel3D` left with only SOME of
+    # its 2 groups still present, which a bug that pushed one undo
+    # checkpoint per generated series (instead of one for the whole Add)
+    # would produce instead.
+    assert isinstance(restored_panel, Panel)
+    window.close()
+
+
+def test_redo_restores_the_whole_grouped_family(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+
+    _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window._on_undo()
+    window._on_redo()
+
+    restored_panel = window.figure_model.panels[1]
+    assert isinstance(restored_panel, Panel3D)
+    assert len(restored_panel.series) == 2
+    window.close()
+
+
+def test_toggling_legend_marks_the_project_dirty(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.properties_panel.refresh()
+    window._set_dirty(False)
+
+    window.properties_panel.d3_legend_check.setChecked(False)
+
+    assert window._dirty is True
+    window.close()
+
+
+def test_plot_type_line_marker_via_sidebar_creates_a_line_marker_series(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch, plot_type=Plot3DType.LINE_MARKER)
+
+    assert all(s.plot_type == Plot3DType.LINE_MARKER for s in panel.series)
+    window.close()
+
+
+# --- Grouped family: Focus / Extract / Export regression ----------------------------
+
+
+def test_focus_preserves_a_grouped_family(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+
+    window._focus_panel(panel)
+
+    assert window._current_focused_panel() is panel
+    assert len(panel.series) == 2
+    window.close()
+
+
+def test_extract_preserves_the_grouped_family_structure(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+
+    window._on_extract_panel_requested()
+
+    extracted = window._project.workbenches[-1].figure.panels[0]
+    assert isinstance(extracted, Panel3D)
+    assert len(extracted.series) == 2
+    assert {s.label for s in extracted.series} == {s.label for s in panel.series}
+    assert all(s.dataset is diode for s in extracted.series)
+
+
+def test_export_panel_renders_every_visible_grouped_series_with_a_legend(qapp, monkeypatch, tmp_path):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+
+    dialog = ExportFigureDialog(
+        window.figure_model, window.plot_canvas, window, panel=panel, dataset_manager=window.dataset_manager
+    )
+    dialog.format_combo.setCurrentText("SVG")
+    out_path = tmp_path / "grouped_panel.svg"
+    dialog.path_edit.setText(str(out_path))
+    dialog._on_accept()
+
+    content = out_path.read_text(encoding="utf-8")
+    assert "25" in content
+    assert "35" in content
+    window.close()
+
+
+def test_full_figure_export_preserves_a_grouped_3d_family_in_a_mixed_layout(qapp, monkeypatch, tmp_path):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    _make_grouped_panel_at(window, diode, 1, monkeypatch)
+
+    dialog = ExportFigureDialog(window.figure_model, window.plot_canvas, window)
+    dialog.format_combo.setCurrentText("SVG")
+    out_path = tmp_path / "mixed_grouped.svg"
+    dialog.path_edit.setText(str(out_path))
+    dialog._on_accept()
+
+    content = out_path.read_text(encoding="utf-8")
+    assert "Panel 1" in content  # 2D panel survives alongside the grouped 3D family
+    assert "Panel 3" in content
+    assert "25" in content and "35" in content
     window.close()

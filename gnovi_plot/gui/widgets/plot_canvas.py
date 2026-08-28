@@ -245,14 +245,18 @@ class PlotCanvas(FigureCanvasQTAgg):
     def _fit_legends(
         self, figure: GnoviFigure, dark_mode: bool, focused_panel: Panel | Panel3D | None
     ) -> None:
-        """`fit_panel_legends_to_axes` only knows about `Panel`'s legend
-        fields (`legend_visible`/`legend_loc`) -- `Panel3D` has neither (3D
-        scatter renders without a legend in this milestone, see `Panel3D`'s
-        own docstring), so every `Panel3D`/its Axes must be excluded from
-        the `(axes_list, panels)` pairs handed to it, never just left for
-        it to silently skip (it would `AttributeError` on `panel.
-        legend_visible`, not skip cleanly, since that call assumes every
-        panel it's given is 2D)."""
+        """`fit_panel_legends_to_axes` (via `_legend_kwargs`) reads `Panel`-
+        only legend fields `Panel3D` still doesn't have (`legend_ncol`/
+        `legend_frameon`/`legend_fontsize`/`legend_title` -- `Panel3D`'s own
+        legend support is deliberately smaller, see that class's own
+        docstring), so every `Panel3D`/its Axes must be excluded from the
+        `(axes_list, panels)` pairs handed to it, never just left for it to
+        silently skip (it would `AttributeError` on `panel.legend_fontsize`,
+        not skip cleanly, since that call assumes every panel it's given is
+        2D). `Panel3D`'s own legend always renders at its full configured
+        size -- no preview-only shrink-to-fit pass, unlike 2D (see
+        `render_panel_3d`'s own legend block; "do not overbuild" for this
+        milestone)."""
         if focused_panel is not None:
             if not isinstance(focused_panel, Panel3D):
                 fit_panel_legends_to_axes(self.axes_list, figure, dark_mode=dark_mode, panels=[focused_panel])

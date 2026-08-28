@@ -1268,15 +1268,21 @@ class MainWindow(QMainWindow):
         independently-maintained creation path)."""
         self.tool_drawer.show_page("3d")
 
-    def _on_add_3d_series_requested(self, series: Series3D) -> None:
-        """`Plot3DPanel.add_3d_series_requested` -- `series` is already
+    def _on_add_3d_series_requested(self, series_list: list[Series3D]) -> None:
+        """`Plot3DPanel.add_3d_series_requested` -- `series_list` is already
         validated (numeric X/Y/Z, see `Plot3DPanel._on_add_clicked`) but not
-        yet attached to any Panel; this decides WHERE it goes, based on the
-        active panel's current type/content:
+        yet attached to any Panel; this decides WHERE it/they go, based on
+        the active panel's current type/content. A "Group by" family (e.g.
+        7 series, one per distinct temperature) arrives here as one list
+        and is added in a single pass with exactly one
+        `_on_figure_content_changed()` call at the end -- ONE undo
+        checkpoint for the whole Add operation, never one per generated
+        series (see this milestone's own "Undo/Redo" notes).
 
-        - Active panel already a `Panel3D`: append -- multiple `Series3D`
-          per panel is a plain list already (`Panel3D.add_series`), so nothing
-          special is needed beyond not clobbering what's there.
+        - Active panel already a `Panel3D`: append every series -- multiple
+          `Series3D`/curve families coexisting is a plain list already
+          (`Panel3D.add_series`), so nothing special is needed beyond not
+          clobbering what's there.
         - Active panel an EMPTY `Panel` (no plotted series): convert in
           place at the same grid position -- the natural "this panel had
           nothing in it yet" case, no confirmation needed.
@@ -1290,7 +1296,8 @@ class MainWindow(QMainWindow):
         dark_mode = self.figure_model.plot_theme == PlotTheme.DARK
 
         if isinstance(active_panel, Panel3D):
-            active_panel.add_series(series, dark_mode=dark_mode)
+            for series in series_list:
+                active_panel.add_series(series, dark_mode=dark_mode)
         else:
             if active_panel.series:
                 reply = QMessageBox.question(
@@ -1305,7 +1312,8 @@ class MainWindow(QMainWindow):
                 if reply != QMessageBox.Yes:
                     return
             new_panel = Panel3D()
-            new_panel.add_series(series, dark_mode=dark_mode)
+            for series in series_list:
+                new_panel.add_series(series, dark_mode=dark_mode)
             self.figure_model.panels[self.figure_model.active_panel_index] = new_panel
             self.figure_model._renumber_panel_labels()
 

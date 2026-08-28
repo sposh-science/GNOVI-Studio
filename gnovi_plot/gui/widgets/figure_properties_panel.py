@@ -55,6 +55,25 @@ _LEGEND_LOCATIONS = [
     "outside bottom",
 ]
 
+# A trimmed copy of `_LEGEND_LOCATIONS` for `Panel3D`'s own minimal legend
+# (see that class's own docstring) -- excludes "outside right"/"outside
+# bottom", which need the `bbox_to_anchor` placement logic `_legend_kwargs`
+# implements for 2D; the 3D legend renderer deliberately doesn't reproduce
+# that (see `matplotlib_backend.render_panel_3d`'s own legend block).
+_LEGEND_LOCATIONS_3D = [
+    "best",
+    "upper right",
+    "upper left",
+    "lower left",
+    "lower right",
+    "right",
+    "center left",
+    "center right",
+    "lower center",
+    "upper center",
+    "center",
+]
+
 _SCALE_OPTIONS = [("Linear", "linear"), ("Log", "log")]
 _TICK_DIRECTIONS = [("Out", "out"), ("In", "in"), ("In & out", "inout")]
 _GRID_WHICH_OPTIONS = [("Major", "major"), ("Minor", "minor"), ("Both", "both")]
@@ -366,8 +385,9 @@ class FigurePropertiesPanel(QWidget):
     def _build_3d_page(self) -> QWidget:
         """`Panel3D`'s deliberately smaller field set (see that class's own
         docstring): title/X-Y-Z labels, X/Y/Z limits, a plain grid on/off,
-        and the camera (elevation/azimuth) -- no ticks/spines/legend, none
-        of which `Panel3D` has."""
+        the camera (elevation/azimuth), and a minimal legend (visible +
+        location only) -- no ticks/spines/legend ncol/frameon/title/font-
+        size override, none of which `Panel3D` has."""
         self.d3_title_edit = QLineEdit()
         self.d3_xlabel_edit = QLineEdit()
         self.d3_ylabel_edit = QLineEdit()
@@ -385,6 +405,10 @@ class FigurePropertiesPanel(QWidget):
         self.d3_reset_limits_button = QPushButton("Reset / Auto Limits")
 
         self.d3_grid_check = QCheckBox("Show grid")
+
+        self.d3_legend_check = QCheckBox("Show legend")
+        self.d3_legend_loc_combo = QComboBox()
+        self.d3_legend_loc_combo.addItems(_LEGEND_LOCATIONS_3D)
 
         self.d3_elevation_spin = QDoubleSpinBox()
         self.d3_elevation_spin.setRange(-180.0, 180.0)
@@ -432,6 +456,11 @@ class FigurePropertiesPanel(QWidget):
         grid_form = QFormLayout(grid_group)
         grid_form.addRow(self.d3_grid_check)
 
+        legend_group = QGroupBox("Legend")
+        legend_form = QFormLayout(legend_group)
+        legend_form.addRow(self.d3_legend_check)
+        legend_form.addRow("Legend location", self.d3_legend_loc_combo)
+
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -439,6 +468,7 @@ class FigurePropertiesPanel(QWidget):
         layout.addWidget(view_group)
         layout.addWidget(limits_group)
         layout.addWidget(grid_group)
+        layout.addWidget(legend_group)
         layout.addStretch(1)
 
         self.d3_title_edit.editingFinished.connect(self._apply_3d_title)
@@ -456,6 +486,8 @@ class FigurePropertiesPanel(QWidget):
         self.d3_z_max_spin.valueChanged.connect(self._apply_3d_z_limits)
         self.d3_reset_limits_button.clicked.connect(self._on_reset_3d_limits)
         self.d3_grid_check.toggled.connect(self._apply_3d_grid)
+        self.d3_legend_check.toggled.connect(self._apply_3d_legend_visible)
+        self.d3_legend_loc_combo.currentTextChanged.connect(self._apply_3d_legend_loc)
         self.d3_elevation_spin.valueChanged.connect(self._apply_3d_elevation)
         self.d3_azimuth_spin.valueChanged.connect(self._apply_3d_azimuth)
         self.d3_set_current_view_button.clicked.connect(self.set_current_view_requested)
@@ -937,6 +969,8 @@ class FigurePropertiesPanel(QWidget):
             self.d3_z_max_spin.setValue(panel.zlim[1])
 
         self.d3_grid_check.setChecked(panel.grid)
+        self.d3_legend_check.setChecked(panel.legend_visible)
+        self.d3_legend_loc_combo.setCurrentText(panel.legend_loc)
         self.d3_elevation_spin.setValue(panel.elevation)
         self.d3_azimuth_spin.setValue(panel.azimuth)
         self._updating = False
@@ -1016,6 +1050,18 @@ class FigurePropertiesPanel(QWidget):
         if self._updating:
             return
         self._panel.grid = checked
+        self.changed.emit()
+
+    def _apply_3d_legend_visible(self, checked: bool) -> None:
+        if self._updating:
+            return
+        self._panel.legend_visible = checked
+        self.changed.emit()
+
+    def _apply_3d_legend_loc(self, text: str) -> None:
+        if self._updating or not text:
+            return
+        self._panel.legend_loc = text
         self.changed.emit()
 
     def _apply_3d_elevation(self, value: float) -> None:

@@ -15,7 +15,7 @@ from gnovi_plot.core.project_io import PROJECT_FORMAT_VERSION, load_project, sav
 from gnovi_plot.core.workbench import Workbench
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D
-from gnovi_plot.plotting.series3d import Series3D
+from gnovi_plot.plotting.series3d import Plot3DType, Series3D
 
 
 def _make_dataset(name="mat", id="ds1"):
@@ -199,3 +199,125 @@ def test_no_matplotlib_objects_in_the_serialized_manifest(tmp_path):
     assert panel3d_data["kind"] == "3d"
     assert isinstance(panel3d_data["elevation"], (int, float))
     assert isinstance(panel3d_data["series"], list)
+
+
+# --- Grouped 3D curve families: plot_type/line style/width/row selection/legend ---
+
+
+def _diode_dataset():
+    df = pd.DataFrame(
+        {
+            "Voltage_V": [0.1, 0.1, 0.2, 0.2, 0.3, 0.3],
+            "Temperature_C": [25.0, 35.0, 25.0, 35.0, 25.0, 35.0],
+            "Current_mA": [1.0, 1.5, 2.0, 2.5, 3.0, 3.5],
+        }
+    )
+    return Dataset(id="diode1", name="diode", dataframe=df)
+
+
+def _grouped_project():
+    dataset = _diode_dataset()
+    project = Project.new()
+    project.dataset_manager.add(dataset)
+    wb = project.workbenches[0]
+    panel = Panel3D(title="I-V families", legend_visible=True, legend_loc="upper left")
+    panel.add_series(
+        Series3D(
+            dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA",
+            label="25", plot_type=Plot3DType.LINE_MARKER, line_style="--", line_width=2.5,
+            row_indices=(0, 2, 4), color="#ff0000", color_is_manual=True,
+        )
+    )
+    panel.add_series(
+        Series3D(
+            dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA",
+            label="35", plot_type=Plot3DType.LINE, row_indices=(1, 3, 5), visible=False,
+        )
+    )
+    wb.figure.panels = [panel]
+    wb.figure.layout = (1, 1)
+    return project, dataset, panel
+
+
+def test_save_reopen_preserves_a_grouped_curve_family(tmp_path):
+    project, dataset, panel = _grouped_project()
+    out_path = save_project(project, tmp_path / "grouped.gnovi")
+
+    reloaded = load_project(out_path)
+    reloaded_panel = reloaded.workbenches[0].figure.panels[0]
+
+    assert isinstance(reloaded_panel, Panel3D)
+    assert len(reloaded_panel.series) == 2
+    by_label = {s.label: s for s in reloaded_panel.series}
+    assert by_label["25"].row_indices == (0, 2, 4)
+    assert by_label["35"].row_indices == (1, 3, 5)
+
+
+def test_save_reopen_preserves_plot_type_line_style_and_width(tmp_path):
+    project, _dataset, _panel = _grouped_project()
+    out_path = save_project(project, tmp_path / "grouped.gnovi")
+
+    reloaded = load_project(out_path)
+    series = {s.label: s for s in reloaded.workbenches[0].figure.panels[0].series}
+
+    assert series["25"].plot_type == Plot3DType.LINE_MARKER
+    assert series["25"].line_style == "--"
+    assert series["25"].line_width == pytest.approx(2.5)
+    assert series["35"].plot_type == Plot3DType.LINE
+
+
+def test_save_reopen_preserves_manual_and_automatic_colors(tmp_path):
+    project, _dataset, panel = _grouped_project()
+    out_path = save_project(project, tmp_path / "grouped.gnovi")
+
+    reloaded = load_project(out_path)
+    series = {s.label: s for s in reloaded.workbenches[0].figure.panels[0].series}
+
+    assert series["25"].color == "#ff0000"
+    assert series["25"].color_is_manual is True
+
+
+def test_save_reopen_preserves_visibility_per_series(tmp_path):
+    project, _dataset, _panel = _grouped_project()
+    out_path = save_project(project, tmp_path / "grouped.gnovi")
+
+    reloaded = load_project(out_path)
+    series = {s.label: s for s in reloaded.workbenches[0].figure.panels[0].series}
+
+    assert series["25"].visible is True
+    assert series["35"].visible is False
+
+
+def test_save_reopen_preserves_legend_state(tmp_path):
+    project, _dataset, _panel = _grouped_project()
+    out_path = save_project(project, tmp_path / "grouped.gnovi")
+
+    reloaded = load_project(out_path)
+    panel = reloaded.workbenches[0].figure.panels[0]
+
+    assert panel.legend_visible is True
+    assert panel.legend_loc == "upper left"
+
+
+def test_save_reopen_preserves_dataset_identity_across_a_grouped_family(tmp_path):
+    project, dataset, _panel = _grouped_project()
+    out_path = save_project(project, tmp_path / "grouped.gnovi")
+
+    reloaded = load_project(out_path)
+    reloaded_dataset = reloaded.dataset_manager.get(dataset.id)
+    series = reloaded.workbenches[0].figure.panels[0].series
+
+    assert all(s.dataset is reloaded_dataset for s in series)
+
+
+def test_project_format_version_is_unchanged_for_grouped_families(tmp_path):
+    """This milestone's own decision: every new field is optional with a
+    safe default, so no PROJECT_FORMAT_VERSION bump was needed (see
+    `Series3D.to_dict`'s own docstring for the full reasoning)."""
+    project, _dataset, _panel = _grouped_project()
+    out_path = save_project(project, tmp_path / "grouped.gnovi")
+
+    with zipfile.ZipFile(out_path) as zf:
+        manifest = json.loads(zf.read("project.json"))
+
+    assert manifest["project_format_version"] == PROJECT_FORMAT_VERSION == 3

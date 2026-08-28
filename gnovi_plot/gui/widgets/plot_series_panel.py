@@ -30,7 +30,7 @@ from gnovi_plot.plotting.backends.matplotlib_backend import is_low_contrast
 from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D, theme_color_cycle
 from gnovi_plot.plotting.graph_library import GraphLibrary
 from gnovi_plot.plotting.series import PlotSeries, PlotType
-from gnovi_plot.plotting.series3d import Series3D
+from gnovi_plot.plotting.series3d import Plot3DType, Series3D
 from gnovi_plot.plotting.stacking import auto_stack_offsets, reset_offsets
 
 _LINE_STYLE_OPTIONS = [
@@ -58,6 +58,12 @@ _MARKER_OPTIONS = [
 # offer (see this milestone's own architecture inspection on that dialog's
 # retirement).
 _MARKER_OPTIONS_3D = [opt for opt in _MARKER_OPTIONS if opt[1]]
+
+_PLOT3D_TYPE_OPTIONS = [
+    ("Scatter", Plot3DType.SCATTER),
+    ("Line", Plot3DType.LINE),
+    ("Line + Markers", Plot3DType.LINE_MARKER),
+]
 
 _HIST_MODE_OPTIONS = [
     ("Frequency", "frequency"),
@@ -286,10 +292,14 @@ class PlotSeriesPanel(QWidget):
     # --- 3D page (Series3D) --------------------------------------------------
 
     def _build_3d_page(self) -> QWidget:
-        """`Series3D`'s deliberately smaller field set (see that class's own
-        docstring): label/color/marker/marker size/transparency/visible --
-        no line width/style, marker fill, histogram, z-order, or stacking,
-        none of which `Series3D` has."""
+        """`Series3D`'s field set (see that class's own docstring): label/
+        plot type/color/marker/marker size/line style/line width/
+        transparency/visible -- no marker fill, histogram, z-order, offset,
+        or stacking, none of which `Series3D` has. Marker controls are
+        shown for Scatter/Line + Markers and hidden for pure Line; line
+        style/width are shown for Line/Line + Markers and hidden for pure
+        Scatter (neither is ever meaningful there) -- see
+        `_sync_3d_plot_type_visibility`."""
         self.series3d_list = QListWidget()
         self.remove_3d_button = QPushButton("Remove Series")
         self.clear_3d_button = QPushButton("Clear All")
@@ -299,12 +309,28 @@ class PlotSeriesPanel(QWidget):
         self.d3_color_button.setFixedWidth(48)
         self.d3_visible_check = QCheckBox("Visible")
 
+        self.d3_plot_type_combo = QComboBox()
+        for text, plot_type in _PLOT3D_TYPE_OPTIONS:
+            self.d3_plot_type_combo.addItem(text, plot_type)
+
+        self.d3_marker_label = QLabel("Marker")
         self.d3_marker_combo = QComboBox()
         for text, code in _MARKER_OPTIONS_3D:
             self.d3_marker_combo.addItem(text, code)
 
+        self.d3_marker_size_label = QLabel("Marker size")
         self.d3_marker_size_spin = QDoubleSpinBox()
         self.d3_marker_size_spin.setRange(1.0, 30.0)
+
+        self.d3_line_style_label = QLabel("Line style")
+        self.d3_line_style_combo = QComboBox()
+        for text, code in _LINE_STYLE_OPTIONS:
+            self.d3_line_style_combo.addItem(text, code)
+
+        self.d3_line_width_label = QLabel("Line width")
+        self.d3_line_width_spin = QDoubleSpinBox()
+        self.d3_line_width_spin.setRange(0.5, 10.0)
+        self.d3_line_width_spin.setSingleStep(0.5)
 
         self.d3_alpha_spin = QDoubleSpinBox()
         self.d3_alpha_spin.setRange(0.05, 1.0)
@@ -321,9 +347,12 @@ class PlotSeriesPanel(QWidget):
         props_group = QGroupBox("Series Properties")
         form = QFormLayout(props_group)
         form.addRow("Label", self.d3_label_edit)
+        form.addRow("Plot type", self.d3_plot_type_combo)
         form.addRow("Color", self.d3_color_button)
-        form.addRow("Marker", self.d3_marker_combo)
-        form.addRow("Marker size", self.d3_marker_size_spin)
+        form.addRow(self.d3_marker_label, self.d3_marker_combo)
+        form.addRow(self.d3_marker_size_label, self.d3_marker_size_spin)
+        form.addRow(self.d3_line_style_label, self.d3_line_style_combo)
+        form.addRow(self.d3_line_width_label, self.d3_line_width_spin)
         form.addRow("Transparency", self.d3_alpha_spin)
         form.addRow(self.d3_visible_check)
 
@@ -341,13 +370,28 @@ class PlotSeriesPanel(QWidget):
         self.remove_3d_button.clicked.connect(self._on_3d_remove_clicked)
         self.clear_3d_button.clicked.connect(self._on_3d_clear_clicked)
         self.d3_label_edit.editingFinished.connect(self._apply_3d_label)
+        self.d3_plot_type_combo.currentIndexChanged.connect(self._apply_3d_plot_type)
         self.d3_color_button.clicked.connect(self._pick_3d_color)
         self.d3_visible_check.toggled.connect(self._apply_3d_visible)
         self.d3_marker_combo.currentIndexChanged.connect(self._apply_3d_marker)
         self.d3_marker_size_spin.valueChanged.connect(self._apply_3d_marker_size)
+        self.d3_line_style_combo.currentIndexChanged.connect(self._apply_3d_line_style)
+        self.d3_line_width_spin.valueChanged.connect(self._apply_3d_line_width)
         self.d3_alpha_spin.valueChanged.connect(self._apply_3d_alpha)
 
         return page
+
+    def _sync_3d_plot_type_visibility(self, plot_type: Plot3DType) -> None:
+        show_marker = plot_type in (Plot3DType.SCATTER, Plot3DType.LINE_MARKER)
+        show_line = plot_type in (Plot3DType.LINE, Plot3DType.LINE_MARKER)
+        self.d3_marker_label.setVisible(show_marker)
+        self.d3_marker_combo.setVisible(show_marker)
+        self.d3_marker_size_label.setVisible(show_marker)
+        self.d3_marker_size_spin.setVisible(show_marker)
+        self.d3_line_style_label.setVisible(show_line)
+        self.d3_line_style_combo.setVisible(show_line)
+        self.d3_line_width_label.setVisible(show_line)
+        self.d3_line_width_spin.setVisible(show_line)
 
     @staticmethod
     def _item_text(series: PlotSeries | Series3D) -> str:
@@ -689,10 +733,13 @@ class PlotSeriesPanel(QWidget):
     def _set_3d_editors_enabled(self, enabled: bool) -> None:
         for widget in (
             self.d3_label_edit,
+            self.d3_plot_type_combo,
             self.d3_color_button,
             self.d3_visible_check,
             self.d3_marker_combo,
             self.d3_marker_size_spin,
+            self.d3_line_style_combo,
+            self.d3_line_width_spin,
             self.d3_alpha_spin,
         ):
             widget.setEnabled(enabled)
@@ -704,10 +751,14 @@ class PlotSeriesPanel(QWidget):
             return
         self._updating = True
         self.d3_label_edit.setText(series.label)
+        self.d3_plot_type_combo.setCurrentIndex(max(self.d3_plot_type_combo.findData(series.plot_type), 0))
+        self._sync_3d_plot_type_visibility(series.plot_type)
         self._set_color_swatch(self.d3_color_button, series.color)
         self.d3_visible_check.setChecked(series.visible)
         self.d3_marker_combo.setCurrentIndex(max(self.d3_marker_combo.findData(series.marker), 0))
         self.d3_marker_size_spin.setValue(series.marker_size)
+        self.d3_line_style_combo.setCurrentIndex(max(self.d3_line_style_combo.findData(series.line_style), 0))
+        self.d3_line_width_spin.setValue(series.line_width)
         self.d3_alpha_spin.setValue(series.alpha)
         self._updating = False
 
@@ -723,6 +774,22 @@ class PlotSeriesPanel(QWidget):
             return
         series.label = self.d3_label_edit.text()
         self._refresh_current_3d_item_text()
+        self.changed.emit()
+
+    def _apply_3d_plot_type(self, _index: int) -> None:
+        series = self._current_3d_series()
+        if series is None or self._updating:
+            return
+        # `QComboBox.currentData()` round-trips a str-subclassed Enum
+        # through QVariant and hands back a plain `str` (same Qt quirk
+        # `dataset_panel._current_plot_type` documents for 2D, and
+        # `plot3d_panel.Plot3DPanel._on_add_clicked` normalizes on
+        # creation) -- normalize here too, or a plot-type EDIT (as opposed
+        # to a fresh Add) would silently downgrade `series.plot_type` to a
+        # plain string that crashes `to_dict()` on save.
+        raw_plot_type = self.d3_plot_type_combo.currentData()
+        series.plot_type = raw_plot_type if isinstance(raw_plot_type, Plot3DType) else Plot3DType(raw_plot_type)
+        self._sync_3d_plot_type_visibility(series.plot_type)
         self.changed.emit()
 
     def _pick_3d_color(self) -> None:
@@ -757,6 +824,20 @@ class PlotSeriesPanel(QWidget):
         if series is None or self._updating:
             return
         series.marker_size = value
+        self.changed.emit()
+
+    def _apply_3d_line_style(self, _index: int) -> None:
+        series = self._current_3d_series()
+        if series is None or self._updating:
+            return
+        series.line_style = self.d3_line_style_combo.currentData()
+        self.changed.emit()
+
+    def _apply_3d_line_width(self, value: float) -> None:
+        series = self._current_3d_series()
+        if series is None or self._updating:
+            return
+        series.line_width = value
         self.changed.emit()
 
     def _apply_3d_alpha(self, value: float) -> None:

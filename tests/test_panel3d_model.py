@@ -15,7 +15,7 @@ import pytest
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xyz
 from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D, panel_from_dict
-from gnovi_plot.plotting.series3d import Series3D
+from gnovi_plot.plotting.series3d import Plot3DType, Series3D
 
 
 def _make_dataset(name="mat"):
@@ -89,6 +89,157 @@ def test_series3d_xyz_columns_persist_through_to_dict_from_dict():
 def test_series3d_from_dict_returns_none_for_an_unresolvable_dataset():
     series = Series3D(dataset=_make_dataset(), x_column="temperature", y_column="composition", z_column="conductivity")
     assert Series3D.from_dict(series.to_dict(), {}) is None
+
+
+# --- 3D series: plot_type/line_style/line_width/row_indices ----------------------
+
+
+def test_series3d_plot_type_defaults_to_scatter():
+    series = Series3D(dataset=_make_dataset(), x_column="temperature", y_column="composition", z_column="conductivity")
+    assert series.plot_type == Plot3DType.SCATTER
+
+
+def test_series3d_plot_type_line_style_width_persist_through_to_dict_from_dict():
+    dataset = _make_dataset()
+    series = Series3D(
+        dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+        plot_type=Plot3DType.LINE_MARKER, line_style="--", line_width=2.5,
+    )
+    restored = Series3D.from_dict(series.to_dict(), {dataset.id: dataset})
+    assert restored.plot_type == Plot3DType.LINE_MARKER
+    assert restored.line_style == "--"
+    assert restored.line_width == 2.5
+
+
+def test_series3d_from_dict_defaults_plot_type_for_a_pre_grouping_dict():
+    """A dict saved before this milestone has no "plot_type"/"line_style"/
+    "line_width"/"row_indices" keys at all -- must still load as a plain
+    scatter, matching the milestone's own backward-compatibility decision
+    (no PROJECT_FORMAT_VERSION bump was needed)."""
+    dataset = _make_dataset()
+    legacy_dict = Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity").to_dict()
+    for key in ("plot_type", "line_style", "line_width", "row_indices"):
+        del legacy_dict[key]
+    restored = Series3D.from_dict(legacy_dict, {dataset.id: dataset})
+    assert restored.plot_type == Plot3DType.SCATTER
+    assert restored.line_style == "-"
+    assert restored.line_width == 1.5
+    assert restored.row_indices is None
+
+
+def test_series3d_row_indices_selects_the_correct_dataframe_subset():
+    dataset = _make_dataset()  # temperature: [300.0, 350.0, 400.0, 300.0]
+    series = Series3D(
+        dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+        row_indices=(0, 3),
+    )
+    assert list(series.dataframe["temperature"]) == [300.0, 300.0]
+    assert len(series.dataframe) == 2
+
+
+def test_series3d_row_indices_none_means_the_whole_dataset():
+    dataset = _make_dataset()
+    series = Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity")
+    assert series.dataframe is dataset.dataframe
+
+
+def test_series3d_row_indices_persist_through_to_dict_from_dict():
+    dataset = _make_dataset()
+    series = Series3D(
+        dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+        row_indices=(0, 2, 3),
+    )
+    restored = Series3D.from_dict(series.to_dict(), {dataset.id: dataset})
+    assert restored.row_indices == (0, 2, 3)
+
+
+def test_series3d_row_indices_out_of_bounds_raises():
+    dataset = _make_dataset()  # 4 rows
+    with pytest.raises(ValueError):
+        Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity", row_indices=(0, 99))
+
+
+def test_series3d_row_indices_empty_tuple_raises():
+    dataset = _make_dataset()
+    with pytest.raises(ValueError):
+        Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity", row_indices=())
+
+
+def test_series3d_no_dataset_duplication_shares_the_live_dataframe_object():
+    """Grouped series never copy the source data -- `.dataframe` is always
+    derived (via `.iloc`) from the SAME live `dataset.dataframe`, never a
+    stored/duplicated copy."""
+    dataset = _make_dataset()
+    series_a = Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity", row_indices=(0, 1))
+    series_b = Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity", row_indices=(2, 3))
+    assert series_a.dataset is dataset
+    assert series_b.dataset is dataset
+    assert series_a.dataset is series_b.dataset
+
+
+# --- Panel3D: invalidate_series_for_dataset with row_indices ---------------------
+
+
+def test_invalidate_series_for_dataset_marks_row_indices_series_stale_on_row_set_change():
+    dataset = _make_dataset()
+    panel = Panel3D()
+    series = Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity", row_indices=(0, 1))
+    panel.add_series(series)
+
+    newly_stale = panel.invalidate_series_for_dataset(dataset, row_set_changed=True)
+
+    assert series in newly_stale
+    assert series.stale is True
+
+
+def test_invalidate_series_for_dataset_leaves_ungrouped_series_untouched_on_row_set_change():
+    dataset = _make_dataset()
+    panel = Panel3D()
+    series = Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity")
+    panel.add_series(series)
+
+    newly_stale = panel.invalidate_series_for_dataset(dataset, row_set_changed=True)
+
+    assert newly_stale == []
+    assert series.stale is False
+
+
+def test_invalidate_series_for_dataset_ignores_row_indices_when_row_set_unchanged():
+    dataset = _make_dataset()
+    panel = Panel3D()
+    series = Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity", row_indices=(0, 1))
+    panel.add_series(series)
+
+    newly_stale = panel.invalidate_series_for_dataset(dataset, row_set_changed=False)
+
+    assert newly_stale == []
+    assert series.stale is False
+
+
+# --- Panel3D: legend fields --------------------------------------------------------
+
+
+def test_panel3d_legend_defaults():
+    panel = Panel3D()
+    assert panel.legend_visible is True
+    assert panel.legend_loc == "best"
+
+
+def test_panel3d_legend_fields_persist_through_to_dict_from_dict():
+    panel = Panel3D(legend_visible=False, legend_loc="upper right")
+    restored = Panel3D.from_dict(panel.to_dict(), {})
+    assert restored.legend_visible is False
+    assert restored.legend_loc == "upper right"
+
+
+def test_panel3d_legend_defaults_for_a_pre_legend_dict():
+    """A dict saved before this milestone has no legend keys at all."""
+    legacy_dict = Panel3D().to_dict()
+    del legacy_dict["legend_visible"]
+    del legacy_dict["legend_loc"]
+    restored = Panel3D.from_dict(legacy_dict, {})
+    assert restored.legend_visible is True
+    assert restored.legend_loc == "best"
 
 
 # --- Mixed GnoviFigure: Panel and Panel3D coexist ---------------------------------
@@ -240,3 +391,46 @@ def test_graph_library_load_graph_into_panel_restores_a_panel3d():
     assert loaded is True
     assert isinstance(target_figure.active_panel, Panel3D)
     assert target_figure.active_panel.id != panel.id  # independent copy
+
+
+def test_graph_library_preserves_a_grouped_curve_family():
+    from gnovi_plot.data.dataset_manager import DatasetManager
+    from gnovi_plot.plotting.graph_library import GraphLibrary
+
+    dataset = _make_dataset()
+    manager = DatasetManager()
+    manager.add(dataset)
+    panel = Panel3D(title="Grouped", legend_visible=True, legend_loc="lower left")
+    panel.add_series(
+        Series3D(
+            dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+            label="A", plot_type=Plot3DType.LINE, row_indices=(0, 1),
+        )
+    )
+    panel.add_series(
+        Series3D(
+            dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+            label="B", plot_type=Plot3DType.SCATTER, row_indices=(2, 3),
+        )
+    )
+    source_figure = GnoviFigure(panels=[panel])
+
+    library = GraphLibrary()
+    graph = library.save_panel_as_graph(source_figure, "Grouped Graph", manager)
+    reloaded_library = GraphLibrary.from_dict(library.to_dict(), {dataset.id: dataset})
+    reloaded_panel = reloaded_library.get(graph.id).panel
+
+    assert isinstance(reloaded_panel, Panel3D)
+    assert len(reloaded_panel.series) == 2
+    by_label = {s.label: s for s in reloaded_panel.series}
+    assert by_label["A"].row_indices == (0, 1)
+    assert by_label["A"].plot_type == Plot3DType.LINE
+    assert by_label["B"].row_indices == (2, 3)
+    assert reloaded_panel.legend_visible is True
+    assert reloaded_panel.legend_loc == "lower left"
+
+    target_figure = GnoviFigure()
+    loaded = reloaded_library.load_graph_into_panel(graph.id, target_figure, manager)
+    assert loaded is True
+    assert len(target_figure.active_panel.series) == 2
+    assert all(s.dataset is dataset for s in target_figure.active_panel.series)

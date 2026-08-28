@@ -11,7 +11,7 @@ from matplotlib.ticker import MultipleLocator
 from gnovi_plot.data.numeric import numeric_column, numeric_xy, numeric_xyz
 from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D
 from gnovi_plot.plotting.series import PlotSeries, PlotType
-from gnovi_plot.plotting.series3d import Series3D
+from gnovi_plot.plotting.series3d import Plot3DType, Series3D
 from gnovi_plot.plotting.units import panel_box_aspect
 
 # mpl_toolkits.mplot3d must be imported once for Matplotlib to register the
@@ -428,6 +428,21 @@ def render_panel_3d(ax, panel: Panel3D, figure: GnoviFigure | None = None, *, da
     # Panel's stored xlim/ylim (or "auto" if never explicitly set).
     ax.view_init(elev=panel.elevation, azim=panel.azimuth)
 
+    # Deliberately minimal (see `Panel3D`'s own docstring): `loc` + figure-
+    # level font size only, no ncol/frameon/title/outside-bbox customization
+    # -- `ax.get_legend_handles_labels()` only ever contains artists from
+    # series actually drawn above (visible, non-stale), so a hidden/stale
+    # series never gets a legend entry, the same "only what's actually
+    # rendered" semantics `render_panel`'s own legend block already has.
+    if panel.legend_visible:
+        handles, _labels = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(loc=panel.legend_loc, fontsize=figure.legend_font_size if figure else None)
+    else:
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.remove()
+
     if panel.panel_label and figure is not None and figure.panel_labels_visible:
         ax.text2D(
             0.02,
@@ -475,9 +490,9 @@ def _apply_chrome_3d(ax, dark_mode: bool) -> None:
     of a 2D Axes' single `set_facecolor`) and a third axis/label, and its
     `.spines` (present, inherited from the 2D Axes base) aren't the
     meaningful visual boundary a 3D view actually shows -- the panes are,
-    so those are what get colored/outlined here instead of spines. No
-    legend handling: 3D scatter renders without a legend in this
-    milestone (see `Panel3D`'s own docstring)."""
+    so those are what get colored/outlined here instead of spines. Legend
+    theming (frame/text colors) mirrors `_apply_chrome`'s own block
+    exactly, now that `Panel3D` supports a legend."""
     chrome = _DARK_CHROME if dark_mode else _LIGHT_CHROME
     ax.set_facecolor(chrome["axes_bg"])
     ax.title.set_color(chrome["text"])
@@ -486,6 +501,15 @@ def _apply_chrome_3d(ax, dark_mode: bool) -> None:
         axis.pane.set_facecolor(chrome["axes_bg"])
         axis.pane.set_edgecolor(chrome["spine"])
     ax.tick_params(axis="both", colors=chrome["text"])
+
+    legend = ax.get_legend()
+    if legend is not None:
+        legend.get_frame().set_facecolor(chrome["legend_bg"])
+        legend.get_frame().set_edgecolor(chrome["legend_edge"])
+        for text in legend.get_texts():
+            text.set_color(chrome["text"])
+        if legend.get_title() is not None:
+            legend.get_title().set_color(chrome["text"])
 
 
 # --- Preview-only legend fitting (screen only -- never export) -------------
@@ -697,25 +721,50 @@ def _draw_series(ax: Axes, series: PlotSeries) -> None:
 
 
 def _draw_series_3d(ax, series: Series3D) -> None:
-    """Draw one `Series3D` as a genuine Matplotlib 3D scatter
-    (`Axes3D.scatter`) -- the only 3D plot kind this milestone implements
-    (no surface/line3D/trisurf). `marker_size` is squared for the same
-    reason `_draw_series`'s 2D SCATTER case squares `PlotSeries.marker_size`
-    into `s`: `Axes.scatter`'s `s` is marker AREA (points^2), not a linear
-    size, so squaring here is what makes the same stored number mean the
-    same visual marker size in both 2D and 3D scatter.
+    """Draw one `Series3D` -- SCATTER via `Axes3D.scatter` (unconnected
+    points), LINE/LINE_MARKER via `Axes3D.plot` (connects `series.
+    dataframe`'s rows in their stored order -- `series.row_indices`, or the
+    dataset's own row order when unset, see `Series3D`'s own docstring;
+    never sorted by X, so a non-monotonic sweep renders exactly as
+    recorded, and grouped-family members drawn as separate `Series3D`
+    objects never connect across each other). No surface/trisurf -- the
+    only 3D plot kinds this milestone implements.
+
+    `marker_size` is squared for `ax.scatter`'s `s` for the same reason
+    `_draw_series`'s 2D SCATTER case squares `PlotSeries.marker_size`:
+    `Axes.scatter`'s `s` is marker AREA (points^2), not a linear size, so
+    squaring here is what makes the same stored number mean the same
+    visual marker size in both 2D and 3D scatter. `ax.plot`'s `markersize`
+    is already linear, so LINE/LINE_MARKER pass `series.marker_size`
+    through unsquared -- exactly like `_draw_series`'s own LINE/SCATTER
+    cases already do for 2D.
     """
     x, y, z = numeric_xyz(series.dataframe, series.x_column, series.y_column, series.z_column)
-    ax.scatter(
-        x,
-        y,
-        z,
-        label=series.label,
-        color=series.color,
-        marker=series.marker or "o",
-        s=series.marker_size**2,
-        alpha=series.alpha,
-    )
+    if series.plot_type == Plot3DType.SCATTER:
+        ax.scatter(
+            x,
+            y,
+            z,
+            label=series.label,
+            color=series.color,
+            marker=series.marker or "o",
+            s=series.marker_size**2,
+            alpha=series.alpha,
+        )
+    else:
+        marker = series.marker if series.plot_type == Plot3DType.LINE_MARKER else ""
+        ax.plot(
+            x,
+            y,
+            z,
+            label=series.label,
+            color=series.color,
+            linestyle=series.line_style,
+            linewidth=series.line_width,
+            marker=marker or None,
+            markersize=series.marker_size,
+            alpha=series.alpha,
+        )
 
 
 # --- Theme-aware contrast checking (manual series colors only) -------------

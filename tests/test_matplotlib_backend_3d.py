@@ -18,7 +18,7 @@ from gnovi_plot.plotting.backends.matplotlib_backend import (
 )
 from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D, PlotTheme
 from gnovi_plot.plotting.series import PlotSeries
-from gnovi_plot.plotting.series3d import Series3D
+from gnovi_plot.plotting.series3d import Plot3DType, Series3D
 
 
 def _make_dataset(name="mat"):
@@ -260,3 +260,262 @@ def test_export_theme_dark_mode_produces_a_dark_3d_background():
 
     r, g, b, _a = axes_list[0].get_facecolor()
     assert (r, g, b) != (1.0, 1.0, 1.0)
+
+
+# --- Plot types: Scatter / Line / Line + Markers -----------------------------------
+
+
+def _diode_dataset():
+    df = pd.DataFrame(
+        {
+            "Voltage_V": [0.1, 0.1, 0.2, 0.2, 0.3, 0.3],
+            "Temperature_C": [25.0, 35.0, 25.0, 35.0, 25.0, 35.0],
+            "Current_mA": [1.0, 1.5, 2.0, 2.5, 3.0, 3.5],
+        }
+    )
+    return Dataset(name="diode", dataframe=df)
+
+
+def _render_single_series(series: Series3D, panel_kwargs=None) -> "Axes3D":
+    panel = Panel3D(**(panel_kwargs or {}))
+    panel.add_series(series)
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+    return ax
+
+
+def test_scatter_plot_type_renders_points_only_no_line():
+    dataset = _make_dataset()
+    series = Series3D(
+        dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+        plot_type=Plot3DType.SCATTER,
+    )
+    ax = _render_single_series(series)
+    assert len(ax.collections) == 1  # Path3DCollection from scatter
+    assert len(ax.lines) == 0
+
+
+def test_line_plot_type_renders_a_connected_path_without_markers():
+    dataset = _make_dataset()
+    series = Series3D(
+        dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+        plot_type=Plot3DType.LINE, marker="",
+    )
+    ax = _render_single_series(series)
+    assert len(ax.lines) == 1
+    assert len(ax.collections) == 0
+    assert ax.lines[0].get_marker() in ("None", "none", None)
+
+
+def test_line_marker_plot_type_renders_both_line_and_markers():
+    dataset = _make_dataset()
+    series = Series3D(
+        dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+        plot_type=Plot3DType.LINE_MARKER, marker="o",
+    )
+    ax = _render_single_series(series)
+    assert len(ax.lines) == 1
+    assert ax.lines[0].get_marker() == "o"
+
+
+def test_line_style_is_applied():
+    dataset = _make_dataset()
+    series = Series3D(
+        dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+        plot_type=Plot3DType.LINE, line_style="--",
+    )
+    ax = _render_single_series(series)
+    assert ax.lines[0].get_linestyle() == "--"
+
+
+def test_line_width_is_applied():
+    dataset = _make_dataset()
+    series = Series3D(
+        dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+        plot_type=Plot3DType.LINE, line_width=3.5,
+    )
+    ax = _render_single_series(series)
+    assert ax.lines[0].get_linewidth() == pytest.approx(3.5)
+
+
+def test_line_marker_size_is_applied():
+    dataset = _make_dataset()
+    series = Series3D(
+        dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+        plot_type=Plot3DType.LINE_MARKER, marker="o", marker_size=12.0,
+    )
+    ax = _render_single_series(series)
+    assert ax.lines[0].get_markersize() == pytest.approx(12.0)
+
+
+def test_series_visibility_hides_it_regardless_of_plot_type():
+    dataset = _make_dataset()
+    series = Series3D(
+        dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+        plot_type=Plot3DType.LINE, visible=False,
+    )
+    ax = _render_single_series(series)
+    assert len(ax.lines) == 0
+    assert len(ax.collections) == 0
+
+
+def test_line_transparency_is_applied():
+    dataset = _make_dataset()
+    series = Series3D(
+        dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity",
+        plot_type=Plot3DType.LINE, alpha=0.3,
+    )
+    ax = _render_single_series(series)
+    assert ax.lines[0].get_alpha() == pytest.approx(0.3)
+
+
+def test_grouped_family_renders_no_cross_group_connection():
+    """Each group is a genuinely separate `Series3D`/artist -- connecting
+    across groups is structurally impossible, not just avoided by
+    convention."""
+    dataset = _diode_dataset()
+    panel = Panel3D()
+    panel.add_series(
+        Series3D(
+            dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA",
+            plot_type=Plot3DType.LINE, label="25", row_indices=(0, 2, 4),
+        )
+    )
+    panel.add_series(
+        Series3D(
+            dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA",
+            plot_type=Plot3DType.LINE, label="35", row_indices=(1, 3, 5),
+        )
+    )
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    assert len(ax.lines) == 2  # two independent line artists, never merged
+    xs_25 = ax.lines[0].get_data_3d()[0]
+    xs_35 = ax.lines[1].get_data_3d()[0]
+    assert list(xs_25) == [0.1, 0.2, 0.3]
+    assert list(xs_35) == [0.1, 0.2, 0.3]
+
+
+# --- Automatic color cycle -----------------------------------------------------------
+
+
+def test_grouped_series_receive_distinct_deterministic_theme_cycle_colors():
+    dataset = _diode_dataset()
+    panel = Panel3D()
+    s1 = Series3D(dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", row_indices=(0, 2, 4))
+    s2 = Series3D(dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", row_indices=(1, 3, 5))
+    panel.add_series(s1, dark_mode=False)
+    panel.add_series(s2, dark_mode=False)
+
+    assert s1.color != s2.color
+    assert s1.color is not None and s2.color is not None
+
+    # Deterministic: re-doing the same sequence from a fresh panel gives
+    # the exact same colors in the exact same order.
+    panel_again = Panel3D()
+    s1b = Series3D(dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", row_indices=(0, 2, 4))
+    s2b = Series3D(dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", row_indices=(1, 3, 5))
+    panel_again.add_series(s1b, dark_mode=False)
+    panel_again.add_series(s2b, dark_mode=False)
+    assert (s1.color, s2.color) == (s1b.color, s2b.color)
+
+
+def test_manual_color_override_is_never_reassigned_by_add_series():
+    dataset = _make_dataset()
+    panel = Panel3D()
+    series = Series3D(
+        dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity", color="#ff00ff",
+    )
+    panel.add_series(series)
+    assert series.color == "#ff00ff"
+
+
+# --- Legend ----------------------------------------------------------------------
+
+
+def test_legend_contains_one_entry_per_visible_grouped_series():
+    dataset = _diode_dataset()
+    panel = Panel3D(legend_visible=True)
+    panel.add_series(
+        Series3D(dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", label="25", row_indices=(0, 2, 4))
+    )
+    panel.add_series(
+        Series3D(dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", label="35", row_indices=(1, 3, 5))
+    )
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    legend = ax.get_legend()
+    assert legend is not None
+    labels = [text.get_text() for text in legend.get_texts()]
+    assert set(labels) == {"25", "35"}
+
+
+def test_legend_excludes_hidden_series():
+    dataset = _diode_dataset()
+    panel = Panel3D(legend_visible=True)
+    panel.add_series(
+        Series3D(dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", label="25", row_indices=(0, 2, 4))
+    )
+    panel.add_series(
+        Series3D(
+            dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", label="35",
+            row_indices=(1, 3, 5), visible=False,
+        )
+    )
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    legend = ax.get_legend()
+    labels = [text.get_text() for text in legend.get_texts()]
+    assert labels == ["25"]
+
+
+def test_legend_visibility_toggle_removes_the_legend():
+    dataset = _make_dataset()
+    panel = Panel3D(legend_visible=False)
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity", label="s1"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    assert ax.get_legend() is None
+
+
+def test_legend_location_is_applied():
+    dataset = _make_dataset()
+    panel = Panel3D(legend_visible=True, legend_loc="upper right")
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity", label="s1"))
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    legend = ax.get_legend()
+    assert legend is not None
+    assert legend._get_loc() == 1  # Matplotlib's internal code for "upper right"
+
+
+def test_legend_labels_match_series_labels_exactly():
+    dataset = _make_dataset()
+    panel = Panel3D(legend_visible=True)
+    panel.add_series(
+        Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity", label="Custom Label")
+    )
+    mpl_figure = Figure()
+    FigureCanvasAgg(mpl_figure)
+    ax = mpl_figure.add_subplot(1, 1, 1, projection="3d")
+    render_panel_3d(ax, panel)
+
+    legend = ax.get_legend()
+    assert [text.get_text() for text in legend.get_texts()] == ["Custom Label"]
