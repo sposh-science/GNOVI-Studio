@@ -6,6 +6,7 @@
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22066802.svg)](https://doi.org/10.5281/zenodo.22066802)
 [![Software Heritage](https://archive.softwareheritage.org/badge/directory/788767f5421078a3a97b3c9cc94a4c310c90c075/)](https://archive.softwareheritage.org/swh:1:dir:788767f5421078a3a97b3c9cc94a4c310c90c075;origin=https://doi.org/10.5281/zenodo.22066802;visit=swh:1:snp:e3fdd6a23a82d9ec656225cd5c3612e15d68e528;anchor=swh:1:rel:0938fb937d72a19cbe55c00b33e3cb9b4ec486c6;path=wavicles-GNOVI-Studio-ad7c865)
+[![OpenAIRE](https://img.shields.io/badge/Indexed%20in-OpenAIRE-blue.svg)](https://explore.openaire.eu/search/software?pid=10.5281/zenodo.22066803)
 
 **Scientific Plotting & Analysis Studio** — a cross-platform Python desktop
 application for scientific plotting, experimental data analysis, and
@@ -133,6 +134,20 @@ GNOVI Studio is built as open, reproducible scientific software:
 
 See [PROJECT_GUIDE.md](PROJECT_GUIDE.md) for the full development guide,
 including architecture, conventions, and contribution rules.
+
+## Research Software & Preservation
+
+GNOVI Studio is maintained as open research software with persistent
+identification, versioned archival, source-code preservation, and research
+discovery.
+
+- **[Zenodo](https://doi.org/10.5281/zenodo.22066802)** — provides versioned
+  archival and persistent DOI identification for GNOVI Studio releases.
+- **[Software Heritage](https://archive.softwareheritage.org/swh:1:dir:788767f5421078a3a97b3c9cc94a4c310c90c075;origin=https://doi.org/10.5281/zenodo.22066802;visit=swh:1:snp:e3fdd6a23a82d9ec656225cd5c3612e15d68e528;anchor=swh:1:rel:0938fb937d72a19cbe55c00b33e3cb9b4ec486c6;path=wavicles-GNOVI-Studio-ad7c865)**
+  — preserves the source-code history in the Software Heritage archive.
+- **[OpenAIRE](https://explore.openaire.eu/search/software?pid=10.5281/zenodo.22066803)**
+  — indexes GNOVI Studio as research software for discovery through the
+  OpenAIRE Research Graph and OpenAIRE Explore.
 
 ## Citation
 
