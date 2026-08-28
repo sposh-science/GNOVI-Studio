@@ -16,6 +16,10 @@ from gnovi_plot.gui.main_window import MainWindow
 class _FakeAction:
     def __init__(self, text):
         self.text = text
+        self.enabled = True
+
+    def setEnabled(self, value):
+        self.enabled = value
 
 
 def _fake_menu(chosen_text=None, exec_calls=None):

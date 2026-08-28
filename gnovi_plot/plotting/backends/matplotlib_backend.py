@@ -60,16 +60,30 @@ _DARK_CHROME = {
 }
 
 
-def render_figure(axes_list: Sequence[Axes], figure: GnoviFigure, *, dark_mode: bool = False) -> None:
-    """Fully redraw `axes_list` (one Matplotlib Axes per `figure.panels`
-    entry, same order) from `figure`."""
+def render_panel_with_figure_background(ax: Axes, panel: Panel, figure: GnoviFigure, *, dark_mode: bool = False) -> None:
+    """Render `panel` into `ax` (via `render_panel`) and apply `figure`'s
+    own background chrome to `ax`'s parent Matplotlib Figure -- the shared
+    per-panel body `render_figure`'s loop below uses. Also called directly
+    (never through that loop, which assumes `len(axes_list) ==
+    len(figure.panels)`) by `gui.widgets.plot_canvas.PlotCanvas.render`'s
+    Focus-mode path, where exactly one Axes renders one Panel regardless
+    of how many panels `figure` actually has -- so the single-panel
+    rendering logic (`render_panel`) and this figure-background step
+    never need a second implementation for that case.
+    """
     figure_bg = _DARK_CHROME["figure_bg"] if dark_mode else _LIGHT_CHROME["figure_bg"]
     rc = {"font.family": figure.font_family} if figure.font_family else {}
     with matplotlib.rc_context(rc):
-        for ax, panel in zip(axes_list, figure.panels):
-            render_panel(ax, panel, figure, dark_mode=dark_mode)
-            if ax.figure is not None:
-                ax.figure.set_facecolor(figure_bg)
+        render_panel(ax, panel, figure, dark_mode=dark_mode)
+        if ax.figure is not None:
+            ax.figure.set_facecolor(figure_bg)
+
+
+def render_figure(axes_list: Sequence[Axes], figure: GnoviFigure, *, dark_mode: bool = False) -> None:
+    """Fully redraw `axes_list` (one Matplotlib Axes per `figure.panels`
+    entry, same order) from `figure`."""
+    for ax, panel in zip(axes_list, figure.panels):
+        render_panel_with_figure_background(ax, panel, figure, dark_mode=dark_mode)
 
 
 def apply_figure_layout(
@@ -375,7 +389,9 @@ _LEGEND_FIT_TIGHT_SPACING = dict(
 )
 
 
-def fit_panel_legends_to_axes(axes_list: Sequence[Axes], figure: GnoviFigure, *, dark_mode: bool = False) -> None:
+def fit_panel_legends_to_axes(
+    axes_list: Sequence[Axes], figure: GnoviFigure, *, dark_mode: bool = False, panels: Sequence[Panel] | None = None
+) -> None:
     """Preview-only post-process: for each panel whose legend overflows its
     own Axes' bounding box, shrink it (tightened padding first, then font
     size down to a ~6pt floor) until it fits, or leave it at the floor if it
@@ -386,6 +402,15 @@ def fit_panel_legends_to_axes(axes_list: Sequence[Axes], figure: GnoviFigure, *,
     never held smaller than necessary. Skips "outside right"/"outside
     bottom" legends, deliberately placed outside the axes. Requires
     `axes_list` to already be attached to a live, drawable canvas.
+
+    `panels` defaults to `figure.panels` (`zip`ped against `axes_list`,
+    same order, the normal multi-panel case) -- pass it explicitly when
+    `axes_list` doesn't correspond 1:1 with `figure.panels` in that order,
+    e.g. `gui.widgets.plot_canvas.PlotCanvas.render`'s Focus-mode path,
+    where a single Axes shows one arbitrary Panel from the middle of
+    `figure.panels`. This also means Focus mode's lone panel is evaluated
+    only against its own Axes' bounding box -- never shrunk to avoid
+    neighboring panels that aren't being rendered at all.
     """
     if not axes_list:
         return
@@ -397,7 +422,7 @@ def fit_panel_legends_to_axes(axes_list: Sequence[Axes], figure: GnoviFigure, *,
     if renderer is None:
         return
 
-    for ax, panel in zip(axes_list, figure.panels):
+    for ax, panel in zip(axes_list, panels if panels is not None else figure.panels):
         if not panel.legend_visible or panel.legend_loc in _LEGEND_OUTSIDE_LOCS:
             continue
         legend = ax.get_legend()
