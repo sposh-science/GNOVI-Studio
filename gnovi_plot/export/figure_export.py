@@ -4,8 +4,8 @@ from pathlib import Path
 
 from matplotlib.figure import Figure
 
-from gnovi_plot.plotting.backends.matplotlib_backend import apply_figure_layout, render_figure
-from gnovi_plot.plotting.figure import GnoviFigure, Panel, PlotTheme
+from gnovi_plot.plotting.backends.matplotlib_backend import apply_figure_layout, build_projection_aware_axes, render_figure
+from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D, PlotTheme
 from gnovi_plot.plotting.graph import clone_panel_with_shared_datasets
 
 RASTER_FORMATS = ("png", "tiff")
@@ -105,7 +105,7 @@ def export_figure(
 
     rows, cols = figure.layout
     mpl_figure = Figure(figsize=(figure.figure_width_in, figure.figure_height_in), dpi=dpi)
-    axes_list = list(mpl_figure.subplots(rows, cols, squeeze=False).flat)
+    axes_list = build_projection_aware_axes(mpl_figure, rows, cols, figure.panels)
     render_figure(axes_list, figure, dark_mode=dark_mode)
     # Same stored margins/spacing as the on-screen preview (see
     # `gui.widgets.plot_canvas.PlotCanvas._apply_layout`) -- never
@@ -180,13 +180,21 @@ def _panel_layout_size_in(figure: GnoviFigure, panel_index: int) -> tuple[float,
     """
     rows, cols = figure.layout
     mpl_figure = Figure(figsize=(figure.figure_width_in, figure.figure_height_in))
-    axes_list = list(mpl_figure.subplots(rows, cols, squeeze=False).flat)
+    # `build_projection_aware_axes` (not a plain `subplots()` call) because
+    # `get_position()` is NOT identical for a 2D vs. 3D Axes at the same
+    # grid cell -- Matplotlib reserves extra vertical padding for an
+    # `Axes3D`'s perspective by design (confirmed experimentally while
+    # building this milestone). Measuring the REAL per-panel projection via
+    # the same helper every other Axes-grid construction in this app uses
+    # is what keeps this correct by construction rather than by an
+    # assumption about Matplotlib internals.
+    axes_list = build_projection_aware_axes(mpl_figure, rows, cols, figure.panels)
     apply_figure_layout(mpl_figure, figure)
     box = axes_list[panel_index].get_position()
     return box.width * figure.figure_width_in, box.height * figure.figure_height_in
 
 
-def build_panel_export_figure(figure: GnoviFigure, panel: Panel, dataset_manager) -> GnoviFigure:
+def build_panel_export_figure(figure: GnoviFigure, panel: Panel | Panel3D, dataset_manager) -> GnoviFigure:
     """A transient, independent 1x1 `GnoviFigure` for exporting exactly
     `panel` alone -- built fresh on every call, never inserted into any
     `Project`/`Workbench`, never given analysis history, never serialized,
@@ -255,7 +263,7 @@ def build_panel_export_figure(figure: GnoviFigure, panel: Panel, dataset_manager
 
 def export_panel(
     figure: GnoviFigure,
-    panel: Panel,
+    panel: Panel | Panel3D,
     dataset_manager,
     path,
     *,

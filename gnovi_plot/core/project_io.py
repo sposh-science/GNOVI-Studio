@@ -37,7 +37,21 @@ _logger = logging.getLogger("gnovi_plot")
 # independently-switchable `workbenches`/`active_workbench_id` -- see
 # `_migrate_v1_to_v2` for the explicit migration `load_project` runs on an
 # older file rather than rejecting it.
-PROJECT_FORMAT_VERSION = 2
+#
+# v2 -> v3: a Figure's `panels` list can now contain `Panel3D` entries
+# (polymorphic `"kind": "2d"`/`"3d"`, dispatched by `plotting.figure.
+# panel_from_dict`) alongside plain `Panel` ones. No migration function is
+# needed for THIS direction -- a v2 file has no `"kind"` key on any panel
+# at all, and `panel_from_dict` already treats that the same as `"2d"` (see
+# its own docstring), so every v2 file keeps loading into v3 code
+# unchanged. The bump exists for the OTHER direction: an older (pre-3D)
+# app has no such dispatch at all, so if it ever opened a v3 file
+# containing a genuine `"kind": "3d"` panel, it would hand that dict
+# straight to the old `Panel.from_dict`, which has no way to recognize or
+# skip it and would silently misparse it -- `_check_format_version`
+# refusing the file outright (a clear, understood error) is safer than
+# that silent misparse would be.
+PROJECT_FORMAT_VERSION = 3
 
 _MANIFEST_NAME = "project.json"
 _DATASETS_DIR = "datasets"

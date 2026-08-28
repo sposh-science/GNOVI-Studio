@@ -55,8 +55,15 @@ def _eligible_series(figure: GnoviFigure) -> list[PlotSeries]:
     """Line/scatter series in the *active panel* that are safe to fit:
     excludes histograms (no `y_column` -- there is no curve to fit) and
     stale series (a missing column or invalid `row_range` -- fitting them
-    would either crash or silently fit garbage)."""
-    return [s for s in figure.series if s.y_column is not None and not s.stale]
+    would either crash or silently fit garbage). Also excludes anything
+    that isn't a `PlotSeries` -- when the active panel is a `Panel3D`,
+    `figure.series` (== `figure.active_panel.series`) holds `Series3D`
+    items instead, which also happen to have a non-None `y_column`; fitting
+    one against only its X/Y columns while silently ignoring Z would be
+    exactly the kind of implicit 3D "analysis" this milestone explicitly
+    does not implement (see `plotting.series3d.Series3D`'s own docstring)
+    -- so those are never eligible here, not merely deprioritized."""
+    return [s for s in figure.series if isinstance(s, PlotSeries) and s.y_column is not None and not s.stale]
 
 
 class AnalysisPanel(QWidget):

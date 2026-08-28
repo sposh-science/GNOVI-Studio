@@ -39,7 +39,8 @@ from gnovi_plot.core.app_info import APP_NAME, about_text
 from gnovi_plot.core.project import Project
 from gnovi_plot.core.project_io import ProjectIOError, load_project, save_project
 from gnovi_plot.core.workbench import Workbench
-from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
+from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy, numeric_xyz
+from gnovi_plot.gui.dialogs.add_3d_scatter_dialog import Add3DScatterDialog
 from gnovi_plot.gui.dialogs.export_figure_dialog import ExportFigureDialog
 from gnovi_plot.gui.styles import PlotTheme, apply_app_theme
 from gnovi_plot.gui.undo_manager import UndoManager, snapshot_figure
@@ -59,8 +60,9 @@ from gnovi_plot.gui.widgets.plot_series_panel import PlotSeriesPanel
 from gnovi_plot.gui.widgets.tool_drawer import ToolDrawer
 from gnovi_plot.gui.widgets.workbench_header import WorkbenchHeader
 from gnovi_plot.gui.widgets.workbench_tabs import WorkbenchTabBar
-from gnovi_plot.plotting.figure import GnoviFigure, Panel
+from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D
 from gnovi_plot.plotting.series import PlotSeries
+from gnovi_plot.plotting.series3d import Series3D
 
 # Wide enough for "x = -0000.0000, y = -0000.0000" so the status-bar
 # coordinate readout never changes width as digits change while the mouse
@@ -959,6 +961,9 @@ class MainWindow(QMainWindow):
         self.active_panel_menu = self.panels_menu.addMenu("Active Panel…")
         self.active_panel_menu.aboutToShow.connect(self._rebuild_active_panel_menu)
         self.panels_menu.addSeparator()
+        self.add_3d_scatter_action = self.panels_menu.addAction("Add 3D Scatter…")
+        self.add_3d_scatter_action.triggered.connect(self._on_add_3d_scatter_requested)
+        self.panels_menu.addSeparator()
         copy_style_action = self.panels_menu.addAction("Copy Active Panel Style to All Panels")
         copy_style_action.triggered.connect(self._on_copy_style_to_all_panels)
         self.panels_menu.addSeparator()
@@ -1239,6 +1244,61 @@ class MainWindow(QMainWindow):
 
     def _on_copy_style_to_all_panels(self) -> None:
         self.figure_model.copy_active_panel_style_to_all()
+        self._on_figure_content_changed()
+
+    def _on_add_3d_scatter_requested(self) -> None:
+        """"Panels -> Add 3D Scatter…" -- the one entry point for both
+        creating a new 3D scatter Panel and editing an existing one's
+        Dataset/X/Y/Z/labels/marker (see `Add3DScatterDialog`'s own
+        docstring for why one dialog serves both). Reuses `numeric_xyz`'s
+        existing NaN/non-numeric row-alignment handling for validation up
+        front -- same pattern `_on_plot_selected_rows` already uses for 2D
+        -- so an unusable column choice gets a clear, immediate error
+        rather than failing silently or crashing at render time.
+
+        Editing an existing `Panel3D` mutates it IN PLACE (same `.id`, so
+        Focus/analysis-history association survives); creating fresh
+        replaces the active panel at its current grid position with a new
+        `Panel3D`, the same "replace panel at position" pattern Graph
+        Library's own "Load Graph into Active Panel" already uses (see
+        `plotting.graph_library.GraphLibrary.load_graph_into_panel`) --
+        never touches `figure.layout`/panel COUNT. Either way this is a
+        normal, undoable, dirty-marking model edit, exactly like any other
+        panel content change."""
+        active_panel = self.figure_model.active_panel
+        existing_panel = active_panel if isinstance(active_panel, Panel3D) else None
+        dialog = Add3DScatterDialog(self.dataset_manager, existing_panel, self)
+        if dialog.exec() != Add3DScatterDialog.Accepted:
+            return
+        try:
+            numeric_xyz(dialog.dataset.dataframe, dialog.x_column, dialog.y_column, dialog.z_column)
+        except (KeyError, InsufficientNumericDataError) as exc:
+            QMessageBox.critical(self, "Add 3D Scatter", str(exc))
+            return
+
+        dark_mode = self.figure_model.plot_theme == PlotTheme.DARK
+        new_series = Series3D(
+            dataset=dialog.dataset,
+            x_column=dialog.x_column,
+            y_column=dialog.y_column,
+            z_column=dialog.z_column,
+            marker=dialog.marker,
+            marker_size=dialog.marker_size,
+        )
+        if existing_panel is not None:
+            existing_panel.title = dialog.title
+            existing_panel.x_label = dialog.x_label
+            existing_panel.y_label = dialog.y_label
+            existing_panel.z_label = dialog.z_label
+            existing_panel.clear_series()
+            existing_panel.add_series(new_series, dark_mode=dark_mode)
+        else:
+            new_panel = Panel3D(
+                title=dialog.title, x_label=dialog.x_label, y_label=dialog.y_label, z_label=dialog.z_label
+            )
+            new_panel.add_series(new_series, dark_mode=dark_mode)
+            self.figure_model.panels[self.figure_model.active_panel_index] = new_panel
+            self.figure_model._renumber_panel_labels()
         self._on_figure_content_changed()
 
     def _on_toggle_panel_labels(self, checked: bool) -> None:
@@ -1670,6 +1730,21 @@ class MainWindow(QMainWindow):
         self._on_add_to_plot([series])
 
     def _on_add_to_plot(self, series_list):
+        # `series_list` is always ordinary 2D `PlotSeries` (from the
+        # Dataset page's Plot/"Plot Selected Rows" controls, or Analysis's
+        # own Add Fit Curve) -- both are always available regardless of
+        # which Panel is active, so this guards against adding a 2D series
+        # to a `Panel3D` active panel (which only ever holds `Series3D`,
+        # see that class's own docstring) rather than silently corrupting
+        # it with a mixed, unrenderable series list.
+        if not isinstance(self.figure_model.active_panel, Panel):
+            QMessageBox.warning(
+                self,
+                "Add to Plot",
+                "The active Panel is a 3D Scatter Panel, which can't hold 2D plot series. "
+                "Select a 2D Panel first, or use Panels → Focus/Active Panel to switch.",
+            )
+            return
         dark_mode = self.figure_model.plot_theme == PlotTheme.DARK
         last_id = None
         for series in series_list:
@@ -1698,6 +1773,8 @@ class MainWindow(QMainWindow):
 
     def _on_axis_preset_requested(self, preset: dict) -> None:
         panel = self.figure_model.active_panel
+        if not isinstance(panel, Panel):
+            return  # 2D-only quick preset; Panel3D has x_label/y_label/z_label instead (see Add3DScatterDialog)
         panel.xlabel = preset.get("xlabel", panel.xlabel)
         panel.ylabel = preset.get("ylabel", panel.ylabel)
         self.properties_panel.refresh()

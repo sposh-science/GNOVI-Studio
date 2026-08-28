@@ -387,6 +387,17 @@ class FigurePropertiesPanel(QWidget):
     def _sync_from_figure(self) -> None:
         panel = self._panel
         self.active_panel_label.refresh(self._figure)
+        # This entire page is 2D-`Panel`-specific (xlabel/xscale/box-aspect/
+        # tick settings etc. that a `Panel3D` has no equivalent of -- see
+        # `plotting.figure.Panel3D`'s own docstring). A 3D scatter Panel's
+        # properties are edited through `Add3DScatterDialog` instead (see
+        # `MainWindow._on_add_3d_scatter_requested`); disabling this whole
+        # page when a `Panel3D` is active avoids both a crash reading 2D-
+        # only fields below AND the user editing now-meaningless stale
+        # widgets that don't belong to the actual active panel at all.
+        self.setEnabled(isinstance(panel, Panel))
+        if not isinstance(panel, Panel):
+            return
         self._updating = True
         self.title_edit.setText(panel.title)
         self.xlabel_edit.setText(panel.xlabel)

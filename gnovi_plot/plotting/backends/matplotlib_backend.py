@@ -8,10 +8,17 @@ from matplotlib.colors import to_rgb
 from matplotlib.figure import Figure as MplFigure
 from matplotlib.ticker import MultipleLocator
 
-from gnovi_plot.data.numeric import numeric_column, numeric_xy
-from gnovi_plot.plotting.figure import GnoviFigure, Panel
+from gnovi_plot.data.numeric import numeric_column, numeric_xy, numeric_xyz
+from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D
 from gnovi_plot.plotting.series import PlotSeries, PlotType
+from gnovi_plot.plotting.series3d import Series3D
 from gnovi_plot.plotting.units import panel_box_aspect
+
+# mpl_toolkits.mplot3d must be imported once for Matplotlib to register the
+# "3d" projection with add_subplot/add_axes -- never used directly by name
+# below (Axes3D objects are created via `projection="3d"`, not this class),
+# but the import's side effect is required.
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 """Pure-Matplotlib rendering for a GnoviFigure -- no Qt/PySide6 dependency.
 
@@ -60,21 +67,30 @@ _DARK_CHROME = {
 }
 
 
-def render_panel_with_figure_background(ax: Axes, panel: Panel, figure: GnoviFigure, *, dark_mode: bool = False) -> None:
-    """Render `panel` into `ax` (via `render_panel`) and apply `figure`'s
-    own background chrome to `ax`'s parent Matplotlib Figure -- the shared
+def render_panel_with_figure_background(
+    ax: Axes, panel: Panel | Panel3D, figure: GnoviFigure, *, dark_mode: bool = False
+) -> None:
+    """Render `panel` into `ax` (via `render_panel`/`render_panel_3d`,
+    dispatched on `panel`'s type -- `ax` must already be the matching
+    projection, see `build_projection_aware_axes`) and apply `figure`'s own
+    background chrome to `ax`'s parent Matplotlib Figure -- the shared
     per-panel body `render_figure`'s loop below uses. Also called directly
     (never through that loop, which assumes `len(axes_list) ==
     len(figure.panels)`) by `gui.widgets.plot_canvas.PlotCanvas.render`'s
     Focus-mode path, where exactly one Axes renders one Panel regardless
     of how many panels `figure` actually has -- so the single-panel
-    rendering logic (`render_panel`) and this figure-background step
-    never need a second implementation for that case.
+    rendering logic (2D or 3D) and this figure-background step never need
+    a second implementation for that case. This one dispatch point is also
+    what gives Focus mode, Extract, and both export paths 3D support for
+    free: none of them render panels any other way.
     """
     figure_bg = _DARK_CHROME["figure_bg"] if dark_mode else _LIGHT_CHROME["figure_bg"]
     rc = {"font.family": figure.font_family} if figure.font_family else {}
     with matplotlib.rc_context(rc):
-        render_panel(ax, panel, figure, dark_mode=dark_mode)
+        if isinstance(panel, Panel3D):
+            render_panel_3d(ax, panel, figure, dark_mode=dark_mode)
+        else:
+            render_panel(ax, panel, figure, dark_mode=dark_mode)
         if ax.figure is not None:
             ax.figure.set_facecolor(figure_bg)
 
@@ -84,6 +100,33 @@ def render_figure(axes_list: Sequence[Axes], figure: GnoviFigure, *, dark_mode: 
     entry, same order) from `figure`."""
     for ax, panel in zip(axes_list, figure.panels):
         render_panel_with_figure_background(ax, panel, figure, dark_mode=dark_mode)
+
+
+def build_projection_aware_axes(mpl_figure, rows: int, cols: int, panels: Sequence[Panel | Panel3D]) -> list[Axes]:
+    """One Axes per `(rows, cols)` grid cell, each created with
+    `projection="3d"` exactly where `panels[i]` is a `Panel3D`, an ordinary
+    2D Axes otherwise -- the projection choice is made PER CELL, never for
+    the whole Figure, so a mixed 2D/3D layout is possible at all. This is
+    the one place every Axes grid in this app gets built from a
+    `GnoviFigure`'s panels: `gui.widgets.plot_canvas.PlotCanvas.
+    _ensure_layout` (the interactive canvas), `export.figure_export.
+    export_figure` (headless export), and `compute_tight_layout` below all
+    call this, so a mixed Figure's on-screen preview and every exported
+    format build an identical Axes grid, and Focus/Extract/Export/full-
+    Figure-export never need separate 3D-aware axes-creation logic of
+    their own.
+
+    A plain `mpl_figure.subplots(rows, cols, squeeze=False)` (what this
+    replaces) cannot do this -- it creates a uniformly-2D grid in one call,
+    with no per-cell projection control; `Axes3D` also cannot be produced
+    by reconfiguring an existing 2D Axes after creation (`projection` is
+    only a creation-time argument to `add_subplot`), so this loop -- not a
+    post-hoc conversion step -- is the only way to build a mixed grid.
+    """
+    return [
+        mpl_figure.add_subplot(rows, cols, i + 1, projection="3d" if isinstance(panel, Panel3D) else None)
+        for i, panel in enumerate(panels)
+    ]
 
 
 def apply_figure_layout(
@@ -135,7 +178,7 @@ def compute_tight_layout(figure: GnoviFigure) -> dict[str, float]:
     """
     rows, cols = figure.layout
     mpl_figure = MplFigure(figsize=(figure.figure_width_in, figure.figure_height_in))
-    axes_list = list(mpl_figure.subplots(rows, cols, squeeze=False).flat)
+    axes_list = build_projection_aware_axes(mpl_figure, rows, cols, figure.panels)
     render_figure(axes_list, figure)
     mpl_figure.tight_layout()
     subplot_params = mpl_figure.subplotpars
@@ -337,6 +380,68 @@ def render_panel(ax: Axes, panel: Panel, figure: GnoviFigure | None = None, *, d
     _apply_chrome(ax, dark_mode)
 
 
+def render_panel_3d(ax, panel: Panel3D, figure: GnoviFigure | None = None, *, dark_mode: bool = False) -> None:
+    """Fully redraw a single `Axes3D` from a `Panel3D` -- the 3D sibling of
+    `render_panel` above, kept as a separate function rather than a large
+    conditional block inside it: the two operate on fundamentally
+    different Matplotlib APIs (a third axis, `view_init` instead of
+    `xlim`/`ylim` autoscale semantics, pane-based background instead of
+    `set_facecolor`/spines -- see `_apply_chrome_3d`), so a shared body
+    would mostly be `if`/`else` branches with no actual logic in common
+    beyond the few lines duplicated here (title/label font-size fallback,
+    the same pattern `render_panel` uses).
+
+    `ax` must already be a genuine `Axes3D` (`projection="3d"` at creation
+    -- see `build_projection_aware_axes`); this function never creates or
+    converts an Axes itself.
+    """
+    ax.cla()
+
+    for series in panel.series:
+        if series.visible and not series.stale:
+            _draw_series_3d(ax, series)
+
+    title_size = figure.title_font_size if figure else None
+    label_size = figure.axis_label_font_size if figure else None
+    tick_size = figure.tick_label_font_size if figure else None
+
+    ax.set_title(panel.title, fontsize=title_size)
+    ax.set_xlabel(panel.x_label, fontsize=label_size)
+    ax.set_ylabel(panel.y_label, fontsize=label_size)
+    ax.set_zlabel(panel.z_label, fontsize=label_size)
+
+    if panel.xlim is not None:
+        ax.set_xlim(*panel.xlim)
+    if panel.ylim is not None:
+        ax.set_ylim(*panel.ylim)
+    if panel.zlim is not None:
+        ax.set_zlim(*panel.zlim)
+
+    ax.tick_params(axis="both", which="major", labelsize=tick_size)
+    ax.grid(panel.grid)
+
+    # The deterministic default/exported camera -- see `Panel3D`'s own
+    # docstring for why only elev/azim are modeled, and why interactive
+    # mouse rotation (Matplotlib's own built-in 3D navigation, active on
+    # any live Axes3D with no GNOVI code involved) never writes back here:
+    # every render starts from this same stored view, exactly like a 2D
+    # Panel's stored xlim/ylim (or "auto" if never explicitly set).
+    ax.view_init(elev=panel.elevation, azim=panel.azimuth)
+
+    if panel.panel_label and figure is not None and figure.panel_labels_visible:
+        ax.text2D(
+            0.02,
+            0.98,
+            panel.panel_label,
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontweight="bold",
+        )
+
+    _apply_chrome_3d(ax, dark_mode)
+
+
 def _apply_chrome(ax: Axes, dark_mode: bool) -> None:
     """Apply the light or dark chrome palette to `ax`. Runs last, after
     every other panel setting has been applied, and only touches colors --
@@ -360,6 +465,27 @@ def _apply_chrome(ax: Axes, dark_mode: bool) -> None:
             text.set_color(chrome["text"])
         if legend.get_title() is not None:
             legend.get_title().set_color(chrome["text"])
+
+
+def _apply_chrome_3d(ax, dark_mode: bool) -> None:
+    """3D counterpart of `_apply_chrome` -- same palette dicts (never a
+    duplicated theme definition, just a separate application), but a
+    genuinely different Matplotlib API surface: `Axes3D` has three pane
+    backgrounds (`xaxis.pane`/`yaxis.pane`/`zaxis.pane`, the 3D equivalent
+    of a 2D Axes' single `set_facecolor`) and a third axis/label, and its
+    `.spines` (present, inherited from the 2D Axes base) aren't the
+    meaningful visual boundary a 3D view actually shows -- the panes are,
+    so those are what get colored/outlined here instead of spines. No
+    legend handling: 3D scatter renders without a legend in this
+    milestone (see `Panel3D`'s own docstring)."""
+    chrome = _DARK_CHROME if dark_mode else _LIGHT_CHROME
+    ax.set_facecolor(chrome["axes_bg"])
+    ax.title.set_color(chrome["text"])
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        axis.label.set_color(chrome["text"])
+        axis.pane.set_facecolor(chrome["axes_bg"])
+        axis.pane.set_edgecolor(chrome["spine"])
+    ax.tick_params(axis="both", colors=chrome["text"])
 
 
 # --- Preview-only legend fitting (screen only -- never export) -------------
@@ -568,6 +694,28 @@ def _draw_series(ax: Axes, series: PlotSeries) -> None:
         elif series.hist_mode == "cumulative":
             hist_kwargs["cumulative"] = True
         ax.hist(values, **hist_kwargs)
+
+
+def _draw_series_3d(ax, series: Series3D) -> None:
+    """Draw one `Series3D` as a genuine Matplotlib 3D scatter
+    (`Axes3D.scatter`) -- the only 3D plot kind this milestone implements
+    (no surface/line3D/trisurf). `marker_size` is squared for the same
+    reason `_draw_series`'s 2D SCATTER case squares `PlotSeries.marker_size`
+    into `s`: `Axes.scatter`'s `s` is marker AREA (points^2), not a linear
+    size, so squaring here is what makes the same stored number mean the
+    same visual marker size in both 2D and 3D scatter.
+    """
+    x, y, z = numeric_xyz(series.dataframe, series.x_column, series.y_column, series.z_column)
+    ax.scatter(
+        x,
+        y,
+        z,
+        label=series.label,
+        color=series.color,
+        marker=series.marker or "o",
+        s=series.marker_size**2,
+        alpha=series.alpha,
+    )
 
 
 # --- Theme-aware contrast checking (manual series colors only) -------------

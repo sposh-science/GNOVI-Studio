@@ -7,6 +7,7 @@ from enum import Enum
 
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.plotting.series import PlotSeries
+from gnovi_plot.plotting.series3d import Series3D
 
 _logger = logging.getLogger("gnovi_plot")
 
@@ -261,8 +262,13 @@ class Panel:
 
     def to_dict(self) -> dict:
         """Project-save representation. `series` entries store `dataset_id`
-        rather than a nested `Dataset` (see `PlotSeries.to_dict`)."""
+        rather than a nested `Dataset` (see `PlotSeries.to_dict`). `"kind":
+        "2d"` is explicit (not merely implied by absence) so the saved
+        format is self-describing -- `panel_from_dict`'s dispatch still
+        treats a MISSING `"kind"` the same as `"2d"`, for projects saved
+        before this field existed."""
         return {
+            "kind": "2d",
             "title": self.title,
             "xlabel": self.xlabel,
             "ylabel": self.ylabel,
@@ -381,6 +387,213 @@ class Panel:
         return panel
 
 
+@dataclass
+class Panel3D:
+    """Declarative description of a single 3D subplot -- the 3D sibling of
+    `Panel`, rendered as a Matplotlib `mpl_toolkits.mplot3d.Axes3D` (never
+    renders itself -- see `plotting.backends.matplotlib_backend.
+    render_panel_3d`). Backend-agnostic like `Panel`: no Matplotlib import
+    anywhere in this module.
+
+    Deliberately NOT a subclass of `Panel`, and `GnoviFigure.panels` is
+    typed `list[Panel | Panel3D]` -- plain structural duck typing (both
+    expose `.id`/`.panel_label`/`.title`/`.series`/`.add_series`/
+    `.remove_series`/`.get_series`/`.invalidate_series_for_dataset`/
+    `.to_dict`), not a formal Protocol/ABC. With exactly two concrete panel
+    kinds today and no external extensibility need, a shared base class
+    would add indirection (constructor/field inheritance games between two
+    dataclasses whose actual field sets barely overlap -- a 3D panel has no
+    use for `xscale`/`tick_direction`/`panel_aspect_preset`/scientific-
+    notation toggles, and a 2D panel has no use for a third axis or a
+    camera) without changing what any caller can actually do. `id`/
+    `panel_label`/`source_graph_id` are duplicated here under the same
+    names rather than inherited, which is what makes the duck typing work.
+
+    Camera (`elevation`/`azimuth`) is deliberately just the two mplot3d
+    parameters that drive a deterministic default/exported view -- not a
+    full orientation (`roll` omitted; see module-level PR notes) and not a
+    quaternion/matrix (premature generality for a v1 driven entirely by
+    Matplotlib's own `Axes3D.view_init(elev=, azim=)`). Interactive mouse
+    rotation never writes back here: it's ephemeral session/view state,
+    exactly like interactive 2D pan/zoom never writes into `Panel.xlim`/
+    `.ylim` either (see `gui.widgets.figure_properties_panel.
+    sync_axes_limits`) -- these two fields are only the deterministic
+    default/exported view, the 3D counterpart of `Panel.xlim`/`.ylim`
+    themselves (which similarly stay `None`/"auto" unless the user
+    explicitly sets them).
+
+    Deliberately excludes (see this milestone's own scope notes): surface/
+    mesh/wireframe/trisurf fields, a colorbar, `panel_aspect_preset`/
+    `roll` (3D box-aspect and full orientation are separate, more involved
+    design questions -- see the architecture inspection's "roadmap"
+    section -- not needed for scatter), and a legend (no `legend_visible`/
+    `legend_loc` -- 3D scatter renders without a legend in this milestone;
+    a future PR can add one following `Panel`'s own legend fields as a
+    template once actually needed).
+    """
+
+    title: str = ""
+    x_label: str = ""
+    y_label: str = ""
+    z_label: str = ""
+    xlim: tuple[float, float] | None = None
+    ylim: tuple[float, float] | None = None
+    zlim: tuple[float, float] | None = None
+    grid: bool = True
+
+    # mplot3d's own `Axes3D.view_init(elev=, azim=)` defaults -- see this
+    # class's own docstring for why only these two, and why interactive
+    # rotation never writes back into them.
+    elevation: float = 30.0
+    azimuth: float = -60.0
+
+    # Auto-assigned by GnoviFigure whenever the panel grid changes; only
+    # drawn when GnoviFigure.panel_labels_visible is True -- identical
+    # meaning/mechanism to `Panel.panel_label`.
+    panel_label: str = ""
+
+    # Same convention/meaning as `Panel.source_graph_id` -- see that
+    # field's own docstring. Graph Library support for Panel3D works
+    # through this same field: `plotting.graph.Graph.panel` and
+    # `Graph.from_dict` are polymorphic over `Panel | Panel3D` (see
+    # `graph.py`), so saving/loading a 3D panel to/from the Graph Library
+    # sets and restores `source_graph_id` exactly like a 2D `Panel`.
+    source_graph_id: str | None = None
+
+    # Stable identity, same convention as `Panel.id`/`Dataset.id`/
+    # `PlotSeries.id`/`core.workbench.Workbench.id`. A TRUE independent
+    # clone (Workbench duplication, Extract Panel) must get a fresh id --
+    # see `plotting.graph.clone_panel3d_with_shared_datasets`.
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+    series: list[Series3D] = field(default_factory=list)
+    _next_color_index: int = field(default=0, repr=False)
+
+    def add_series(self, series: Series3D, *, dark_mode: bool = False) -> None:
+        if series.color is None:
+            cycle = theme_color_cycle(dark_mode)
+            series.color = cycle[self._next_color_index % len(cycle)]
+            self._next_color_index += 1
+        self.series.append(series)
+
+    def remove_series(self, series_id: str) -> None:
+        self.series = [s for s in self.series if s.id != series_id]
+
+    def clear_series(self) -> None:
+        self.series = []
+        self._next_color_index = 0
+
+    def get_series(self, series_id: str) -> Series3D | None:
+        for s in self.series:
+            if s.id == series_id:
+                return s
+        return None
+
+    def reset_limits(self) -> None:
+        self.xlim = None
+        self.ylim = None
+        self.zlim = None
+
+    def invalidate_series_for_dataset(self, dataset: Dataset, row_set_changed: bool) -> list[Series3D]:
+        """Mark series referencing `dataset` stale after a transformation --
+        the 3D counterpart of `Panel.invalidate_series_for_dataset`. A 3D
+        scatter series has no `row_range` (see `Series3D`'s own docstring),
+        so `row_set_changed` only matters in that it's part of the same
+        shared call signature `GnoviFigure.invalidate_series_for_dataset`
+        uses to fan out across every panel regardless of type; a 3D series
+        is marked stale purely on a missing x/y/z column."""
+        newly_stale = []
+        for series in self.series:
+            if series.dataset.id != dataset.id or series.stale:
+                continue
+            if any(col not in dataset.columns for col in (series.x_column, series.y_column, series.z_column)):
+                series.stale = True
+                newly_stale.append(series)
+        return newly_stale
+
+    def to_dict(self) -> dict:
+        """Project-save representation. `kind: "3d"` is the polymorphic
+        discriminator `plotting.figure.panel_from_dict` dispatches on --
+        see that function's own docstring for why a plain `Panel` (kind
+        `"2d"`, the default) needs no equivalent change for old projects
+        to keep loading."""
+        return {
+            "kind": "3d",
+            "title": self.title,
+            "x_label": self.x_label,
+            "y_label": self.y_label,
+            "z_label": self.z_label,
+            "xlim": list(self.xlim) if self.xlim is not None else None,
+            "ylim": list(self.ylim) if self.ylim is not None else None,
+            "zlim": list(self.zlim) if self.zlim is not None else None,
+            "grid": self.grid,
+            "elevation": self.elevation,
+            "azimuth": self.azimuth,
+            "panel_label": self.panel_label,
+            "source_graph_id": self.source_graph_id,
+            "id": self.id,
+            "next_color_index": self._next_color_index,
+            "series": [s.to_dict() for s in self.series],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, dataset_lookup: dict[str, "Dataset"]) -> "Panel3D":
+        xlim = data.get("xlim")
+        ylim = data.get("ylim")
+        zlim = data.get("zlim")
+        panel = cls(
+            id=data.get("id") or uuid.uuid4().hex,
+            title=data.get("title", ""),
+            x_label=data.get("x_label", ""),
+            y_label=data.get("y_label", ""),
+            z_label=data.get("z_label", ""),
+            xlim=tuple(xlim) if xlim is not None else None,
+            ylim=tuple(ylim) if ylim is not None else None,
+            zlim=tuple(zlim) if zlim is not None else None,
+            grid=data.get("grid", True),
+            elevation=data.get("elevation", 30.0),
+            azimuth=data.get("azimuth", -60.0),
+            panel_label=data.get("panel_label", ""),
+            source_graph_id=data.get("source_graph_id"),
+        )
+        for series_data in data.get("series", []):
+            series = Series3D.from_dict(series_data, dataset_lookup)
+            if series is not None:
+                panel.series.append(series)
+            else:
+                _logger.warning(
+                    "Dropped 3D plot series '%s' on project load: its dataset "
+                    "(id %s) is missing from the project.",
+                    series_data.get("label", "?"),
+                    series_data.get("dataset_id", "?"),
+                )
+        panel._next_color_index = data.get("next_color_index", 0)
+        return panel
+
+
+def panel_from_dict(data: dict, dataset_lookup: dict[str, "Dataset"]) -> "Panel | Panel3D":
+    """Polymorphic `Panel`/`Panel3D` reconstruction, dispatching on `kind`
+    (`"3d"` -> `Panel3D`, anything else, INCLUDING MISSING -> `Panel`) --
+    the one place `GnoviFigure.from_dict` resolves each entry in a saved
+    `panels` list, mirroring `analysis.results.result_from_dict`'s existing
+    polymorphic-registry pattern for `AnalysisResult` subclasses.
+
+    A project saved before Panel3D existed has plain `Panel` dicts with no
+    `"kind"` key at all -- `data.get("kind", "2d")` defaults those straight
+    to `Panel`, so every pre-3D project keeps loading unchanged, exactly
+    like `Panel.id`'s own `.get()`-defaulted backward compatibility. This
+    is also why introducing Panel3D needed a real `PROJECT_FORMAT_VERSION`
+    bump (see `core.project_io`) despite that: the reverse direction --
+    an OLDER app (with no `panel_from_dict` dispatch at all) opening a
+    NEWER file that contains a genuine `kind: "3d"` entry -- would still
+    blindly hand it to the old `Panel.from_dict`, which has no way to
+    recognize or skip it and would silently misparse it instead of
+    cleanly refusing the file."""
+    if data.get("kind") == "3d":
+        return Panel3D.from_dict(data, dataset_lookup)
+    return Panel.from_dict(data, dataset_lookup)
+
+
 class GnoviFigure:
     """Declarative description of a publication figure/page: one or more
     `Panel`s (subplots) laid out on a single Matplotlib Figure, plus
@@ -402,7 +615,7 @@ class GnoviFigure:
         *,
         name: str = "Figure 1",
         plot_theme: PlotTheme = PlotTheme.LIGHT,
-        panels: list[Panel] | None = None,
+        panels: list[Panel | Panel3D] | None = None,
         layout: tuple[int, int] = (1, 1),
         active_panel_index: int = 0,
         panel_labels_visible: bool = False,
@@ -436,7 +649,7 @@ class GnoviFigure:
         # so it's always correct across Open/New Project swapping which
         # `GnoviFigure` is "current" (see `gui.main_window._sync_theme_controls`).
         self.plot_theme = plot_theme
-        self.panels: list[Panel] = panels if panels is not None else [Panel(**panel_kwargs)]
+        self.panels: list[Panel | Panel3D] = panels if panels is not None else [Panel(**panel_kwargs)]
         self.layout = layout
         self.active_panel_index = active_panel_index
         self.panel_labels_visible = panel_labels_visible
@@ -504,7 +717,7 @@ class GnoviFigure:
     # --- Multi-panel management ---------------------------------------------
 
     @property
-    def active_panel(self) -> Panel:
+    def active_panel(self) -> Panel | Panel3D:
         return self.panels[self.active_panel_index]
 
     def set_active_panel(self, index: int) -> None:
@@ -620,7 +833,7 @@ class GnoviFigure:
     def clear_series(self) -> None:
         self.active_panel.clear_series()
 
-    def get_series(self, series_id: str) -> PlotSeries | None:
+    def get_series(self, series_id: str) -> PlotSeries | Series3D | None:
         for panel in self.panels:
             found = panel.get_series(series_id)
             if found is not None:
@@ -630,8 +843,8 @@ class GnoviFigure:
     def reset_limits(self) -> None:
         self.active_panel.reset_limits()
 
-    def invalidate_series_for_dataset(self, dataset: Dataset, row_set_changed: bool) -> list[PlotSeries]:
-        newly_stale: list[PlotSeries] = []
+    def invalidate_series_for_dataset(self, dataset: Dataset, row_set_changed: bool) -> list[PlotSeries | Series3D]:
+        newly_stale: list[PlotSeries | Series3D] = []
         for panel in self.panels:
             newly_stale.extend(panel.invalidate_series_for_dataset(dataset, row_set_changed))
         return newly_stale
@@ -639,10 +852,16 @@ class GnoviFigure:
     def copy_active_panel_style_to_all(self) -> None:
         """Copy the active panel's display-style fields (scale, ticks,
         spines, grid, legend) onto every other panel, leaving each panel's
-        title/labels/limits/series untouched."""
+        title/labels/limits/series untouched. `_PANEL_STYLE_FIELDS` are all
+        2D-only concepts (`Panel3D` has none of them) -- a no-op if the
+        active panel is a `Panel3D`, and skips any `Panel3D` sibling as a
+        copy target, exactly like a Panel3D is skipped by every other
+        2D-only style operation in this class."""
         source = self.active_panel
+        if not isinstance(source, Panel):
+            return
         for panel in self.panels:
-            if panel is source:
+            if panel is source or not isinstance(panel, Panel):
                 continue
             for field_name in _PANEL_STYLE_FIELDS:
                 setattr(panel, field_name, getattr(source, field_name))
@@ -686,7 +905,7 @@ class GnoviFigure:
         list falls back to a fresh default single Panel (`panels=None`)
         rather than an empty `GnoviFigure.panels`, which `active_panel`
         can't index into."""
-        panels = [Panel.from_dict(p, dataset_lookup) for p in data.get("panels", [])]
+        panels = [panel_from_dict(p, dataset_lookup) for p in data.get("panels", [])]
         try:
             plot_theme = PlotTheme(data.get("plot_theme", PlotTheme.LIGHT.value))
         except ValueError:
