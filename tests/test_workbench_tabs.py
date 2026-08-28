@@ -185,7 +185,7 @@ def test_context_menu_delete_emits_delete_requested(qapp, monkeypatch):
     received = []
     bar.delete_requested.connect(received.append)
     monkeypatch.setattr(
-        "gnovi_plot.gui.widgets.workbench_tabs.QMenu", _fake_menu_returning("Delete Workbench")
+        "gnovi_plot.gui.widgets.workbench_tabs.QMenu", _fake_menu_returning("Close Workbench")
     )
 
     bar._on_context_menu_requested(QPoint(5, 5))
@@ -230,7 +230,7 @@ def test_context_menu_delete_is_disabled_with_only_one_workbench(qapp, monkeypat
 
     bar._on_context_menu_requested(QPoint(5, 5))
 
-    assert captured["Delete Workbench"].enabled is False
+    assert captured["Close Workbench"].enabled is False
 
 
 def test_context_menu_at_an_empty_area_does_not_raise(qapp):
