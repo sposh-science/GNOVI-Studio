@@ -1,7 +1,18 @@
 from __future__ import annotations
 
+from PySide6.QtCore import QItemSelection, QItemSelectionModel, Qt, Signal
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QFormLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from gnovi_plot.analysis.results import AnalysisResult
 from gnovi_plot.data.dataset_manager import DatasetManager
@@ -18,6 +29,15 @@ _EMPTY_STATE_TEXT = (
 )
 
 _RESIDUALS_UNAVAILABLE_TEXT = "Residuals unavailable -- the source dataset/series no longer exists."
+
+# A bounded height for the detail table (see `AnalysisResult.detail_table`).
+# `QTableWidget` (a `QAbstractScrollArea`) already scrolls its rows
+# internally with the header pinned, and its own `sizeHint`/
+# `minimumSizeHint` do NOT scale with row count -- this cap only keeps a
+# large result (thousands of XRD peak candidates) from making the table
+# tall enough to crowd the compact `details()` summary above it or the
+# central splitter around it. Row count never drives layout here.
+_DETAIL_TABLE_MAX_HEIGHT = 260
 
 
 def resolve_live_xy(figure: GnoviFigure | None, manager: DatasetManager | None, result: AnalysisResult):
@@ -86,7 +106,25 @@ class AnalysisResultView(QWidget):
     Shows a single result at a time (the most recent), plus its own empty
     state when nothing has been shown yet -- there is no history list in
     this milestone.
+
+    When the shown result provides a `detail_table()` (see
+    `AnalysisResult.detail_table`), a bounded, internally-scrolling
+    `QTableWidget` is rendered below the compact `details()` summary -- for
+    XRD this is the one authoritative detailed peak table (moved here out
+    of the left `XRDAnalysisSection` sidebar, which was too narrow for it).
+    Row selection there is forwarded via `detail_selection_changed` so the
+    left sidebar's own peak actions (Remove Selected, Enable/Disable) act
+    on exactly what's selected in this table; the view itself never mutates
+    a result.
     """
+
+    # Selected row indices in the detail table changed -- `list[int]`,
+    # ascending, empty when nothing is selected or the current result has
+    # no detail table. `MainWindow` forwards this to `AnalysisPanel` so the
+    # XRD sidebar's Remove Selected / Enable-Disable act on this selection
+    # (see `gui.widgets.xrd_analysis_section.XRDAnalysisSection.
+    # set_selected_peak_rows`).
+    detail_selection_changed = Signal(list)
 
     def __init__(self, figure: GnoviFigure, dataset_manager: DatasetManager, parent=None):
         super().__init__(parent)
@@ -95,6 +133,14 @@ class AnalysisResultView(QWidget):
         self._manager = dataset_manager
         self._result: AnalysisResult | None = None
         self._residual_window: ResidualWindow | None = None
+        # `result_id` of whatever was last shown -- lets `show_result`
+        # preserve the detail-table row selection across an in-place edit
+        # of the same result (manual peak add/enable-disable re-displays
+        # it) while clearing it when a genuinely different result is shown.
+        self._shown_result_id: str | None = None
+        # Guard so programmatic table repopulation/reselection in
+        # `show_result` never re-emits `detail_selection_changed`.
+        self._suppress_detail_selection_signal = False
 
         self._empty_label = QLabel(_EMPTY_STATE_TEXT)
         self._empty_label.setWordWrap(True)
@@ -111,6 +157,20 @@ class AnalysisResultView(QWidget):
         self._details_widget = QWidget()
         self._details_form = QFormLayout(self._details_widget)
         self._details_form.setContentsMargins(0, 0, 0, 0)
+
+        self._detail_table_label = QLabel()
+        self._detail_table_label.setStyleSheet("font-weight: 600;")
+        self._detail_table = QTableWidget(0, 0)
+        self._detail_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._detail_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._detail_table.verticalHeader().setVisible(False)
+        self._detail_table.horizontalHeader().setStretchLastSection(True)
+        self._detail_table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        # Bounded height + its own internal row scrolling with the header
+        # pinned -- see `_DETAIL_TABLE_MAX_HEIGHT`.
+        self._detail_table.setMaximumHeight(_DETAIL_TABLE_MAX_HEIGHT)
+        self._detail_table.setMinimumHeight(120)
+        self._detail_table.itemSelectionChanged.connect(self._on_detail_selection_changed)
 
         self._provenance_widget = QWidget()
         self._provenance_form = QFormLayout(self._provenance_widget)
@@ -136,6 +196,8 @@ class AnalysisResultView(QWidget):
         content_layout.addWidget(self._series_label)
         content_layout.addWidget(self._summary_label)
         content_layout.addWidget(self._details_widget)
+        content_layout.addWidget(self._detail_table_label)
+        content_layout.addWidget(self._detail_table)
         content_layout.addWidget(self._provenance_section)
         content_layout.addLayout(button_row)
         content_layout.addWidget(self._residuals_unavailable_label)
@@ -183,6 +245,8 @@ class AnalysisResultView(QWidget):
         self._rebuild_form(self._provenance_form, result.provenance_details())
         self._provenance_section.set_expanded(False)
 
+        self._rebuild_detail_table(result)
+
         self._view_residuals_button.setVisible(result.supports_residuals())
         self._residuals_unavailable_label.setVisible(False)
 
@@ -208,6 +272,8 @@ class AnalysisResultView(QWidget):
         self._summary_label.clear()
         self._rebuild_form(self._details_form, [])
         self._rebuild_form(self._provenance_form, [])
+        self._shown_result_id = None
+        self._clear_detail_table()
         self._view_residuals_button.setVisible(False)
         self._residuals_unavailable_label.setVisible(False)
         if self._residual_window is not None:
@@ -220,6 +286,98 @@ class AnalysisResultView(QWidget):
             form.removeRow(0)
         for label, value in rows:
             form.addRow(f"{label}:", QLabel(value))
+
+    # --- detail table (optional wide row-per-record view) ------------------
+
+    def selected_detail_rows(self) -> list[int]:
+        """Ascending row indices currently selected in the detail table --
+        empty when there's no table or nothing selected."""
+        return sorted({index.row() for index in self._detail_table.selectionModel().selectedRows()})
+
+    def _clear_detail_table(self) -> None:
+        self._suppress_detail_selection_signal = True
+        try:
+            self._detail_table.clearSelection()
+            self._detail_table.setRowCount(0)
+            self._detail_table.setColumnCount(0)
+        finally:
+            self._suppress_detail_selection_signal = False
+        self._detail_table.setVisible(False)
+        self._detail_table_label.setVisible(False)
+
+    def _rebuild_detail_table(self, result: AnalysisResult) -> None:
+        """Populate the detail table from `result.detail_table()`, or hide
+        it entirely when the result type has none (e.g. a `FitResult`).
+
+        Selection is preserved by row index only across an in-place edit of
+        the *same* result (its `result_id` is unchanged) -- a manual XRD
+        peak add/enable-disable re-displays the same result and the
+        researcher's row selection should survive it. A genuinely different
+        result (History switch, panel/Workbench switch) always starts with
+        nothing selected, and `detail_selection_changed` is emitted so the
+        left sidebar drops any now-stale selection too."""
+        table = result.detail_table()
+        same_result = result.result_id == self._shown_result_id
+        previous_rows = self.selected_detail_rows() if same_result else []
+        self._shown_result_id = result.result_id
+
+        if table is None:
+            self._clear_detail_table()
+            if not same_result:
+                self.detail_selection_changed.emit([])
+            return
+
+        columns, rows = table
+        self._suppress_detail_selection_signal = True
+        try:
+            self._detail_table.clearSelection()
+            self._detail_table.setColumnCount(len(columns))
+            self._detail_table.setHorizontalHeaderLabels(columns)
+            self._detail_table.setRowCount(len(rows))
+            for r, row_values in enumerate(rows):
+                for c, value in enumerate(row_values):
+                    item = QTableWidgetItem(str(value))
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    self._detail_table.setItem(r, c, item)
+            self._detail_table.horizontalHeader().setStretchLastSection(True)
+            # Size columns to content only for a modest table -- a
+            # `ResizeToContents` header mode (or `resizeColumnsToContents`)
+            # scans every row on each rebuild, and this table is rebuilt on
+            # every in-place edit; skip it once the peak list is large.
+            if len(rows) <= 250:
+                self._detail_table.resizeColumnsToContents()
+            self._reselect_detail_rows([row for row in previous_rows if row < len(rows)])
+        finally:
+            self._suppress_detail_selection_signal = False
+
+        self._detail_table_label.setText(result.detail_table_title())
+        self._detail_table_label.setVisible(True)
+        self._detail_table.setVisible(True)
+
+        current_rows = self.selected_detail_rows()
+        if current_rows != previous_rows:
+            self.detail_selection_changed.emit(current_rows)
+
+    def _reselect_detail_rows(self, rows: list[int]) -> None:
+        """Re-highlight `rows` (already validated against the row count) --
+        one whole-row range per index, so a multi-row selection survives a
+        same-result rebuild, not just the last row (`selectRow` in a loop
+        would replace under the table's default extended-selection mode)."""
+        if not rows:
+            return
+        model = self._detail_table.model()
+        last_col = max(self._detail_table.columnCount() - 1, 0)
+        selection = QItemSelection()
+        for row in rows:
+            selection.select(model.index(row, 0), model.index(row, last_col))
+        self._detail_table.selectionModel().select(
+            selection, QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+        )
+
+    def _on_detail_selection_changed(self) -> None:
+        if self._suppress_detail_selection_signal:
+            return
+        self.detail_selection_changed.emit(self.selected_detail_rows())
 
     def _resolve_dataset_name(self, result: AnalysisResult) -> str | None:
         """A genuine friendly name, preferring the result's own stored

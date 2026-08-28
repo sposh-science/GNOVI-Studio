@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import pandas as pd
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
+    QFrame,
     QGroupBox,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -258,13 +260,37 @@ class AnalysisPanel(QWidget):
 
         self.history_section = CollapsibleSection("Analysis History", history_group)
 
+        # The tool selector stays fixed above a scrolling region holding
+        # the selected workflow's own controls (Curve Fitting or XRD Peak
+        # Analysis, whichever `_update_tool_visibility` currently shows)
+        # plus Analysis History -- XRD's own control set (radiation,
+        # background, smoothing, peak detection, the peak table) is long
+        # enough on an ordinary laptop-height display that without this,
+        # the tool selector itself would scroll out of view along with
+        # everything else, and switching tools would require re-finding
+        # it. This whole panel used to be handed to `MainWindow`'s own
+        # `_wrap_scrollable` as one opaque block (see that call site's own
+        # comment) -- now it manages its own internal scrolling instead,
+        # specifically so the selector can stay put; `MainWindow` no
+        # longer wraps this panel a second time.
+        workflow_container = QWidget()
+        workflow_layout = QVBoxLayout(workflow_container)
+        workflow_layout.setContentsMargins(0, 0, 0, 0)
+        workflow_layout.addWidget(self.fit_section)
+        workflow_layout.addWidget(self.xrd_section)
+        workflow_layout.addWidget(self.history_section)
+        workflow_layout.addStretch(1)
+
+        workflow_scroll = QScrollArea()
+        workflow_scroll.setWidgetResizable(True)
+        workflow_scroll.setFrameShape(QFrame.NoFrame)
+        workflow_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        workflow_scroll.setWidget(workflow_container)
+
         layout = QVBoxLayout(self)
         layout.addWidget(self.tool_label)
         layout.addWidget(self.tool_combo)
-        layout.addWidget(self.fit_section)
-        layout.addWidget(self.xrd_section)
-        layout.addWidget(self.history_section)
-        layout.addStretch(1)
+        layout.addWidget(workflow_scroll, 1)
 
         self.model_combo.currentIndexChanged.connect(self._update_model_controls)
         self.model_combo.currentIndexChanged.connect(self._invalidate_pending_fit)
@@ -290,6 +316,22 @@ class AnalysisPanel(QWidget):
         is_xrd = self.tool_combo.currentText() == _TOOL_XRD
         self.fit_section.setVisible(not is_xrd)
         self.xrd_section.setVisible(is_xrd)
+        if not is_xrd:
+            # Switching away from XRD Peak Analysis while "Add Peak" was
+            # armed must not leave it armed with its own controls now
+            # hidden -- a subsequent canvas click would otherwise still
+            # be consumed as a manual-peak-add attempt for a tool the
+            # scientist can no longer even see. See `XRDAnalysisSection.
+            # disarm_manual_peak_mode`'s own docstring.
+            self.xrd_section_widget.disarm_manual_peak_mode()
+
+    def disarm_xrd_manual_peak_mode(self) -> None:
+        """Called by `MainWindow` on an active-panel switch (see `_on_
+        panel_switched`) -- "Add Peak" armed for one panel's XRD analysis
+        must not silently apply to whichever panel becomes active next;
+        see `XRDAnalysisSection.disarm_manual_peak_mode`'s own
+        docstring."""
+        self.xrd_section_widget.disarm_manual_peak_mode()
 
     def _on_xrd_result_updated(self, result: AnalysisResult) -> None:
         """An in-place edit to the current XRDAnalysisResult (manual peak
@@ -310,6 +352,13 @@ class AnalysisPanel(QWidget):
 
     def xrd_add_manual_peak(self, two_theta: float, intensity: float) -> None:
         self.xrd_section_widget.add_manual_peak(two_theta, intensity)
+
+    def xrd_set_selected_peak_rows(self, rows: list[int]) -> None:
+        """Forward the bottom Results-tab detail-table row selection to the
+        XRD section, so its Remove Selected / Enable-Disable act on exactly
+        what the researcher selected there (the detailed peak table moved
+        out of this narrow drawer into the Results tab)."""
+        self.xrd_section_widget.set_selected_peak_rows(rows)
 
     def set_figure(self, figure: GnoviFigure) -> None:
         """Repoint this panel at a different `GnoviFigure` (e.g. a

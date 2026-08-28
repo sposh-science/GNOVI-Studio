@@ -64,7 +64,79 @@ def test_summary_and_details_are_human_readable():
     assert "peak candidate" in result.summary()
     labels = [row[0] for row in result.details()]
     assert "Radiation" in labels
-    assert any(label.startswith("Peak 1") for label in labels)
+    assert "Peak candidates" in labels
+    # `details()` is deliberately a fixed, bounded set of rows -- never one
+    # row per peak (see its own docstring for the layout bug that caused).
+    # The full per-peak view lives in XRDAnalysisSection's own scrolling
+    # peak table, not here.
+    assert not any(label.startswith("Peak 1") or label.startswith("Peak 2") for label in labels)
+
+
+def test_details_row_count_does_not_scale_with_peak_count():
+    few = _build()  # 2 peaks, see _build()
+    many = XRDAnalysisResult(
+        source_dataset_id=few.source_dataset_id,
+        source_dataset_name=few.source_dataset_name,
+        source_series_id=few.source_series_id,
+        source_series_label=few.source_series_label,
+        x_column=few.x_column,
+        y_column=few.y_column,
+        row_range=few.row_range,
+        source_panel_id=few.source_panel_id,
+        result_id="many",
+        engine=few.engine,
+        engine_version=few.engine_version,
+        operation=few.operation,
+        parameters=few.parameters,
+        radiation=few.radiation,
+        peaks=[XRDPeakSeed.manual(float(i), 100.0) for i in range(1000)],
+    )
+    assert len(many.details()) == len(few.details())
+
+
+# --- detailed peak table (rendered in the bottom Results tab) ----------------
+
+
+def test_detail_table_has_one_row_per_peak_with_expected_columns():
+    result = _build()  # 2 automatic peaks
+    columns, rows = result.detail_table()
+    assert columns == [
+        "Peak #",
+        "Seed 2θ (°)",
+        "Observed intensity",
+        "Prominence",
+        "d-spacing (Å)",
+        "Origin",
+        "Enabled",
+    ]
+    assert len(rows) == len(result.peaks)
+    assert rows[0][0] == "1"
+    assert rows[0][5] == "automatic"
+    assert rows[0][6] == "Yes"
+
+
+def test_detail_table_row_count_scales_with_peaks_unlike_details():
+    result = _build(peaks=[XRDPeakSeed.manual(float(10 + i), 100.0) for i in range(500)])
+    _columns, rows = result.detail_table()
+    assert len(rows) == 500  # unlike details(), this IS allowed to be long
+    assert len(result.details()) < 20  # the compact summary stays bounded
+
+
+def test_detail_table_d_spacing_uses_this_results_own_radiation():
+    cu = _build()
+    mo = _build(radiation=radiation_from_preset("mo_ka1"))
+    cu_d = cu.detail_table()[1][0][4]
+    mo_d = mo.detail_table()[1][0][4]
+    assert cu_d != mo_d  # shorter Mo wavelength -> different d for the same 2theta
+    assert float(cu_d) > 0.0 and float(mo_d) > 0.0
+
+
+def test_detail_table_reflects_enabled_flag():
+    result = _build()
+    result.peaks[0].enabled = False
+    rows = result.detail_table()[1]
+    assert rows[0][6] == "No"
+    assert rows[1][6] == "Yes"
 
 
 # --- serialization -----------------------------------------------------------

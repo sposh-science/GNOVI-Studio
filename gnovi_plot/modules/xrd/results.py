@@ -19,10 +19,45 @@ from typing import ClassVar
 
 from gnovi_plot.analysis.results import ENGINE_GNOVI, AnalysisResult, register_result_kind
 from gnovi_plot.core.app_info import __version__ as _APP_VERSION
+from gnovi_plot.modules.xrd.bragg import InvalidBraggInputError, d_spacing
 from gnovi_plot.modules.xrd.peaks import XRDPeakSeed
 from gnovi_plot.modules.xrd.radiation import Radiation
 
 OPERATION_PEAK_DETECTION = "xrd_peak_detection"
+
+# The authoritative detailed peak-table columns -- deliberately excludes
+# anything implying profile fitting (fitted center, FWHM, area, model/
+# quality) -- XRD-2 has no fitting yet (see this class's own docstring).
+# Shared by `XRDAnalysisResult.detail_table()` (the bottom Results-tab
+# table, which is now the one authoritative detailed peak view) and
+# `gui.widgets.xrd_analysis_section.XRDAnalysisSection.export_peak_table_csv`
+# so a researcher sees identical headers on screen and in an exported CSV.
+PEAK_TABLE_COLUMNS = [
+    "Peak #",
+    "Seed 2θ (°)",
+    "Observed intensity",
+    "Prominence",
+    "d-spacing (Å)",
+    "Origin",
+    "Enabled",
+]
+
+
+# Maps `modules.xrd.preprocessing`'s internal `BaselineResult.method`
+# values ("polynomial"/"arpls") to the exact display strings
+# `XRDAnalysisSection`'s own Background dropdown already uses -- so a
+# researcher sees the SAME label ("arPLS", not "arpls") in the Results tab
+# as they picked in the workflow controls.
+_BACKGROUND_METHOD_LABELS = {"polynomial": "Polynomial", "arpls": "arPLS"}
+
+
+def _format_optional_number(value: float | int | None) -> str:
+    """`"—"` for `None` (the setting wasn't used), otherwise a compact
+    numeric string -- shared by `XRDAnalysisResult.details()`'s
+    Prominence/Minimum-separation rows."""
+    if value is None:
+        return "—"
+    return f"{value:.4g}" if isinstance(value, float) else str(value)
 
 
 @register_result_kind
@@ -60,21 +95,81 @@ class XRDAnalysisResult(AnalysisResult):
         )
 
     def details(self) -> list[tuple[str, str]]:
+        """A BOUNDED summary -- deliberately never one row per peak.
+
+        An earlier version of this method appended one row per
+        `XRDPeakSeed`, which is fine for a handful of peaks but not for
+        the hundreds/thousands `scipy.signal.find_peaks` can return on
+        real noisy data with a permissive prominence: `AnalysisResultView`
+        renders `details()` into a plain `QFormLayout` with no bound on
+        its own size, so that many rows gave the containing widget a
+        `minimumSizeHint` of literally tens of thousands of pixels --
+        which the Results tab (and therefore GNOVI's central vertical
+        splitter, see `gui.widgets.bottom_panel.BottomPanel`) has no way
+        to display within, permanently starving the plot canvas of space
+        with no way to drag it back. The full, row-per-peak view belongs
+        in `detail_table()` (below), rendered by `AnalysisResultView` in
+        the bottom Results tab as a bounded, internally-scrolling table
+        built for arbitrary row counts that never dictates its parent's
+        size -- this method must stay a small, FIXED number of rows
+        regardless of how many peaks were found, so it can never do that
+        again to any future analysis tool that reuses `AnalysisResultView`
+        either."""
+        enabled = sum(1 for p in self.peaks if p.enabled)
+        preprocessing = self.parameters.get("preprocessing") or {}
+        background = preprocessing.get("background")
+        smoothing = preprocessing.get("smoothing")
+        detection = self.parameters.get("detection") or {}
+
         rows: list[tuple[str, str]] = [
             ("Radiation", f"{self.radiation.label} (λ = {self.radiation.wavelength_angstrom:.6g} Å)"),
             ("Peak candidates", str(len(self.peaks))),
+            ("Enabled", str(enabled)),
+            ("Background", _BACKGROUND_METHOD_LABELS.get(background.get("method"), "None") if background else "None"),
+            ("Smoothing", "On" if smoothing else "Off"),
+            ("Detection input", str(self.parameters.get("detection_input", "raw")).replace("_", " ").capitalize()),
+            ("Prominence", _format_optional_number(detection.get("prominence"))),
+            ("Minimum separation", _format_optional_number(detection.get("distance"))),
         ]
-        for position, peak in enumerate(self.peaks, start=1):
-            state = "" if peak.enabled else " [disabled]"
-            prominence_text = f", prominence={peak.prominence:.4g}" if peak.prominence is not None else ""
-            rows.append(
-                (
-                    f"Peak {position}{state}",
-                    f"2θ = {peak.two_theta:.4f}°, I = {peak.intensity:.6g}, "
-                    f"origin={peak.origin}{prominence_text}",
-                )
-            )
         return rows
+
+    def _peak_d_spacing(self, peak: XRDPeakSeed) -> float | None:
+        """First-order Bragg d-spacing for `peak`'s seed 2θ at this
+        result's own radiation -- `None` if the angle is outside the
+        physically valid range (see `modules.xrd.bragg.d_spacing`). Uses
+        `self.radiation`, so it always reflects whatever radiation the
+        result currently carries (a later radiation change re-displays the
+        result and this recomputes)."""
+        try:
+            return float(d_spacing(peak.two_theta, self.radiation.wavelength_angstrom))
+        except InvalidBraggInputError:
+            return None
+
+    def detail_table(self) -> tuple[list[str], list[list[str]]]:
+        """One row per peak candidate -- the authoritative detailed peak
+        view (see `PEAK_TABLE_COLUMNS`). Rendered by `gui.widgets.
+        analysis_result_view.AnalysisResultView` in the bottom Results tab,
+        which bounds its own height and scrolls internally regardless of
+        how many peaks this returns (`details()` above stays the small,
+        fixed summary alongside it)."""
+        rows: list[list[str]] = []
+        for position, peak in enumerate(self.peaks, start=1):
+            d = self._peak_d_spacing(peak)
+            rows.append(
+                [
+                    str(position),
+                    f"{peak.two_theta:.4f}",
+                    f"{peak.intensity:.6g}",
+                    f"{peak.prominence:.4g}" if peak.prominence is not None else "—",
+                    f"{d:.4f}" if d is not None else "—",
+                    peak.origin,
+                    "Yes" if peak.enabled else "No",
+                ]
+            )
+        return list(PEAK_TABLE_COLUMNS), rows
+
+    def detail_table_title(self) -> str:
+        return "Detected peaks"
 
     def to_dict(self) -> dict:
         data = super().to_dict()
