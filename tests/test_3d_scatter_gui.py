@@ -835,3 +835,190 @@ def test_full_figure_export_preserves_a_grouped_3d_family_in_a_mixed_layout(qapp
     assert "Panel 3" in content
     assert "25" in content and "35" in content
     window.close()
+
+
+# --- Publication polish: dirty state, undo/redo, Focus/Extract/Export --------------
+
+
+def test_grid_style_edit_marks_dirty_and_creates_one_undo_checkpoint(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.tool_drawer.show_page("axes")
+    window.properties_panel.refresh()
+    window._set_dirty(False)
+    undo_count_before = len(window._undo_manager._undo)
+
+    window.properties_panel.d3_grid_style_combo.setCurrentIndex(window.properties_panel.d3_grid_style_combo.findData(":"))
+
+    assert window._dirty is True
+    assert len(window._undo_manager._undo) == undo_count_before + 1
+    window.close()
+
+
+def test_pane_opacity_edit_marks_dirty(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.tool_drawer.show_page("axes")
+    window.properties_panel.refresh()
+    window._set_dirty(False)
+
+    window.properties_panel.d3_pane_alpha_spin.setValue(0.4)
+
+    assert window._dirty is True
+    assert panel.pane_alpha == 0.4
+    window.close()
+
+
+def test_legend_columns_edit_marks_dirty_and_undo_reverts_it(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.tool_drawer.show_page("axes")
+    window.properties_panel.refresh()
+
+    window.properties_panel.d3_legend_ncol_spin.setValue(3)
+    assert panel.legend_ncol == 3
+
+    window._on_undo()
+    assert window.figure_model.panels[1].legend_ncol == 1
+    window.close()
+
+
+def test_aspect_edit_marks_dirty(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.tool_drawer.show_page("axes")
+    window.properties_panel.refresh()
+    window._set_dirty(False)
+
+    window.properties_panel.d3_aspect_combo.setCurrentIndex(window.properties_panel.d3_aspect_combo.findData("equal"))
+
+    assert window._dirty is True
+    assert panel.aspect_mode == "equal"
+    window.close()
+
+
+def test_tick_spacing_edit_marks_dirty(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window.tool_drawer.show_page("axes")
+    window.properties_panel.refresh()
+    window._set_dirty(False)
+
+    window.properties_panel.d3_major_spacing_x_spin.setValue(0.1)
+
+    assert window._dirty is True
+    assert panel.major_tick_spacing_x == 0.1
+    window.close()
+
+
+def test_mouse_rotation_still_never_dirties_with_polish_fields_present(qapp, monkeypatch):
+    """Regression guard: adding grid/pane/legend/aspect/tick controls to
+    the same page as the camera controls must not accidentally change the
+    ephemeral-rotation contract."""
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    window.toolbar_panel_combo.setCurrentIndex(1)
+    window._rerender()
+    window._set_dirty(False)
+
+    ax = window.plot_canvas.active_axes(window.figure_model)
+    ax.view_init(elev=44.0, azim=99.0)
+
+    assert window._dirty is False
+    assert panel.elevation != 44.0
+    window.close()
+
+
+def test_focus_preserves_grid_pane_legend_aspect_tick_styling(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    panel.grid_color = "#ff00ff"
+    panel.pane_visible = False
+    panel.legend_ncol = 3
+    panel.aspect_mode = "equal"
+    panel.major_tick_spacing_x = 0.1
+    window.toolbar_panel_combo.setCurrentIndex(1)
+
+    window._focus_panel(panel)
+
+    focused = window._current_focused_panel()
+    assert focused is panel  # same original object, not a clone
+    assert focused.grid_color == "#ff00ff"
+    assert focused.pane_visible is False
+    assert focused.legend_ncol == 3
+    assert focused.aspect_mode == "equal"
+    assert focused.major_tick_spacing_x == 0.1
+    window._restore_multi_panel_view()
+    assert window.figure_model.panels[1] is panel
+    window.close()
+
+
+def test_extract_preserves_polish_styling_in_an_independent_structure(qapp, monkeypatch):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    panel.grid_linestyle = "--"
+    panel.pane_color = "#00ffff"
+    panel.legend_frameon = False
+    window.toolbar_panel_combo.setCurrentIndex(1)
+
+    window._on_extract_panel_requested()
+
+    extracted = window._project.workbenches[-1].figure.panels[0]
+    assert extracted.grid_linestyle == "--"
+    assert extracted.pane_color == "#00ffff"
+    assert extracted.legend_frameon is False
+    assert extracted.id != panel.id  # independent structure
+    # Original untouched.
+    assert window._project.workbenches[0].figure.panels[1] is panel
+    assert panel.grid_linestyle == "--"
+
+
+def test_export_panel_reflects_grid_pane_legend_styling(qapp, monkeypatch, tmp_path):
+    window, _dataset = _make_3_panel_window()
+    diode = _make_diode_dataset()
+    window.dataset_manager.add(diode)
+    window.plot3d_panel.set_manager(window.dataset_manager)
+    panel = _make_grouped_panel_at(window, diode, 1, monkeypatch)
+    panel.legend_ncol = 2
+    window.toolbar_panel_combo.setCurrentIndex(1)
+
+    dialog = ExportFigureDialog(
+        window.figure_model, window.plot_canvas, window, panel=panel, dataset_manager=window.dataset_manager
+    )
+    dialog.format_combo.setCurrentText("SVG")
+    out_path = tmp_path / "polished_panel.svg"
+    dialog.path_edit.setText(str(out_path))
+    dialog._on_accept()
+
+    assert out_path.exists()
+    assert out_path.stat().st_size > 0
+    window.close()

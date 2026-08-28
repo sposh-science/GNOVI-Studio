@@ -348,3 +348,143 @@ def test_3d_legend_location_combo_excludes_outside_placements(qapp):
 
     assert "outside right" not in items
     assert "outside bottom" not in items
+
+
+# --- Publication polish: aspect / ticks / grid style / panes / legend columns ---
+
+
+def test_3d_aspect_combo_defaults_to_auto(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+    panel.refresh()
+
+    assert panel.d3_aspect_combo.currentData() == "auto"
+
+
+def test_3d_aspect_combo_updates_the_panel(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    panel.d3_aspect_combo.setCurrentIndex(panel.d3_aspect_combo.findData("equal"))
+
+    assert figure.active_panel.aspect_mode == "equal"
+
+
+def test_3d_tick_spacing_updates_the_panel_per_axis(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    panel.d3_major_spacing_x_spin.setValue(5.0)
+    panel.d3_minor_spacing_z_spin.setValue(0.5)
+
+    assert figure.active_panel.major_tick_spacing_x == 5.0
+    assert figure.active_panel.minor_tick_spacing_z == 0.5
+    # Untouched axes remain None.
+    assert figure.active_panel.major_tick_spacing_y is None
+
+
+def test_3d_tick_spacing_zero_clears_to_none(qapp):
+    figure = _make_3d_figure()
+    figure.active_panel.major_tick_spacing_x = 5.0
+    panel = FigurePropertiesPanel(figure)
+    panel.refresh()
+
+    panel.d3_major_spacing_x_spin.setValue(0.0)
+
+    assert figure.active_panel.major_tick_spacing_x is None
+
+
+def test_3d_grid_style_width_alpha_update_the_panel(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    panel.d3_grid_style_combo.setCurrentIndex(panel.d3_grid_style_combo.findData(":"))
+    panel.d3_grid_width_spin.setValue(3.5)
+    panel.d3_grid_alpha_spin.setValue(0.25)
+
+    assert figure.active_panel.grid_linestyle == ":"
+    assert figure.active_panel.grid_linewidth == 3.5
+    assert figure.active_panel.grid_alpha == 0.25
+
+
+def test_3d_grid_custom_color_toggle_and_clear(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    panel.d3_grid_custom_color_check.setChecked(True)
+    assert figure.active_panel.grid_color is not None
+    assert panel.d3_grid_color_button.isEnabled() is True
+
+    panel.d3_grid_custom_color_check.setChecked(False)
+    assert figure.active_panel.grid_color is None
+    assert panel.d3_grid_color_button.isEnabled() is False
+
+
+def test_3d_pane_visible_and_alpha_update_the_panel(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    panel.d3_pane_visible_check.setChecked(False)
+    panel.d3_pane_alpha_spin.setValue(0.4)
+
+    assert figure.active_panel.pane_visible is False
+    assert figure.active_panel.pane_alpha == 0.4
+
+
+def test_3d_pane_custom_color_toggle_and_clear(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    panel.d3_pane_custom_color_check.setChecked(True)
+    assert figure.active_panel.pane_color is not None
+    assert panel.d3_pane_color_button.isEnabled() is True
+
+    panel.d3_pane_custom_color_check.setChecked(False)
+    assert figure.active_panel.pane_color is None
+    assert panel.d3_pane_color_button.isEnabled() is False
+
+
+def test_3d_legend_ncol_and_frame_update_the_panel(qapp):
+    figure = _make_3d_figure()
+    panel = FigurePropertiesPanel(figure)
+
+    panel.d3_legend_ncol_spin.setValue(4)
+    panel.d3_legend_frame_check.setChecked(False)
+
+    assert figure.active_panel.legend_ncol == 4
+    assert figure.active_panel.legend_frameon is False
+
+
+def test_3d_polish_controls_load_current_panel_state_on_refresh(qapp):
+    figure = _make_3d_figure()
+    figure.active_panel.aspect_mode = "equal"
+    figure.active_panel.grid_linestyle = "--"
+    figure.active_panel.legend_ncol = 5
+    figure.active_panel.pane_visible = False
+    panel = FigurePropertiesPanel(figure)
+
+    panel.refresh()
+
+    assert panel.d3_aspect_combo.currentData() == "equal"
+    assert panel.d3_grid_style_combo.currentData() == "--"
+    assert panel.d3_legend_ncol_spin.value() == 5
+    assert panel.d3_pane_visible_check.isChecked() is False
+
+
+def test_3d_polish_controls_affect_only_the_active_panel3d(qapp):
+    """Two Panel3D instances in the same figure -- editing the active
+    one's grid/legend/aspect must never leak into the other, matching the
+    same isolation the architecture inspection verified for Series3D
+    editing."""
+    figure = _make_3d_figure()
+    other_panel3d = _make_3d_figure().panels[0]
+    figure.panels.append(other_panel3d)
+    panel = FigurePropertiesPanel(figure)
+
+    panel.d3_aspect_combo.setCurrentIndex(panel.d3_aspect_combo.findData("equal"))
+    panel.d3_legend_ncol_spin.setValue(4)
+
+    assert figure.panels[0].aspect_mode == "equal"
+    assert figure.panels[0].legend_ncol == 4
+    assert other_panel3d.aspect_mode == "auto"
+    assert other_panel3d.legend_ncol == 1

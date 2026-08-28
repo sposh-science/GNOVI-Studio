@@ -434,3 +434,128 @@ def test_graph_library_preserves_a_grouped_curve_family():
     assert loaded is True
     assert len(target_figure.active_panel.series) == 2
     assert all(s.dataset is dataset for s in target_figure.active_panel.series)
+
+
+# --- Panel3D: publication-polish fields (grid style/panes/legend/aspect/ticks) ---
+
+
+def test_panel3d_polish_field_defaults_reproduce_current_rendering():
+    """Defaults must exactly match Matplotlib's own unstyled `Axes3D`
+    appearance (confirmed directly against the installed Matplotlib
+    version -- see `matplotlib_backend._apply_3d_grid_style`'s own
+    docstring), so a project saved before these fields existed renders
+    identically after loading."""
+    panel = Panel3D()
+    assert panel.grid_linestyle == "-"
+    assert panel.grid_linewidth == 0.8
+    assert panel.grid_alpha == 1.0
+    assert panel.grid_color is None
+    assert panel.pane_visible is True
+    assert panel.pane_color is None
+    assert panel.pane_alpha == 1.0
+    assert panel.legend_ncol == 1
+    assert panel.legend_frameon is True
+    assert panel.aspect_mode == "auto"
+    assert panel.major_tick_spacing_x is None
+    assert panel.major_tick_spacing_y is None
+    assert panel.major_tick_spacing_z is None
+    assert panel.minor_tick_spacing_x is None
+    assert panel.minor_tick_spacing_y is None
+    assert panel.minor_tick_spacing_z is None
+
+
+def test_panel3d_polish_fields_persist_through_to_dict_from_dict():
+    panel = Panel3D(
+        grid_linestyle="--", grid_linewidth=2.5, grid_alpha=0.4, grid_color="#ff0000",
+        pane_visible=False, pane_color="#00ff00", pane_alpha=0.6,
+        legend_ncol=3, legend_frameon=False,
+        aspect_mode="equal",
+        major_tick_spacing_x=1.0, major_tick_spacing_y=2.0, major_tick_spacing_z=3.0,
+        minor_tick_spacing_x=0.1, minor_tick_spacing_y=0.2, minor_tick_spacing_z=0.3,
+    )
+    restored = Panel3D.from_dict(panel.to_dict(), {})
+    assert restored.grid_linestyle == "--"
+    assert restored.grid_linewidth == 2.5
+    assert restored.grid_alpha == 0.4
+    assert restored.grid_color == "#ff0000"
+    assert restored.pane_visible is False
+    assert restored.pane_color == "#00ff00"
+    assert restored.pane_alpha == 0.6
+    assert restored.legend_ncol == 3
+    assert restored.legend_frameon is False
+    assert restored.aspect_mode == "equal"
+    assert restored.major_tick_spacing_x == 1.0
+    assert restored.major_tick_spacing_y == 2.0
+    assert restored.major_tick_spacing_z == 3.0
+    assert restored.minor_tick_spacing_x == 0.1
+    assert restored.minor_tick_spacing_y == 0.2
+    assert restored.minor_tick_spacing_z == 0.3
+
+
+def test_panel3d_polish_fields_default_for_a_pre_polish_dict():
+    """A dict saved before this milestone has none of these keys at all --
+    must still load with defaults that reproduce prior (unstyled)
+    rendering, confirming no `PROJECT_FORMAT_VERSION` bump was needed."""
+    legacy_dict = Panel3D().to_dict()
+    for key in (
+        "grid_linestyle", "grid_linewidth", "grid_alpha", "grid_color",
+        "pane_visible", "pane_color", "pane_alpha",
+        "legend_ncol", "legend_frameon", "aspect_mode",
+        "major_tick_spacing_x", "major_tick_spacing_y", "major_tick_spacing_z",
+        "minor_tick_spacing_x", "minor_tick_spacing_y", "minor_tick_spacing_z",
+    ):
+        del legacy_dict[key]
+    restored = Panel3D.from_dict(legacy_dict, {})
+    assert restored.grid_linestyle == "-"
+    assert restored.grid_alpha == 1.0
+    assert restored.pane_visible is True
+    assert restored.legend_ncol == 1
+    assert restored.aspect_mode == "auto"
+    assert restored.major_tick_spacing_x is None
+
+
+def test_panel3d_polish_fields_survive_deepcopy():
+    """Undo/redo relies on plain `copy.deepcopy` (see `gui.undo_manager.
+    snapshot_figure`) -- confirm the new fields round-trip through it like
+    any other dataclass field (no custom `__deepcopy__`/`__reduce__` on
+    `Panel3D` that could silently drop them)."""
+    import copy
+
+    panel = Panel3D(grid_color="#123456", aspect_mode="equal", legend_ncol=4)
+    cloned = copy.deepcopy(panel)
+    assert cloned.grid_color == "#123456"
+    assert cloned.aspect_mode == "equal"
+    assert cloned.legend_ncol == 4
+    assert cloned is not panel
+
+
+def test_graph_library_preserves_publication_polish_styling():
+    from gnovi_plot.data.dataset_manager import DatasetManager
+    from gnovi_plot.plotting.graph_library import GraphLibrary
+
+    dataset = _make_dataset()
+    manager = DatasetManager()
+    manager.add(dataset)
+    panel = Panel3D(
+        title="Polished", grid_color="#ff00ff", pane_visible=False, legend_ncol=3,
+        aspect_mode="equal", major_tick_spacing_x=1.0,
+    )
+    panel.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
+    source_figure = GnoviFigure(panels=[panel])
+
+    library = GraphLibrary()
+    graph = library.save_panel_as_graph(source_figure, "Polished Graph", manager)
+    reloaded_library = GraphLibrary.from_dict(library.to_dict(), {dataset.id: dataset})
+    reloaded_panel = reloaded_library.get(graph.id).panel
+
+    assert reloaded_panel.grid_color == "#ff00ff"
+    assert reloaded_panel.pane_visible is False
+    assert reloaded_panel.legend_ncol == 3
+    assert reloaded_panel.aspect_mode == "equal"
+    assert reloaded_panel.major_tick_spacing_x == 1.0
+
+    target_figure = GnoviFigure()
+    loaded = reloaded_library.load_graph_into_panel(graph.id, target_figure, manager)
+    assert loaded is True
+    assert target_figure.active_panel.aspect_mode == "equal"
+    assert target_figure.active_panel.legend_ncol == 3

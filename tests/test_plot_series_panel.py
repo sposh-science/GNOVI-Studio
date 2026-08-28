@@ -289,3 +289,89 @@ def test_editing_line_style_and_width_updates_the_series(qapp):
     assert figure.active_panel.series[0].line_style == "--"
     assert figure.active_panel.series[0].line_width == 3.0
     panel.close()
+
+
+# --- Contrast warning parity: same algorithm, applied to Series3D too ---------------
+
+
+def test_low_contrast_manual_3d_color_shows_the_3d_banner_not_the_2d_one(qapp):
+    figure = _make_3d_figure()
+    figure.active_panel.series[0].color = "#fafafa"
+    figure.active_panel.series[0].color_is_manual = True
+    panel = PlotSeriesPanel(figure)
+
+    panel.update_contrast_warnings(dark_mode=False)
+
+    assert len(panel._low_contrast_series) == 1
+    assert "low contrast" in panel.d3_contrast_warning_label.text()
+    assert panel.contrast_warning_label.text() == ""
+    panel.close()
+
+
+def test_readable_manual_3d_color_shows_no_warning(qapp):
+    figure = _make_3d_figure()
+    figure.active_panel.series[0].color = "#1f77b4"
+    figure.active_panel.series[0].color_is_manual = True
+    panel = PlotSeriesPanel(figure)
+
+    panel.update_contrast_warnings(dark_mode=False)
+
+    assert panel._low_contrast_series == []
+    assert panel.d3_contrast_warning_label.text() == ""
+    panel.close()
+
+
+def test_automatic_3d_color_is_never_flagged(qapp):
+    figure = _make_3d_figure()
+    figure.active_panel.series[0].color = "#fafafa"
+    # color_is_manual left False -- auto-assigned colors are never flagged.
+    panel = PlotSeriesPanel(figure)
+
+    panel.update_contrast_warnings(dark_mode=False)
+
+    assert panel._low_contrast_series == []
+    panel.close()
+
+
+def test_optimize_colors_for_theme_works_on_3d_series(qapp):
+    figure = _make_3d_figure()
+    series = figure.active_panel.series[0]
+    series.color = "#fafafa"
+    series.color_is_manual = True
+    panel = PlotSeriesPanel(figure)
+    panel.update_contrast_warnings(dark_mode=False)
+
+    panel.d3_optimize_colors_button.click()
+
+    assert series.color != "#fafafa"
+    assert series.color_is_manual is False
+    assert panel.d3_contrast_warning_label.text() == ""
+    panel.close()
+
+
+def test_switching_from_3d_to_2d_panel_shows_the_correct_banner(qapp):
+    """No stale banner from the previously-active panel's type -- mirrors
+    the same "no stale controls" guarantee already verified for the
+    adaptive stack pages themselves."""
+    figure = _make_3d_figure()
+    figure.active_panel.series[0].color = "#fafafa"
+    figure.active_panel.series[0].color_is_manual = True
+    two_d_panel = GnoviFigure().panels[0]
+    from gnovi_plot.plotting.series import PlotSeries
+
+    two_d_series = PlotSeries.line(_make_dataset(), "x", "y", color="#fafafa")
+    two_d_series.color_is_manual = True
+    two_d_panel.add_series(two_d_series)
+    figure.panels.append(two_d_panel)
+    panel = PlotSeriesPanel(figure)
+    panel.update_contrast_warnings(dark_mode=False)
+    assert panel.d3_contrast_warning_label.text() != ""
+    assert panel.contrast_warning_label.text() == ""
+
+    figure.set_active_panel(1)
+    panel.refresh()
+    panel.update_contrast_warnings(dark_mode=False)
+
+    assert panel.contrast_warning_label.text() != ""
+    assert panel.d3_contrast_warning_label.text() == ""
+    panel.close()
