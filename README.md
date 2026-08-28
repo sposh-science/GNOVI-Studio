@@ -4,6 +4,8 @@
 [![CodeQL](https://github.com/wavicles/GNOVI-Studio/actions/workflows/codeql.yml/badge.svg)](https://github.com/wavicles/GNOVI-Studio/actions/workflows/codeql.yml)
 [![Python](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fwavicles%2FGNOVI-Studio%2Fmain%2Fpyproject.toml&query=%24.project.requires-python&label=python)](pyproject.toml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22066802.svg)](https://doi.org/10.5281/zenodo.22066802)
+[![Software Heritage](https://archive.softwareheritage.org/badge/directory/788767f5421078a3a97b3c9cc94a4c310c90c075/)](https://archive.softwareheritage.org/swh:1:dir:788767f5421078a3a97b3c9cc94a4c310c90c075;origin=https://doi.org/10.5281/zenodo.22066802;visit=swh:1:snp:e3fdd6a23a82d9ec656225cd5c3612e15d68e528;anchor=swh:1:rel:0938fb937d72a19cbe55c00b33e3cb9b4ec486c6;path=wavicles-GNOVI-Studio-ad7c865)
 
 **Scientific Plotting & Analysis Studio** — a cross-platform Python desktop
 application for scientific plotting, experimental data analysis, and
