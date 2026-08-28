@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QSpinBox,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -26,9 +27,10 @@ from gnovi_plot.gui.styles import STALE_COLOR, WARNING_COLOR
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.plotting.backends.matplotlib_backend import is_low_contrast
-from gnovi_plot.plotting.figure import GnoviFigure, Panel, theme_color_cycle
+from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D, theme_color_cycle
 from gnovi_plot.plotting.graph_library import GraphLibrary
 from gnovi_plot.plotting.series import PlotSeries, PlotType
+from gnovi_plot.plotting.series3d import Series3D
 from gnovi_plot.plotting.stacking import auto_stack_offsets, reset_offsets
 
 _LINE_STYLE_OPTIONS = [
@@ -49,6 +51,14 @@ _MARKER_OPTIONS = [
     ("Star", "*"),
 ]
 
+# Same codes as `_MARKER_OPTIONS` minus "None" -- a 3D scatter point with no
+# marker at all would render nothing, unlike a 2D line plot (where
+# marker="" just means "no marker dots on the line", the line itself still
+# visible). Mirrors the set `gui.dialogs.add_3d_scatter_dialog` used to
+# offer (see this milestone's own architecture inspection on that dialog's
+# retirement).
+_MARKER_OPTIONS_3D = [opt for opt in _MARKER_OPTIONS if opt[1]]
+
 _HIST_MODE_OPTIONS = [
     ("Frequency", "frequency"),
     ("Percentage", "percentage"),
@@ -60,15 +70,27 @@ _OFFSET_RANGE = 1e9
 
 
 class PlotSeriesPanel(QWidget):
-    """Lists every PlotSeries on the currently active Panel and edits the
-    selected one, plus panel-wide stacked/offset controls.
+    """Lists every series on the currently active Panel and edits the
+    selected one, plus (2D only) panel-wide stacked/offset controls.
 
-    Editing a series mutates only that PlotSeries instance; nothing else on
-    the figure is touched. `changed` is emitted after every mutation so the
+    Editing a series mutates only that series instance; nothing else on the
+    figure is touched. `changed` is emitted after every mutation so the
     owner can re-render the plot. Since `figure.series`/`add_series`/etc.
     delegate to `figure.active_panel`, this panel automatically follows
     whichever panel is active -- call `refresh()` again after switching
     panels to reload the list for the new one.
+
+    Internally a `QStackedWidget` of two pages, switched on
+    `isinstance(figure.active_panel, Panel3D)` in `refresh()` -- the 2D
+    page (`PlotSeries`: line width/style, marker fill, histogram bins/mode,
+    stacking offsets) and the 3D page (`Series3D`: a deliberately smaller
+    field set, see that class's own docstring). Every EXISTING widget
+    attribute this class exposed before 3D support (`series_list`,
+    `remove_button`, `label_edit`, etc.) stays a direct attribute of this
+    outer object, unmoved -- only which container widget currently PARENTS
+    it changed (now one QStackedWidget page instead of this widget's own
+    top-level layout directly), so no caller reaching into
+    `panel.series_list`/`panel.label_edit`/etc. needed to change.
     """
 
     changed = Signal()
@@ -87,6 +109,22 @@ class PlotSeriesPanel(QWidget):
 
         self.active_panel_label = ActivePanelLabel(figure, get_graph_library)
 
+        self._stack = QStackedWidget()
+        self._page_2d = self._build_2d_page()
+        self._page_3d = self._build_3d_page()
+        self._stack.addWidget(self._page_2d)
+        self._stack.addWidget(self._page_3d)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.active_panel_label)
+        layout.addWidget(self._stack)
+        layout.addStretch(1)
+
+        self.refresh()
+
+    # --- 2D page (PlotSeries) -----------------------------------------------
+
+    def _build_2d_page(self) -> QWidget:
         self.series_list = QListWidget()
         self.remove_button = QPushButton("Remove Series")
         self.clear_button = QPushButton("Clear All")
@@ -212,12 +250,13 @@ class PlotSeriesPanel(QWidget):
         self.props_section = CollapsibleSection("Series Properties", props_group)
         self.stack_section = CollapsibleSection("Stacked / Offset Curves", stack_group)
 
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.active_panel_label)
-        layout.addWidget(self.list_section)
-        layout.addWidget(self.props_section)
-        layout.addWidget(self.stack_section)
-        layout.addStretch(1)
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.addWidget(self.list_section)
+        page_layout.addWidget(self.props_section)
+        page_layout.addWidget(self.stack_section)
+        page_layout.addStretch(1)
 
         self.series_list.currentRowChanged.connect(self._on_selection_changed)
         self.remove_button.clicked.connect(self._on_remove_clicked)
@@ -242,10 +281,76 @@ class PlotSeriesPanel(QWidget):
         self.reset_offsets_button.clicked.connect(self._on_reset_offsets)
         self.optimize_colors_button.clicked.connect(self._on_optimize_colors)
 
-        self.refresh()
+        return page
+
+    # --- 3D page (Series3D) --------------------------------------------------
+
+    def _build_3d_page(self) -> QWidget:
+        """`Series3D`'s deliberately smaller field set (see that class's own
+        docstring): label/color/marker/marker size/transparency/visible --
+        no line width/style, marker fill, histogram, z-order, or stacking,
+        none of which `Series3D` has."""
+        self.series3d_list = QListWidget()
+        self.remove_3d_button = QPushButton("Remove Series")
+        self.clear_3d_button = QPushButton("Clear All")
+
+        self.d3_label_edit = QLineEdit()
+        self.d3_color_button = QPushButton()
+        self.d3_color_button.setFixedWidth(48)
+        self.d3_visible_check = QCheckBox("Visible")
+
+        self.d3_marker_combo = QComboBox()
+        for text, code in _MARKER_OPTIONS_3D:
+            self.d3_marker_combo.addItem(text, code)
+
+        self.d3_marker_size_spin = QDoubleSpinBox()
+        self.d3_marker_size_spin.setRange(1.0, 30.0)
+
+        self.d3_alpha_spin = QDoubleSpinBox()
+        self.d3_alpha_spin.setRange(0.05, 1.0)
+        self.d3_alpha_spin.setSingleStep(0.05)
+
+        list_group = QGroupBox("3D Series")
+        list_layout = QVBoxLayout(list_group)
+        list_layout.addWidget(self.series3d_list)
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.remove_3d_button)
+        buttons.addWidget(self.clear_3d_button)
+        list_layout.addLayout(buttons)
+
+        props_group = QGroupBox("Series Properties")
+        form = QFormLayout(props_group)
+        form.addRow("Label", self.d3_label_edit)
+        form.addRow("Color", self.d3_color_button)
+        form.addRow("Marker", self.d3_marker_combo)
+        form.addRow("Marker size", self.d3_marker_size_spin)
+        form.addRow("Transparency", self.d3_alpha_spin)
+        form.addRow(self.d3_visible_check)
+
+        self.list_section_3d = CollapsibleSection("3D Series", list_group)
+        self.props_section_3d = CollapsibleSection("Series Properties", props_group)
+
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.addWidget(self.list_section_3d)
+        page_layout.addWidget(self.props_section_3d)
+        page_layout.addStretch(1)
+
+        self.series3d_list.currentRowChanged.connect(self._on_3d_selection_changed)
+        self.remove_3d_button.clicked.connect(self._on_3d_remove_clicked)
+        self.clear_3d_button.clicked.connect(self._on_3d_clear_clicked)
+        self.d3_label_edit.editingFinished.connect(self._apply_3d_label)
+        self.d3_color_button.clicked.connect(self._pick_3d_color)
+        self.d3_visible_check.toggled.connect(self._apply_3d_visible)
+        self.d3_marker_combo.currentIndexChanged.connect(self._apply_3d_marker)
+        self.d3_marker_size_spin.valueChanged.connect(self._apply_3d_marker_size)
+        self.d3_alpha_spin.valueChanged.connect(self._apply_3d_alpha)
+
+        return page
 
     @staticmethod
-    def _item_text(series: PlotSeries) -> str:
+    def _item_text(series: PlotSeries | Series3D) -> str:
         return f"{series.label}  [stale — re-add]" if series.stale else series.label
 
     def set_figure(self, figure: GnoviFigure) -> None:
@@ -256,21 +361,14 @@ class PlotSeriesPanel(QWidget):
 
     def refresh(self, select_id: str | None = None) -> None:
         self.active_panel_label.refresh(self._figure)
-        # This whole page is 2D-`PlotSeries`-specific (line width/style,
-        # marker fill, histogram bins/mode, stacking offsets -- none of
-        # which `Series3D` has, see `plotting.series3d.Series3D`'s own
-        # docstring). A `Panel3D`'s one series is edited through
-        # `Add3DScatterDialog` instead (see `MainWindow._on_add_3d_
-        # scatter_requested`); disabling this whole page when a `Panel3D`
-        # is active avoids the editor fields below crashing against a
-        # `Series3D`'s different field set.
-        self.setEnabled(isinstance(self._figure.active_panel, Panel))
-        if not isinstance(self._figure.active_panel, Panel):
-            self.series_list.blockSignals(True)
-            self.series_list.clear()
-            self.series_list.blockSignals(False)
-            self._on_selection_changed(-1)
-            return
+        if isinstance(self._figure.active_panel, Panel3D):
+            self._stack.setCurrentWidget(self._page_3d)
+            self._refresh_3d_page(select_id=select_id)
+        else:
+            self._stack.setCurrentWidget(self._page_2d)
+            self._refresh_2d_page(select_id=select_id)
+
+    def _refresh_2d_page(self, select_id: str | None = None) -> None:
         self.series_list.blockSignals(True)
         self.series_list.clear()
         target_row = -1
@@ -318,8 +416,8 @@ class PlotSeriesPanel(QWidget):
         ):
             widget.setEnabled(enabled)
 
-    def _set_color_swatch(self, color: str | None) -> None:
-        self.color_button.setStyleSheet(f"background-color: {color or _DEFAULT_COLOR};")
+    def _set_color_swatch(self, button: QPushButton, color: str | None) -> None:
+        button.setStyleSheet(f"background-color: {color or _DEFAULT_COLOR};")
 
     def _on_selection_changed(self, row: int) -> None:
         series = self._current_series()
@@ -329,7 +427,7 @@ class PlotSeriesPanel(QWidget):
 
         self._updating = True
         self.label_edit.setText(series.label)
-        self._set_color_swatch(series.color)
+        self._set_color_swatch(self.color_button, series.color)
         self.visible_check.setChecked(series.visible)
         self.width_spin.setValue(series.line_width)
         self.style_combo.setCurrentIndex(max(self.style_combo.findData(series.line_style), 0))
@@ -384,7 +482,7 @@ class PlotSeriesPanel(QWidget):
         # theme switch or "Optimize Colors for Theme" auto-pass (see
         # `update_contrast_warnings`/`_on_optimize_colors` below).
         series.color_is_manual = True
-        self._set_color_swatch(series.color)
+        self._set_color_swatch(self.color_button, series.color)
         self.update_contrast_warnings(self._dark_mode)
         self.changed.emit()
 
@@ -506,17 +604,25 @@ class PlotSeriesPanel(QWidget):
         self._on_selection_changed(self.series_list.currentRow())
         self.changed.emit()
 
-    # --- Theme-aware contrast warning (manual colors only) -----------------
+    # --- Theme-aware contrast warning (manual colors only, 2D only) --------
 
     def update_contrast_warnings(self, dark_mode: bool) -> None:
         """Refresh the non-modal low-contrast banner for the active panel's
         visible, manually-colored series against the current Plot Theme.
         Call after every render (theme switch, series edit, panel switch) --
-        see `MainWindow._rerender`. Never changes a color itself."""
+        see `MainWindow._rerender`. Never changes a color itself. A no-op
+        (and hides the banner) when the active panel is a `Panel3D` -- 3D
+        scatter series aren't checked for contrast in this milestone."""
         self._dark_mode = dark_mode
+        panel = self._figure.active_panel
+        if not isinstance(panel, Panel):
+            self._low_contrast_series = []
+            self.contrast_warning_label.setVisible(False)
+            self.optimize_colors_button.setVisible(False)
+            return
         self._low_contrast_series = [
             series
-            for series in self._figure.active_panel.series
+            for series in panel.series
             if series.visible
             and not series.stale
             and series.color_is_manual
@@ -542,4 +648,137 @@ class PlotSeriesPanel(QWidget):
         current = self._current_series()
         self.refresh(select_id=current.id if current is not None else None)
         self.update_contrast_warnings(self._dark_mode)
+        self.changed.emit()
+
+    # --- 3D page behavior ----------------------------------------------------
+
+    def _refresh_3d_page(self, select_id: str | None = None) -> None:
+        panel = self._figure.active_panel
+        series_list = panel.series if isinstance(panel, Panel3D) else []
+
+        self.series3d_list.blockSignals(True)
+        self.series3d_list.clear()
+        target_row = -1
+        for i, series in enumerate(series_list):
+            item = QListWidgetItem(self._item_text(series))
+            if series.stale:
+                item.setForeground(QColor(STALE_COLOR))
+            item.setData(Qt.UserRole, series.id)
+            self.series3d_list.addItem(item)
+            if select_id is not None and series.id == select_id:
+                target_row = i
+        self.series3d_list.blockSignals(False)
+
+        if target_row >= 0:
+            self.series3d_list.setCurrentRow(target_row)
+        elif self.series3d_list.count() > 0:
+            self.series3d_list.setCurrentRow(0)
+        else:
+            self.series3d_list.setCurrentRow(-1)
+            self._on_3d_selection_changed(-1)
+
+    def _current_3d_series(self) -> Series3D | None:
+        item = self.series3d_list.currentItem()
+        if item is None:
+            return None
+        panel = self._figure.active_panel
+        if not isinstance(panel, Panel3D):
+            return None
+        return panel.get_series(item.data(Qt.UserRole))
+
+    def _set_3d_editors_enabled(self, enabled: bool) -> None:
+        for widget in (
+            self.d3_label_edit,
+            self.d3_color_button,
+            self.d3_visible_check,
+            self.d3_marker_combo,
+            self.d3_marker_size_spin,
+            self.d3_alpha_spin,
+        ):
+            widget.setEnabled(enabled)
+
+    def _on_3d_selection_changed(self, _row: int) -> None:
+        series = self._current_3d_series()
+        self._set_3d_editors_enabled(series is not None)
+        if series is None:
+            return
+        self._updating = True
+        self.d3_label_edit.setText(series.label)
+        self._set_color_swatch(self.d3_color_button, series.color)
+        self.d3_visible_check.setChecked(series.visible)
+        self.d3_marker_combo.setCurrentIndex(max(self.d3_marker_combo.findData(series.marker), 0))
+        self.d3_marker_size_spin.setValue(series.marker_size)
+        self.d3_alpha_spin.setValue(series.alpha)
+        self._updating = False
+
+    def _refresh_current_3d_item_text(self) -> None:
+        item = self.series3d_list.currentItem()
+        series = self._current_3d_series()
+        if item is not None and series is not None:
+            item.setText(self._item_text(series))
+
+    def _apply_3d_label(self) -> None:
+        series = self._current_3d_series()
+        if series is None or self._updating:
+            return
+        series.label = self.d3_label_edit.text()
+        self._refresh_current_3d_item_text()
+        self.changed.emit()
+
+    def _pick_3d_color(self) -> None:
+        series = self._current_3d_series()
+        if series is None:
+            return
+        initial = QColor(series.color or _DEFAULT_COLOR)
+        color = QColorDialog.getColor(initial, self, "Series Color")
+        if not color.isValid():
+            return
+        series.color = color.name()
+        series.color_is_manual = True
+        self._set_color_swatch(self.d3_color_button, series.color)
+        self.changed.emit()
+
+    def _apply_3d_visible(self, checked: bool) -> None:
+        series = self._current_3d_series()
+        if series is None or self._updating:
+            return
+        series.visible = checked
+        self.changed.emit()
+
+    def _apply_3d_marker(self, _index: int) -> None:
+        series = self._current_3d_series()
+        if series is None or self._updating:
+            return
+        series.marker = self.d3_marker_combo.currentData()
+        self.changed.emit()
+
+    def _apply_3d_marker_size(self, value: float) -> None:
+        series = self._current_3d_series()
+        if series is None or self._updating:
+            return
+        series.marker_size = value
+        self.changed.emit()
+
+    def _apply_3d_alpha(self, value: float) -> None:
+        series = self._current_3d_series()
+        if series is None or self._updating:
+            return
+        series.alpha = value
+        self.changed.emit()
+
+    def _on_3d_remove_clicked(self) -> None:
+        panel = self._figure.active_panel
+        series = self._current_3d_series()
+        if series is None or not isinstance(panel, Panel3D):
+            return
+        panel.remove_series(series.id)
+        self.refresh()
+        self.changed.emit()
+
+    def _on_3d_clear_clicked(self) -> None:
+        panel = self._figure.active_panel
+        if not isinstance(panel, Panel3D):
+            return
+        panel.clear_series()
+        self.refresh()
         self.changed.emit()

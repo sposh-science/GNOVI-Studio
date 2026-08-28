@@ -4,13 +4,25 @@ from PySide6.QtGui import QColor
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.gui.widgets import plot_series_panel as plot_series_panel_module
 from gnovi_plot.gui.widgets.plot_series_panel import PlotSeriesPanel
-from gnovi_plot.plotting.figure import GnoviFigure
+from gnovi_plot.plotting.figure import GnoviFigure, Panel3D
 from gnovi_plot.plotting.series import PlotSeries
+from gnovi_plot.plotting.series3d import Series3D
 
 
 def _make_dataset(name="d"):
     df = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
     return Dataset(name=name, dataframe=df)
+
+
+def _make_3d_dataset(name="d3"):
+    df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "y": [1.0, 2.0, 3.0], "z": [1.0, 2.0, 3.0]})
+    return Dataset(name=name, dataframe=df)
+
+
+def _make_3d_figure():
+    panel3d = Panel3D()
+    panel3d.add_series(Series3D(dataset=_make_3d_dataset(), x_column="x", y_column="y", z_column="z"))
+    return GnoviFigure(panels=[panel3d])
 
 
 # --- Theme-aware contrast warning (manual colors only) -----------------------
@@ -88,3 +100,96 @@ def test_picking_a_color_marks_the_series_as_manual_and_never_silently_changes_a
 
     assert series.color == "#123456"
     assert series.color_is_manual is True
+
+
+# --- Adaptive 3D page (Panel3D / Series3D) ------------------------------------
+
+
+def test_a_panel3d_active_panel_shows_the_3d_stack_page(qapp):
+    figure = _make_3d_figure()
+    panel = PlotSeriesPanel(figure)
+
+    assert panel._stack.currentWidget() is panel._page_3d
+
+
+def test_a_2d_panel_active_panel_shows_the_2d_stack_page(qapp):
+    figure = GnoviFigure()
+    panel = PlotSeriesPanel(figure)
+
+    assert panel._stack.currentWidget() is panel._page_2d
+
+
+def test_3d_series_list_is_populated_from_the_active_panel3d(qapp):
+    figure = _make_3d_figure()
+    panel = PlotSeriesPanel(figure)
+
+    assert panel.series3d_list.count() == 1
+
+
+def test_3d_series_editors_edit_the_selected_series3d(qapp):
+    figure = _make_3d_figure()
+    panel = PlotSeriesPanel(figure)
+    panel.series3d_list.setCurrentRow(0)
+
+    panel.d3_label_edit.setText("mat scatter")
+    panel._apply_3d_label()
+    panel.d3_marker_size_spin.setValue(11.0)
+    panel._apply_3d_marker_size(11.0)
+    panel.d3_alpha_spin.setValue(0.4)
+    panel._apply_3d_alpha(0.4)
+    panel.d3_visible_check.setChecked(False)
+    panel._apply_3d_visible(False)
+
+    series = figure.active_panel.series[0]
+    assert series.label == "mat scatter"
+    assert series.marker_size == 11.0
+    assert series.alpha == 0.4
+    assert series.visible is False
+
+
+def test_3d_remove_series_removes_only_from_the_panel3d(qapp):
+    figure = _make_3d_figure()
+    panel = PlotSeriesPanel(figure)
+    panel.series3d_list.setCurrentRow(0)
+
+    panel.remove_3d_button.click()
+
+    assert figure.active_panel.series == []
+
+
+def test_3d_clear_all_removes_every_series3d(qapp):
+    figure = _make_3d_figure()
+    figure.active_panel.add_series(
+        Series3D(dataset=_make_3d_dataset(), x_column="x", y_column="y", z_column="z")
+    )
+    panel = PlotSeriesPanel(figure)
+    assert len(figure.active_panel.series) == 2
+
+    panel.clear_3d_button.click()
+
+    assert figure.active_panel.series == []
+
+
+def test_3d_marker_options_exclude_none(qapp):
+    """A 3D scatter point with no marker at all would render nothing --
+    unlike a 2D line plot, where marker="" just means "no marker dots on
+    the line" (the line itself still visible) -- so "None" is intentionally
+    absent from the 3D marker combo (see `_MARKER_OPTIONS_3D`)."""
+    figure = _make_3d_figure()
+    panel = PlotSeriesPanel(figure)
+
+    codes = [panel.d3_marker_combo.itemData(i) for i in range(panel.d3_marker_combo.count())]
+
+    assert "" not in codes
+
+
+def test_switching_from_2d_to_3d_panel_swaps_the_stack_page_on_refresh(qapp):
+    figure = GnoviFigure()
+    panel = PlotSeriesPanel(figure)
+    assert panel._stack.currentWidget() is panel._page_2d
+
+    figure.panels.append(_make_3d_figure().panels[0])
+    figure.set_active_panel(1)
+    panel.refresh()
+
+    assert panel._stack.currentWidget() is panel._page_3d

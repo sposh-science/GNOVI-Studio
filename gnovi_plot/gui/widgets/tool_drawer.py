@@ -68,6 +68,20 @@ def _make_icon(kind: str) -> QIcon:
         while y < size - m:
             painter.drawLine(m, y, m + 2, y)
             y += 5
+    elif kind == "3d":
+        # A simple axonometric cube -- three visible faces via one hidden
+        # vertex, distinct at a glance from "axes"'s flat two-line corner:
+        # this glyph reads as "a third dimension" specifically, not just
+        # "more axes".
+        top = (size // 2, m)
+        left = (m, size // 2 - 1)
+        right = (size - m, size // 2 - 1)
+        bottom = (size // 2, size - m)
+        for a, b in ((top, left), (top, right), (left, bottom), (right, bottom)):
+            painter.drawLine(*a, *b)
+        center = (size // 2, size // 2 + 2)
+        for corner in (top, left, right, bottom):
+            painter.drawLine(*center, *corner)
     elif kind == "analysis":
         # A baseline with a smooth curve fitted over it -- distinct from
         # "plot"'s jagged zigzag, since this glyph means "a curve fitted
