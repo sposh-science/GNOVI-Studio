@@ -5,7 +5,8 @@ from pathlib import Path
 from matplotlib.figure import Figure
 
 from gnovi_plot.plotting.backends.matplotlib_backend import apply_figure_layout, render_figure
-from gnovi_plot.plotting.figure import GnoviFigure, PlotTheme
+from gnovi_plot.plotting.figure import GnoviFigure, Panel, PlotTheme
+from gnovi_plot.plotting.graph import clone_panel_with_shared_datasets
 
 RASTER_FORMATS = ("png", "tiff")
 VECTOR_FORMATS = ("svg", "pdf")
@@ -19,15 +20,16 @@ class ExportError(Exception):
 
 def export_figure(
     figure: GnoviFigure,
-    path: str | Path,
+    path,
     *,
     fmt: str | None = None,
     dpi: int = 300,
     transparent: bool = False,
+    facecolor: str | None = None,
     tight_bbox: bool = False,
     pad_inches: float = 0.1,
     dark_mode: bool | None = None,
-) -> Path:
+) -> Path | None:
     """Render `figure` to `path` as PNG/TIFF (raster) or SVG/PDF (vector).
 
     Always builds a fresh, offscreen `matplotlib.figure.Figure` sized from
@@ -66,9 +68,30 @@ def export_figure(
     knowledge of its own. Pass `dark_mode` explicitly (as the Export Figure
     dialog's "Dark background" checkbox does) to override it for one export
     without changing the figure's stored theme.
+
+    `facecolor=None` (the default) uses Matplotlib's own 'auto'
+    `savefig.facecolor` -- i.e. whatever `render_figure` already set as
+    this figure's background for `dark_mode`, unchanged. Pass an explicit
+    color (e.g. `"white"`) to force a specific background regardless of
+    `dark_mode`/theme -- mirrors `export_live_figure`'s own `facecolor`
+    param, kept symmetric so a caller building a transient `GnoviFigure`
+    (see `build_panel_export_figure`/`export_panel`) can offer the exact
+    same "As shown / Opaque / Transparent" background choice the Export
+    Figure dialog already offers for a live Figure.
+
+    `path` accepts a real file path (`str`/`Path`) or an in-memory buffer
+    (e.g. `io.BytesIO`, as `gui.dialogs.export_figure_dialog.
+    ExportFigureDialog`'s own Panel-export live preview uses) -- mirrors
+    `export_live_figure`'s own `path` handling exactly; parent directories
+    are only created for a real path, and the return value is `None` for a
+    buffer.
     """
-    path = Path(path)
-    fmt = (fmt or path.suffix.lstrip(".")).lower()
+    is_real_path = isinstance(path, (str, Path))
+    if is_real_path:
+        path = Path(path)
+        fmt = (fmt or path.suffix.lstrip(".")).lower()
+    else:
+        fmt = (fmt or "png").lower()
     if fmt not in SUPPORTED_FORMATS:
         raise ExportError(
             f"Unsupported export format: {fmt!r} (supported: {', '.join(SUPPORTED_FORMATS)})"
@@ -92,13 +115,183 @@ def export_figure(
     apply_figure_layout(mpl_figure, figure)
 
     save_kwargs: dict = dict(format=fmt, dpi=dpi, transparent=transparent)
+    if facecolor is not None:
+        save_kwargs["facecolor"] = facecolor
     if tight_bbox:
         save_kwargs["bbox_inches"] = "tight"
         save_kwargs["pad_inches"] = pad_inches
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if is_real_path:
+        path.parent.mkdir(parents=True, exist_ok=True)
     mpl_figure.savefig(path, **save_kwargs)
-    return path
+    return path if is_real_path else None
+
+
+# Figure-level fields copied verbatim from the source figure onto a
+# transient single-Panel export figure (see `build_panel_export_figure`):
+# every setting that affects how a Panel's own content/typography/grid
+# renders. Deliberately excludes `aspect_preset`/`lock_aspect_ratio` (GUI
+# on-screen letterboxing only -- `export_figure`/`apply_figure_layout`
+# never read them, see `plotting.figure.GnoviFigure.__init__`'s own
+# comments) and `figure_width_in`/`figure_height_in` (computed fresh per
+# panel, see `_panel_layout_size_in`, never copied from the source's own
+# whole-Figure page size).
+_PANEL_EXPORT_FIGURE_LEVEL_FIELDS = (
+    "plot_theme",
+    "panel_aspect_preset",
+    "font_family",
+    "base_font_size",
+    "title_font_size",
+    "axis_label_font_size",
+    "tick_label_font_size",
+    "legend_font_size",
+    "grid_linestyle",
+    "grid_linewidth",
+    "grid_alpha",
+    "grid_color",
+    "margin_left",
+    "margin_right",
+    "margin_bottom",
+    "margin_top",
+    "panel_wspace",
+    "panel_hspace",
+)
+
+
+def _panel_layout_size_in(figure: GnoviFigure, panel_index: int) -> tuple[float, float]:
+    """The physical `(width_in, height_in)` Matplotlib's own GridSpec
+    allocates to `figure.panels[panel_index]`'s Axes box when the WHOLE
+    `figure` is rendered at its own configured `figure_width_in`/
+    `figure_height_in` -- i.e. exactly the plotting-area size that Panel
+    occupies in place today, accounting for `margin_left/right/bottom/top`
+    and `panel_wspace`/`panel_hspace` however GNOVI currently defines them,
+    without re-deriving GridSpec's own math by hand (fragile, easy to drift
+    from Matplotlib's actual behavior if either ever changes independently).
+
+    Built from a throwaway, unrendered `matplotlib.figure.Figure` --
+    `subplots()` + `apply_figure_layout()` (the exact same layout call
+    `export_figure`/the on-screen preview both already use) is enough to
+    populate `Axes.get_position()` deterministically; no `draw()`/renderer/
+    font metrics involved, so this can never vary with the runtime
+    environment and stays reproducible from `figure`'s own stored state
+    alone. This is the box GridSpec *allocates*, before any
+    `panel_aspect_preset` box-aspect shrink -- that shrink is a separate,
+    already-preserved concern (see `build_panel_export_figure`'s docstring).
+    """
+    rows, cols = figure.layout
+    mpl_figure = Figure(figsize=(figure.figure_width_in, figure.figure_height_in))
+    axes_list = list(mpl_figure.subplots(rows, cols, squeeze=False).flat)
+    apply_figure_layout(mpl_figure, figure)
+    box = axes_list[panel_index].get_position()
+    return box.width * figure.figure_width_in, box.height * figure.figure_height_in
+
+
+def build_panel_export_figure(figure: GnoviFigure, panel: Panel, dataset_manager) -> GnoviFigure:
+    """A transient, independent 1x1 `GnoviFigure` for exporting exactly
+    `panel` alone -- built fresh on every call, never inserted into any
+    `Project`/`Workbench`, never given analysis history, never serialized,
+    and discarded by the caller once export finishes (see `export_panel`,
+    its only caller). `figure`/`panel`/`dataset_manager` are read only,
+    never mutated.
+
+    Panel content: `plotting.graph.clone_panel_with_shared_datasets` --
+    the exact same clone helper `Project.extract_panel_to_workbench`
+    already uses -- deep-copies `panel` (series/styling/everything) while
+    keeping every `PlotSeries.dataset` pointed at the same live `Dataset`
+    instance (so fit-derived series/`Dataset.metadata["result_id"]`
+    linkage renders correctly, untouched). The clone gets a *fresh*
+    `Panel.id`; this is fine and expected -- the transient figure is
+    thrown away right after export, never persisted, so there's no
+    original id worth preserving here (contrast with a future "Apply back"
+    operation, which would need to).
+
+    Figure-level settings: `_PANEL_EXPORT_FIGURE_LEVEL_FIELDS` copied
+    verbatim from `figure` (theme, typography, grid appearance, margins,
+    panel-aspect preset) -- so the exported Panel's fonts/grid/aspect
+    render exactly as they do in place, not reset to `GnoviFigure()`
+    defaults (the gap `Project.extract_panel_to_workbench` currently has,
+    which only copies `plot_theme`). `panel_labels_visible` is
+    deliberately forced to `False` regardless of the source figure's own
+    setting: a Panel's `panel_label` ("(a)", "(b)", ...) is figure
+    COMPOSITION metadata -- auto-assigned by `GnoviFigure._renumber_panel_
+    labels` from the panel's *position* in a multi-panel figure, and only
+    ever drawn because of a Figure-level toggle -- not intrinsic Panel
+    content. Showing "(b)" on an image that is now the entire document,
+    with no sibling panels for it to distinguish itself from, would
+    misrepresent the exported file as a fragment of something it no
+    longer is.
+
+    Page size: `figure_width_in`/`figure_height_in` are NOT copied from
+    `figure` -- exporting Panel 2 of a 1x3 Figure must not stretch it to
+    the whole Figure's page size. Instead, derived from
+    `_panel_layout_size_in` (the panel's own allocated axes-box size in
+    place) scaled back out to a full single-panel page using `figure`'s
+    own `margin_left/right/bottom/top` fractions -- exactly what those
+    fractions already mean for a 1x1 figure (the outer margin reserved for
+    axis labels/ticks/title around ITS OWN axes box), so reapplying them
+    to the transient 1x1 figure is consistent with their existing
+    semantics, not a new convention invented for export.
+    """
+    panel_index = figure.panels.index(panel)
+    width_in, height_in = _panel_layout_size_in(figure, panel_index)
+
+    margin_width_frac = figure.margin_right - figure.margin_left
+    margin_height_frac = figure.margin_top - figure.margin_bottom
+    export_width_in = width_in / margin_width_frac if margin_width_frac > 0 else width_in
+    export_height_in = height_in / margin_height_frac if margin_height_frac > 0 else height_in
+
+    cloned_panel = clone_panel_with_shared_datasets(panel, dataset_manager)
+    figure_level_kwargs = {name: getattr(figure, name) for name in _PANEL_EXPORT_FIGURE_LEVEL_FIELDS}
+
+    return GnoviFigure(
+        panels=[cloned_panel],
+        layout=(1, 1),
+        panel_labels_visible=False,
+        figure_width_in=export_width_in,
+        figure_height_in=export_height_in,
+        **figure_level_kwargs,
+    )
+
+
+def export_panel(
+    figure: GnoviFigure,
+    panel: Panel,
+    dataset_manager,
+    path,
+    *,
+    fmt: str | None = None,
+    dpi: int = 300,
+    transparent: bool = False,
+    facecolor: str | None = None,
+    tight_bbox: bool = False,
+    pad_inches: float = 0.1,
+    dark_mode: bool | None = None,
+) -> Path | None:
+    """Export `panel` alone -- never `figure`'s other panels -- as a
+    standalone publication-quality PNG/TIFF/SVG/PDF file, via a transient
+    1x1 `GnoviFigure` (see `build_panel_export_figure`) passed straight
+    through `export_figure` above, so it goes through the exact same
+    `render_figure`/`apply_figure_layout`/`savefig` pipeline as any other
+    export -- vector formats stay genuinely vector, raster formats stay
+    DPI-aware, all parameters here mean exactly what they mean for
+    `export_figure`, including accepting a real path or an in-memory
+    buffer for `path` (see `export_figure`'s own docstring). `figure`/
+    `panel`/`dataset_manager` are read only; the transient figure is
+    discarded once this returns -- no Project, Workbench, Dataset, or
+    analysis-history state is created or mutated.
+    """
+    export_figure_model = build_panel_export_figure(figure, panel, dataset_manager)
+    return export_figure(
+        export_figure_model,
+        path,
+        fmt=fmt,
+        dpi=dpi,
+        transparent=transparent,
+        facecolor=facecolor,
+        tight_bbox=tight_bbox,
+        pad_inches=pad_inches,
+        dark_mode=dark_mode,
+    )
 
 
 def export_live_figure(

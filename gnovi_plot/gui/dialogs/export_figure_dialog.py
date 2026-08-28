@@ -23,9 +23,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from gnovi_plot.export.figure_export import ExportError, export_live_figure
+from gnovi_plot.export.figure_export import ExportError, build_panel_export_figure, export_figure, export_live_figure
 from gnovi_plot.gui.widgets.plot_canvas import PlotCanvas
-from gnovi_plot.plotting.figure import GnoviFigure
+from gnovi_plot.plotting.figure import GnoviFigure, Panel
 
 _RASTER_FORMATS = ["PNG", "TIFF"]
 _VECTOR_FORMATS = ["SVG", "PDF"]
@@ -57,33 +57,68 @@ _CHECKER_DARK = QColor("#c9cdd4")
 
 
 class ExportFigureDialog(QDialog):
-    """Collects export settings and saves the LIVE on-screen Matplotlib
-    Figure (`plot_canvas.figure`) directly, via `export.figure_export.
-    export_live_figure` -- no rendering/export logic lives here.
+    """Collects export settings and saves either the LIVE on-screen
+    Matplotlib Figure (`plot_canvas.figure`, via `export.figure_export.
+    export_live_figure`) or -- when constructed with `panel` -- exactly one
+    Panel, via a transient, independent 1x1 `GnoviFigure` (see
+    `export.figure_export.build_panel_export_figure`) passed through the
+    headless `export.figure_export.export_figure`. No rendering/export
+    logic lives here either way -- this dialog only ever turns its own
+    widget state into `export_figure`/`export_live_figure` keyword
+    arguments.
 
-    WYSIWYG by construction: this is an "enhanced save dialog" around the
-    exact same Figure object the Matplotlib navigation toolbar's own
-    "Save" button would save (see `MainWindow`'s toolbar setup) -- the
-    same axes, legends, typography, scientific notation, panel geometry,
-    margins, spacing, Figure/Panel Aspect Ratio, series styles, grid,
-    labels and titles, exactly as currently rendered, not a second,
-    independently reconstructed figure. GNOVI's own options (format/DPI/
-    background/bounding box/scope) only ever change `savefig()` arguments,
-    never re-render or reposition anything. "Active Panel" scope crops to
-    the active Axes' own tight bounding box (`Axes.get_tightbbox`) rather
-    than screenshotting GUI pixels or rebuilding a second figure -- still
-    the one live Figure, just a smaller `bbox_inches`.
+    WYSIWYG by construction for whole-Figure export: this is an "enhanced
+    save dialog" around the exact same Figure object the Matplotlib
+    navigation toolbar's own "Save" button would save (see `MainWindow`'s
+    toolbar setup) -- the same axes, legends, typography, scientific
+    notation, panel geometry, margins, spacing, Figure/Panel Aspect Ratio,
+    series styles, grid, labels and titles, exactly as currently rendered,
+    not a second, independently reconstructed figure. GNOVI's own options
+    (format/DPI/background/bounding box/scope) only ever change
+    `savefig()` arguments, never re-render or reposition anything. "Active
+    Panel" scope crops to the active Axes' own tight bounding box
+    (`Axes.get_tightbbox`) rather than screenshotting GUI pixels or
+    rebuilding a second figure -- still the one live Figure, just a
+    smaller `bbox_inches`.
+
+    Panel export (`panel` given) is deliberately NOT built the same way:
+    there is no "Scope" to choose (it's always exactly this one Panel), and
+    the physical page size is derived from the Panel's own allocated size
+    in the source Figure's layout rather than the live canvas's current
+    on-screen shape -- see `build_panel_export_figure`'s own docstring for
+    the full geometry/typography-preservation rule. Format/DPI/Background/
+    Bounding-box/Padding remain the same widgets with the same meaning
+    either way, just applied to a different `savefig()` call underneath.
     """
 
-    def __init__(self, figure: GnoviFigure, plot_canvas: PlotCanvas, parent=None):
+    def __init__(
+        self,
+        figure: GnoviFigure,
+        plot_canvas: PlotCanvas,
+        parent=None,
+        *,
+        panel: Panel | None = None,
+        dataset_manager=None,
+    ):
         super().__init__(parent)
         self._figure = figure
         self._plot_canvas = plot_canvas
-        self.setWindowTitle("Export Figure")
+        self._panel = panel
+        # Built once, up front: geometry/content are fully determined by
+        # `figure`/`panel`/`dataset_manager` at construction time (this is
+        # a modal dialog -- nothing else can mutate them while it's open),
+        # so every preview refresh and the final export itself all reuse
+        # this exact same transient model rather than re-cloning the Panel
+        # on every combo-box change.
+        self._panel_export_model = (
+            build_panel_export_figure(figure, panel, dataset_manager) if panel is not None else None
+        )
+        self.setWindowTitle("Export Panel" if panel is not None else "Export Figure")
         self.setModal(True)
 
-        self.scope_combo = QComboBox()
-        self.scope_combo.addItems([_SCOPE_COMPLETE, _SCOPE_ACTIVE])
+        if panel is None:
+            self.scope_combo = QComboBox()
+            self.scope_combo.addItems([_SCOPE_COMPLETE, _SCOPE_ACTIVE])
 
         self.format_combo = QComboBox()
         self.format_combo.addItems(_RASTER_FORMATS + _VECTOR_FORMATS)
@@ -126,7 +161,8 @@ class ExportFigureDialog(QDialog):
         self.browse_button = QPushButton("Browse…")
 
         form = QFormLayout()
-        form.addRow("Scope", self.scope_combo)
+        if panel is None:
+            form.addRow("Scope", self.scope_combo)
         form.addRow("Format", self.format_combo)
         form.addRow("DPI preset", self.dpi_preset_combo)
         form.addRow("Custom DPI", self.dpi_spin)
@@ -163,7 +199,8 @@ class ExportFigureDialog(QDialog):
         layout.addLayout(content_row)
         layout.addWidget(self.button_box)
 
-        self.scope_combo.currentTextChanged.connect(self._on_scope_or_bbox_changed)
+        if panel is None:
+            self.scope_combo.currentTextChanged.connect(self._on_scope_or_bbox_changed)
         self.format_combo.currentTextChanged.connect(self._on_format_changed)
         self.dpi_preset_combo.currentTextChanged.connect(self._on_dpi_preset_changed)
         self.dpi_spin.valueChanged.connect(self._update_pixel_size_label)
@@ -185,6 +222,8 @@ class ExportFigureDialog(QDialog):
         self._refresh_preview()
 
     def _padding_enabled(self) -> bool:
+        if self._panel is not None:
+            return True  # always meaningful around a single-Panel export
         if self.scope_combo.currentText() == _SCOPE_ACTIVE:
             return True  # always meaningful around a per-panel crop
         return self.bbox_combo.currentText() == _BBOX_TIGHT
@@ -220,7 +259,10 @@ class ExportFigureDialog(QDialog):
 
     def _on_browse(self) -> None:
         fmt = self.format_combo.currentText().lower()
-        path, _filter = QFileDialog.getSaveFileName(self, "Export Figure", f"figure.{fmt}", f"*.{fmt}")
+        default_name = "panel" if self._panel is not None else "figure"
+        path, _filter = QFileDialog.getSaveFileName(
+            self, self.windowTitle(), f"{default_name}.{fmt}", f"*.{fmt}"
+        )
         if path:
             self.path_edit.setText(path)
 
@@ -251,6 +293,10 @@ class ExportFigureDialog(QDialog):
         return Bbox.from_extents(bbox_in.x0 - pad, bbox_in.y0 - pad, bbox_in.x1 + pad, bbox_in.y1 + pad)
 
     def _savefig_kwargs(self, *, dpi: int) -> dict:
+        """`export_live_figure` kwargs -- whole-Figure export only (`self.
+        _panel is None`); see `_panel_export_kwargs` for the Panel-export
+        counterpart, which targets `export_figure`'s differently-shaped
+        parameters instead (`tight_bbox: bool`, not a `bbox_inches` value)."""
         kwargs: dict = dict(dpi=dpi, **self._background_kwargs())
         if self.scope_combo.currentText() == _SCOPE_ACTIVE:
             bbox = self._active_panel_bbox_inches(padded=(self.bbox_combo.currentText() == _BBOX_NORMAL))
@@ -261,7 +307,25 @@ class ExportFigureDialog(QDialog):
             kwargs["pad_inches"] = self.padding_spin.value()
         return kwargs
 
+    def _panel_export_kwargs(self, *, dpi: int) -> dict:
+        """`export_figure` kwargs for exporting `self._panel_export_model`
+        -- the transient single-Panel figure -- reusing the same Background
+        (`_background_kwargs`, whose `transparent`/`facecolor` keys are
+        already exactly `export_figure`'s own parameter names) and Bounding
+        box/Padding widgets as whole-Figure export, just shaped for
+        `export_figure`'s `tight_bbox: bool` + `pad_inches` instead of a
+        computed `bbox_inches` value -- there's no live Axes to measure a
+        tight bbox from here, `export_figure`'s own `tight_bbox=True` path
+        (Matplotlib's `bbox_inches="tight"`) does the equivalent trim."""
+        kwargs: dict = dict(dpi=dpi, **self._background_kwargs())
+        if self.bbox_combo.currentText() == _BBOX_TIGHT:
+            kwargs["tight_bbox"] = True
+            kwargs["pad_inches"] = self.padding_spin.value()
+        return kwargs
+
     def _current_physical_size_in(self) -> tuple[float, float] | None:
+        if self._panel is not None:
+            return (self._panel_export_model.figure_width_in, self._panel_export_model.figure_height_in)
         if self.scope_combo.currentText() == _SCOPE_ACTIVE:
             bbox = self._active_panel_bbox_inches(padded=(self.bbox_combo.currentText() == _BBOX_NORMAL))
             if bbox is None:
@@ -297,18 +361,26 @@ class ExportFigureDialog(QDialog):
 
     def _on_accept(self) -> None:
         if not self.path_edit.text():
-            QMessageBox.warning(self, "Export Figure", "Choose a file to save to.")
+            QMessageBox.warning(self, self.windowTitle(), "Choose a file to save to.")
             return
-        self._hide_gui_only_overlays()
         try:
-            export_live_figure(
-                self._plot_canvas.figure,
-                self.path_edit.text(),
-                fmt=self.format_combo.currentText().lower(),
-                **self._savefig_kwargs(dpi=self.dpi_spin.value()),
-            )
+            if self._panel is not None:
+                export_figure(
+                    self._panel_export_model,
+                    self.path_edit.text(),
+                    fmt=self.format_combo.currentText().lower(),
+                    **self._panel_export_kwargs(dpi=self.dpi_spin.value()),
+                )
+            else:
+                self._hide_gui_only_overlays()
+                export_live_figure(
+                    self._plot_canvas.figure,
+                    self.path_edit.text(),
+                    fmt=self.format_combo.currentText().lower(),
+                    **self._savefig_kwargs(dpi=self.dpi_spin.value()),
+                )
         except (ExportError, OSError) as exc:
-            QMessageBox.critical(self, "Export Figure", str(exc))
+            QMessageBox.critical(self, self.windowTitle(), str(exc))
             return
         self.accept()
 
@@ -334,14 +406,22 @@ class ExportFigureDialog(QDialog):
         self._update_pixel_size_label()
 
     def _render_preview_pixmap(self) -> QPixmap:
-        self._hide_gui_only_overlays()
         buffer = io.BytesIO()
-        export_live_figure(
-            self._plot_canvas.figure,
-            buffer,
-            fmt="png",
-            **self._savefig_kwargs(dpi=_PREVIEW_DPI),
-        )
+        if self._panel is not None:
+            export_figure(
+                self._panel_export_model,
+                buffer,
+                fmt="png",
+                **self._panel_export_kwargs(dpi=_PREVIEW_DPI),
+            )
+        else:
+            self._hide_gui_only_overlays()
+            export_live_figure(
+                self._plot_canvas.figure,
+                buffer,
+                fmt="png",
+                **self._savefig_kwargs(dpi=_PREVIEW_DPI),
+            )
 
         rendered = QPixmap()
         rendered.loadFromData(buffer.getvalue(), "PNG")

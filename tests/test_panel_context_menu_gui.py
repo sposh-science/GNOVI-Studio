@@ -30,6 +30,9 @@ def _fake_menu(chosen_text=None, exec_calls=None):
         def __init__(self, *_a, **_k):
             self.actions = {}
 
+        def addSeparator(self):
+            pass
+
         def addAction(self, text):
             action = _FakeAction(text)
             self.actions[text] = action
