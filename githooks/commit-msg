@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Check the just-written commit's authorship metadata before it is recorded.
+set -uo pipefail
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+parent=$(git rev-parse --verify -q HEAD 2>/dev/null) || exit 0
+exec "$HERE/authorship-check.sh" "$parent" "$parent"

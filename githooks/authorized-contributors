@@ -1,0 +1,17 @@
+# Authorized contributors for GNOVI Studio.
+#
+# This file is an allowlist for Git authorship integrity. For every commit,
+# the authorship check requires:
+#
+#   * Author            -> an exact  Name <email>  line below
+#   * every Co-authored-by trailer identity -> an exact line below
+#   * Committer          -> a line below, OR a recognized platform merge
+#                           identity (see authorship-check.sh)
+#
+# Any identity not listed here is rejected, whatever its origin.
+#
+# To authorize an additional genuine human contributor, append their
+# canonical  Name <email>  on a new line in an ordinary reviewed commit.
+
+wavicles <praveenkumar103@gmail.com>
+Praveen (Gnovi) <wavicles@users.noreply.github.com>

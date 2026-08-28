@@ -1,0 +1,29 @@
+name: authorship-integrity
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  authorship:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check commit authorship against the authorized-contributor allowlist
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base='${{ github.event.pull_request.base.sha }}'
+            head='${{ github.event.pull_request.head.sha }}'
+          else
+            base='${{ github.event.before }}'
+            head='${{ github.sha }}'
+          fi
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base=$(git rev-list --max-parents=0 "$head" | tail -1)
+          fi
+          chmod +x githooks/authorship-check.sh
+          githooks/authorship-check.sh "$base" "$head"
