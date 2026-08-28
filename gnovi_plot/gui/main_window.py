@@ -436,16 +436,18 @@ class _CursorSafeNavigationToolbar(NavigationToolbar2QT):
     """The Matplotlib navigation toolbar's own "Save" button calls
     `self.canvas.figure.savefig(...)` directly on the live Figure --
     correct for GNOVI's WYSIWYG export goal (see `ExportFigureDialog`'s own
-    docstring), but the reference cursor is a real Matplotlib artist on
-    that same Figure (see `PlotCanvas.update_reference_cursor` -- unlike
-    the active-panel badge, a separate Qt widget never added to the
-    Figure), so saving it as-is would otherwise export whatever crosshair/
-    reference line happens to be showing. Cleared immediately before
-    Matplotlib's own save dialog opens; it simply reappears on the next
-    mouse move over the canvas."""
+    docstring), but the reference cursor and the XRD/CV analysis overlays
+    are real Matplotlib artists on that same Figure (see `PlotCanvas.
+    update_reference_cursor`/`set_analysis_overlay`/`set_cv_overlay` --
+    unlike the active-panel badge, a separate Qt widget never added to the
+    Figure), so saving it as-is would otherwise bake whatever
+    crosshair/analysis aid happens to be showing into the file. All of
+    them are cleared via the shared `PlotCanvas.clear_gui_only_overlays`
+    boundary immediately before Matplotlib's own save dialog opens; they
+    reappear on the next mouse move / render."""
 
     def save_figure(self, *args):
-        self.canvas.clear_reference_cursor()
+        self.canvas.clear_gui_only_overlays()
         super().save_figure(*args)
 
 

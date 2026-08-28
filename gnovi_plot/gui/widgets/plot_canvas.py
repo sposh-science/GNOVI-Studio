@@ -523,6 +523,25 @@ class PlotCanvas(FigureCanvasQTAgg):
         self._cv_overlay_artists = []
         self.draw_idle()
 
+    # --- common export/save boundary --------------------------------------
+
+    def clear_gui_only_overlays(self) -> None:
+        """Detach EVERY live-only interaction aid that is a real Matplotlib
+        artist on the figure -- the reference cursor, the XRD peak/preview
+        overlay, and the CV cycle/sweep/candidate overlay. The single point
+        every path that writes the *live* figure to disk must call first
+        (GNOVI's Export dialog -- see `gui.dialogs.export_figure_dialog.
+        ExportFigureDialog._hide_gui_only_overlays` -- and Matplotlib's own
+        navigation-toolbar Save -- see `gui.main_window.
+        _CursorSafeNavigationToolbar.save_figure`), so no analysis aid can
+        end up in a publication file. Each redraws on the next mouse
+        move / render. Headless export paths (`export.figure_export.
+        export_figure`) build a fresh figure and never see these artists,
+        so they do not need this."""
+        self.clear_reference_cursor()
+        self.clear_analysis_overlay()
+        self.clear_cv_overlay()
+
     def set_cv_overlay(self, figure: GnoviFigure, payload: dict | None) -> None:
         """Redraw the CV overlay from ``payload`` (see ``CVAnalysisSection.
         overlay_payload``) -- a full clear-and-redraw. A no-op (after

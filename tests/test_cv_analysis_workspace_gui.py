@@ -408,3 +408,188 @@ def test_curve_fitting_still_default_and_functional(qapp):
     panel.tool_combo.setCurrentText("XRD Peak Analysis")
     assert panel.xrd_section.isVisibleTo(panel)
     assert not panel.cv_section.isVisibleTo(panel)
+
+
+# ======================================================================
+# Code-review regression tests: H2, H3, M1, M2, M3
+# ======================================================================
+
+
+def _two_series_panel(qapp):
+    """One 2D panel with two eligible CV line series ('A' and a 3x-scaled
+    'B') -- so the source combo actually has something to switch between."""
+    figure = GnoviFigure()
+    df_b = model.build_reversible()
+    df_b["Current/A"] = df_b["Current/A"] * 3.0
+    ds_a = Dataset(name="A", dataframe=model.build_reversible())
+    ds_b = Dataset(name="B", dataframe=df_b)
+    manager = DatasetManager()
+    manager.add(ds_a)
+    manager.add(ds_b)
+    figure.add_series(PlotSeries.line(ds_a, "Potential/V", "Current/A", label="A"))
+    figure.add_series(PlotSeries.line(ds_b, "Potential/V", "Current/A", label="B"))
+    panel = AnalysisPanel(figure, manager)
+    panel.refresh()
+    panel.tool_combo.setCurrentText("Cyclic Voltammetry")
+    return panel, panel.cv_section_widget
+
+
+def test_h2_source_series_switch_detaches_result_and_clears_overlay(qapp):
+    panel, cv = _two_series_panel(qapp)
+    ready = []
+    cv.analysis_result_ready.connect(ready.append)
+    cv.find_peaks_button.click()
+    result_a = ready[-1]
+    assert cv.overlay_payload().get("candidate_xy") is not None
+
+    cv.source_combo.setCurrentIndex(1)  # user picks series B
+
+    assert cv.current_result() is None  # working pointer detached...
+    assert not cv.is_manual_peak_mode()
+    payload = cv.overlay_payload() or {}
+    assert "candidate_xy" not in payload  # ...so no stale markers from A over B
+    assert len(ready) == 1  # the History entry for A was NOT touched / duplicated
+
+
+def test_h2_history_entry_for_the_old_series_stays_selectable(qapp):
+    panel, cv = _two_series_panel(qapp)
+    ready = []
+    cv.analysis_result_ready.connect(ready.append)
+    cv.find_peaks_button.click()
+    result_a = ready[-1]
+    cv.source_combo.setCurrentIndex(1)
+
+    cv.load_result(result_a)  # re-selected from the History list
+
+    assert cv.current_result() is result_a
+    assert cv.source_combo.currentData() == result_a.source_series_id  # source restored to A
+    assert len(ready) == 1  # still no re-run
+
+
+def test_h2_overlay_gated_on_source_series_id(qapp):
+    panel, cv = _two_series_panel(qapp)
+    ready = []
+    cv.analysis_result_ready.connect(ready.append)
+    cv.find_peaks_button.click()
+    # forge a result whose series id matches nothing eligible -> no markers
+    ready[-1].source_series_id = "not-a-real-series"
+    payload = cv.overlay_payload() or {}
+    assert "candidate_xy" not in payload
+    assert "cycle_rising_xy" in payload  # cycle tint for the *current* series still shows
+
+
+def test_m1_manual_click_far_outside_the_cycle_is_rejected(qapp):
+    _panel, cv, _ds = _make_panel()
+    ready = []
+    cv.analysis_result_ready.connect(ready.append)
+    cv.find_peaks_button.click()
+    n_before = len(ready[-1].peaks)
+    messages = []
+    cv.status_message.connect(messages.append)
+
+    cv.add_peak_button.setChecked(True)
+    cv.add_manual_peak(5.0, 999.0)  # E = 5 V, I = 999 A -- nowhere near the curve
+
+    assert len(cv.current_result().peaks) == n_before  # nothing added
+    assert messages and "curve" in messages[-1].lower()
+
+
+def test_m1_manual_click_with_the_wrong_current_at_a_valid_potential_is_rejected(qapp):
+    _panel, cv, _ds = _make_panel()
+    ready = []
+    cv.analysis_result_ready.connect(ready.append)
+    cv.find_peaks_button.click()
+    n_before = len(ready[-1].peaks)
+
+    cv.add_peak_button.setChecked(True)
+    cv.add_manual_peak(model.EPA_TRUE, -5.0e-4)  # right potential, wildly wrong current
+
+    assert len(cv.current_result().peaks) == n_before
+
+
+def test_m1_manual_click_on_the_curve_snaps_to_the_right_sweep(qapp):
+    """The same potential appears on both sweeps; the click's current must
+    decide which sweep, not 'whichever sweep has this potential'."""
+    _panel, cv, _ds = _make_panel()
+    ready = []
+    cv.analysis_result_ready.connect(ready.append)
+    cv.find_peaks_button.click()
+
+    cv.add_peak_button.setChecked(True)
+    cv.add_manual_peak(model.EPC_TRUE, -1.0e-5)  # negative current -> the falling (cathodic) wave
+    added = cv.current_result().peaks[-1]
+    assert added.origin == "manual"
+    assert added.sweep == "falling"
+    assert added.process == PROCESS_CATHODIC
+
+
+def test_m2_cv_section_minimum_width_within_the_analysis_drawer_budget(qapp):
+    from gnovi_plot.gui.widgets.cv_analysis_section import CVAnalysisSection
+    from gnovi_plot.gui.widgets.xrd_analysis_section import XRDAnalysisSection
+
+    cv = CVAnalysisSection(GnoviFigure(), DatasetManager())
+    xrd = XRDAnalysisSection(GnoviFigure(), DatasetManager())
+    # CV must not need a wider drawer than Curve Fitting / XRD already use.
+    assert cv.minimumSizeHint().width() <= xrd.minimumSizeHint().width()
+
+
+def test_m3_metadata_cycle_source_handles_nan_rows_in_potential_current(qapp):
+    """The metadata cycle column is grouped in the NaN-cleaned row space
+    (aligned with the arrays sweep segmentation runs on), so a NaN row in
+    the potential/current columns does not shift the cycle boundaries."""
+    df = model.build_reversible()
+    df["segment"] = (np.arange(len(df)) // (len(df) // 4)).clip(max=3) + 1
+    df.loc[10, "Current/A"] = np.nan  # a hole in the data
+    df.loc[2500, "Potential/V"] = np.nan
+    ds = Dataset(name="cv", dataframe=df)
+    manager = DatasetManager()
+    manager.add(ds)
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(ds, "Potential/V", "Current/A"))
+    panel = AnalysisPanel(figure, manager)
+    panel.refresh()
+    panel.tool_combo.setCurrentText("Cyclic Voltammetry")
+    cv = panel.cv_section_widget
+    cv.cycle_source_combo.setCurrentIndex(cv.cycle_source_combo.findData("metadata"))
+    cv.metadata_column_combo.setCurrentIndex(cv.metadata_column_combo.findText("segment"))
+
+    assert cv.cycle_combo.count() == 4
+    # Find Peaks must run on the cleaned arrays without an IndexError
+    ready = []
+    cv.analysis_result_ready.connect(ready.append)
+    cv.find_peaks_button.click()
+    assert isinstance(ready[-1], CVCycleAnalysisResult)
+
+
+def test_h3_shared_overlay_boundary_clears_reference_cursor_and_both_overlays(qapp):
+    """`PlotCanvas.clear_gui_only_overlays` is the single boundary every
+    save/export path calls; the toolbar Save and the Export dialog both
+    route through it."""
+    from gnovi_plot.gui import main_window
+    from gnovi_plot.gui.dialogs import export_figure_dialog
+    import inspect
+
+    canvas_src = inspect.getsource(main_window._CursorSafeNavigationToolbar.save_figure)
+    assert "clear_gui_only_overlays" in canvas_src
+
+    dialog_src = inspect.getsource(export_figure_dialog.ExportFigureDialog._hide_gui_only_overlays)
+    assert "clear_gui_only_overlays" in dialog_src
+
+
+def test_h3_clear_gui_only_overlays_removes_cv_artists(qapp):
+    window = MainWindow()
+    ds = _cv_dataset()
+    window.dataset_manager.add(ds)
+    window.figure_model.active_panel.add_series(PlotSeries.line(ds, "Potential/V", "Current/A"))
+    window.analysis_panel.refresh()
+    window.analysis_panel.tool_combo.setCurrentText("Cyclic Voltammetry")
+    window._rerender()
+    window.analysis_panel.cv_section_widget.find_peaks_button.click()
+    window._refresh_cv_overlay()
+    assert window.plot_canvas._cv_overlay_artists  # overlay is drawn
+
+    window.plot_canvas.clear_gui_only_overlays()
+
+    assert not window.plot_canvas._cv_overlay_artists
+    assert not window.plot_canvas._analysis_overlay_artists
+    assert not window.plot_canvas._cursor_artists

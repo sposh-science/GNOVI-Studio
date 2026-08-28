@@ -153,6 +153,53 @@ def test_assign_couple_picks_largest_prominence_enabled():
     assert cathodic.e_peak_v == 0.19  # unassigned peak is never a couple member
 
 
+# --- H1 regression: manual candidates must not break the prominence rule ----
+
+
+def test_h1_automatic_prominence_beats_a_high_raw_current_manual_candidate():
+    """A manual candidate placed on a large charging background has a huge
+    `i_peak_raw_a`; it must NOT displace a genuine automatic couple member.
+    Regression for the review finding that ranking mixed prominence with
+    raw current magnitude."""
+    peaks = [
+        _peak(PROCESS_ANODIC, 0.25, 2.0e-5, prom=2.0e-5),  # real automatic wave
+        _peak(PROCESS_ANODIC, 0.40, 9.0e-5, prom=None, origin="manual"),  # stray click on background
+        _peak(PROCESS_CATHODIC, 0.19, -1.9e-5, prom=1.9e-5),
+    ]
+    anodic, _cathodic = assign_couple(peaks)
+    assert anodic.e_peak_v == 0.25  # the automatic wave, not the big-raw-current manual click
+
+
+def test_h1_manual_only_process_falls_back_to_last_added_not_current_magnitude():
+    peaks = [
+        _peak(PROCESS_ANODIC, 0.20, 5.0e-4, prom=None, origin="manual"),  # added first, huge raw
+        _peak(PROCESS_ANODIC, 0.30, 3.0e-6, prom=None, origin="manual"),  # added last, tiny raw
+        _peak(PROCESS_CATHODIC, 0.19, -1.0e-5, prom=1.0e-5),
+    ]
+    anodic, _ = assign_couple(peaks)
+    assert anodic.e_peak_v == 0.30  # last added, NOT the larger current at 0.20
+
+
+def test_h1_manual_candidate_becomes_eligible_when_the_bad_automatic_is_disabled():
+    peaks = [
+        _peak(PROCESS_ANODIC, 0.11, 4.0e-7, prom=4.0e-7),  # spurious automatic bump
+        _peak(PROCESS_ANODIC, 0.25, 2.0e-5, prom=None, origin="manual"),  # the real one, added by hand
+        _peak(PROCESS_CATHODIC, 0.19, -1.9e-5, prom=1.9e-5),
+    ]
+    assert assign_couple(peaks)[0].e_peak_v == 0.11  # automatic-with-prominence wins first
+    peaks[0].enabled = False
+    assert assign_couple(peaks)[0].e_peak_v == 0.25  # now the manual one
+
+
+def test_h1_automatic_ties_break_toward_earliest_position():
+    peaks = [
+        _peak(PROCESS_ANODIC, 0.24, 1.0e-5, prom=1.0e-5),
+        _peak(PROCESS_ANODIC, 0.26, 1.0e-5, prom=1.0e-5),
+        _peak(PROCESS_CATHODIC, 0.19, -1.0e-5, prom=1.0e-5),
+    ]
+    assert assign_couple(peaks)[0].e_peak_v == 0.24
+
+
 def test_assign_couple_respects_enabled():
     peaks = [
         _peak(PROCESS_ANODIC, 0.25, 2e-5, prom=2e-5, enabled=False),

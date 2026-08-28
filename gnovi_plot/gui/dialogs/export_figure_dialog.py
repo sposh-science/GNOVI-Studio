@@ -392,10 +392,11 @@ class ExportFigureDialog(QDialog):
         Matplotlib artists on the active Axes, see `PlotCanvas.set_analysis
         _overlay`/`set_cv_overlay`) -- stripped here too so a publication
         export never carries them; MainWindow redraws them on its next
-        `_rerender`."""
-        self._plot_canvas.clear_reference_cursor()
-        self._plot_canvas.clear_analysis_overlay()
-        self._plot_canvas.clear_cv_overlay()
+        `_rerender`. All three go through the one shared
+        `PlotCanvas.clear_gui_only_overlays` boundary, which the toolbar's
+        own Save button (`gui.main_window._CursorSafeNavigationToolbar`)
+        also calls."""
+        self._plot_canvas.clear_gui_only_overlays()
 
     def _on_accept(self) -> None:
         if not self.path_edit.text():

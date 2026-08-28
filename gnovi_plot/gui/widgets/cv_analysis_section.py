@@ -27,6 +27,7 @@ an entry -- it re-arms detection; the next Find Peaks creates the entry.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -98,10 +99,18 @@ _PANEL3D_TEXT = (
     "(or add) a 2D panel first."
 )
 
+# Short combo labels -- the full explanation is the combo tooltip + the
+# help line under it (see __init__). Kept short so the combo's
+# minimumSizeHint does not push the whole Analysis drawer wider than the
+# width Curve Fitting / XRD already use.
 _SIGN_LABELS = {
-    CurrentSignConvention.ANODIC_POSITIVE: "Anodic (oxidation) current positive",
-    CurrentSignConvention.CATHODIC_POSITIVE: "Cathodic (reduction) current positive",
+    CurrentSignConvention.ANODIC_POSITIVE: "Anodic-positive",
+    CurrentSignConvention.CATHODIC_POSITIVE: "Cathodic-positive",
 }
+_SIGN_HELP = (
+    "Which direction of your recorded current is oxidation. GNOVI never "
+    "changes the data — this only sets the interpretation."
+)
 
 _CYCLE_SOURCE_AUTO = "auto"
 _CYCLE_SOURCE_METADATA = "metadata"
@@ -168,10 +177,16 @@ class CVAnalysisSection(QWidget):
         self.sign_combo = QComboBox()
         for convention, text in _SIGN_LABELS.items():
             self.sign_combo.addItem(text, convention.value)
-        self.sign_combo.setToolTip(
-            "GNOVI never changes your recorded current. This only tells the "
-            "analysis which direction of current is oxidation."
+        self.sign_combo.setToolTip(_SIGN_HELP)
+        # Do not let the combo's content width drive the drawer's minimum
+        # width (the XRD sidebar-overflow lesson).
+        self.sign_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
+        self.sign_combo.setMinimumContentsLength(10)
+        self.sign_help_label = QLabel(_SIGN_HELP)
+        self.sign_help_label.setWordWrap(True)
+        self.sign_help_label.setStyleSheet("color: palette(mid);")
 
         self.scan_rate_spin = QDoubleSpinBox()
         self.scan_rate_spin.setDecimals(4)
@@ -195,7 +210,9 @@ class CVAnalysisSection(QWidget):
         phys_body = QWidget()
         phys_layout = QVBoxLayout(phys_body)
         phys_layout.setContentsMargins(0, 0, 0, 0)
-        phys_layout.addWidget(QLabel("Optional — not needed for peak analysis."))
+        _phys_hint = QLabel("Optional — not needed for peak analysis.")
+        _phys_hint.setWordWrap(True)
+        phys_layout.addWidget(_phys_hint)
         for text, w in (
             ("Electrode area", self.area_spin),
             ("Number of electrons n", self.n_spin),
@@ -218,6 +235,7 @@ class CVAnalysisSection(QWidget):
         source_layout.addWidget(self.status_label)
         source_layout.addWidget(QLabel("Current sign convention"))
         source_layout.addWidget(self.sign_combo)
+        source_layout.addWidget(self.sign_help_label)
         source_layout.addWidget(QLabel("Scan rate (optional)"))
         source_layout.addLayout(scan_rate_row)
         source_layout.addWidget(self.physical_section)
@@ -314,7 +332,9 @@ class CVAnalysisSection(QWidget):
 
         detection_group = QGroupBox("Peak Detection")
         detection_layout = QVBoxLayout(detection_group)
-        detection_layout.addWidget(QLabel("Peaks are detected on the raw current."))
+        _raw_hint = QLabel("Peaks are detected on the raw current.")
+        _raw_hint.setWordWrap(True)
+        detection_layout.addWidget(_raw_hint)
         detection_layout.addWidget(QLabel("Prominence (current units)"))
         detection_layout.addWidget(self.prominence_edit)
         detection_layout.addWidget(QLabel("Minimum separation"))
@@ -370,13 +390,24 @@ class CVAnalysisSection(QWidget):
 
     def set_figure(self, figure: GnoviFigure) -> None:
         self._figure = figure
-        self._current_result = None
-        self._results_selected_rows = []
-        self._set_manual_peak_mode(False)
+        self._invalidate_transient()
         self.refresh()
 
     def set_manager(self, dataset_manager: DatasetManager) -> None:
         self._manager = dataset_manager
+
+    def _invalidate_transient(self) -> None:
+        """Drop every piece of state that is only meaningful against the
+        source series / cycle it was computed for: the armed Add-Peak mode,
+        the working ``_current_result`` pointer (the persisted Analysis
+        History entry it references is NEVER touched -- it stays selectable
+        from the History list), the Results-table row selection carried
+        into this sidebar, and -- via the ``overlay_changed`` its callers
+        emit -- the live graph overlay. Called on a source-series change,
+        a Workbench/figure switch, and a project open."""
+        self._set_manual_peak_mode(False)
+        self._current_result = None
+        self._results_selected_rows = []
 
     def refresh(self) -> None:
         """Rebuild the source list, recompute cycles, and enable/disable the
@@ -387,6 +418,10 @@ class CVAnalysisSection(QWidget):
         eligible = eligible_cv_series(self._figure)
 
         previous_id = self.source_combo.currentData()
+        # Rebuild AND re-select under blocked signals -- `setCurrentIndex`
+        # here must not fire `_on_source_changed` (that handler is for a
+        # genuine USER combo pick only); a silent resolution change is
+        # handled explicitly just below.
         self.source_combo.blockSignals(True)
         self.source_combo.clear()
         target = -1
@@ -394,15 +429,21 @@ class CVAnalysisSection(QWidget):
             self.source_combo.addItem(series.label, series.id)
             if series.id == previous_id:
                 target = i
-        self.source_combo.blockSignals(False)
         if target >= 0:
             self.source_combo.setCurrentIndex(target)
         elif eligible:
             self.source_combo.setCurrentIndex(0)
+        self.source_combo.blockSignals(False)
 
-        if self.source_combo.currentData() != previous_id:
+        # A silently-resolved source change (the previously-selected series
+        # was removed, so `refresh()` landed on a different one) must drop
+        # the same transient state an explicit `_on_source_changed` does --
+        # otherwise the old result's markers could linger over the new
+        # series. `previous_id is not None` so the very first population
+        # (empty combo -> first series) is not treated as a "change".
+        if previous_id is not None and self.source_combo.currentData() != previous_id:
             self._detection_defaults_touched = False
-            self._results_selected_rows = []
+            self._invalidate_transient()
 
         has_eligible = bool(eligible)
         enabled = has_eligible and not is_panel3d
@@ -431,12 +472,28 @@ class CVAnalysisSection(QWidget):
 
     def load_result(self, result: AnalysisResult | None) -> None:
         """Restore ``result`` (if a ``CVCycleAnalysisResult``) as the working
-        sign convention / cycle / sweep / detection settings, WITHOUT
-        rerunning detection. Called on an Analysis History selection."""
+        source series / sign convention / cycle / sweep / detection
+        settings, WITHOUT rerunning detection. Called on an Analysis
+        History selection."""
         self._current_result = result if isinstance(result, CVCycleAnalysisResult) else None
         self._results_selected_rows = []
         if self._current_result is not None:
             r = self._current_result
+            # Point the source combo back at the series this result was
+            # computed on (if it is still an eligible series in the active
+            # panel) -- so the overlay's series-id gate matches and the
+            # sweep/cycle readouts describe the right data. Blocked so it
+            # does not re-enter `_on_source_changed` and wipe the result we
+            # are in the middle of restoring.
+            if r.source_series_id is not None:
+                s_idx = self.source_combo.findData(r.source_series_id)
+                if s_idx >= 0 and s_idx != self.source_combo.currentIndex():
+                    self.source_combo.blockSignals(True)
+                    self.source_combo.setCurrentIndex(s_idx)
+                    self.source_combo.blockSignals(False)
+                    self._refresh_columns_label()
+                    self._refresh_metadata_columns()
+                    self._rebuild_cycles()
             idx = self.sign_combo.findData(r.sign_convention)
             if idx >= 0:
                 self.sign_combo.blockSignals(True)
@@ -511,14 +568,23 @@ class CVAnalysisSection(QWidget):
             payload["switching_potential_v"] = self._switching_potential(cycle)
 
         result = self._current_result
-        if result is not None and result.source_panel_id == self._figure.active_panel.id:
-            # peak markers only when the result matches the selected cycle
-            if cycle is None or result.cycle_index == cycle.index:
-                cand_x = [p.e_peak_v for p in result.peaks]
-                cand_y = [p.i_peak_raw_a for p in result.peaks]
-                payload["candidate_xy"] = (cand_x, cand_y)
-                payload["anodic_xy"] = self._process_points(result, PROCESS_ANODIC)
-                payload["cathodic_xy"] = self._process_points(result, PROCESS_CATHODIC)
+        # Peak markers only when the current result actually belongs to
+        # what is on screen now: the active panel, the SELECTED SOURCE
+        # SERIES (not just the panel -- a panel can hold several series),
+        # and the selected cycle. Any mismatch -> cycle tint only, so a
+        # result computed on series A never floats its markers over
+        # series B.
+        if (
+            result is not None
+            and result.source_panel_id == self._figure.active_panel.id
+            and (result.source_series_id is None or result.source_series_id == series.id)
+            and (cycle is None or result.cycle_index == cycle.index)
+        ):
+            cand_x = [p.e_peak_v for p in result.peaks]
+            cand_y = [p.i_peak_raw_a for p in result.peaks]
+            payload["candidate_xy"] = (cand_x, cand_y)
+            payload["anodic_xy"] = self._process_points(result, PROCESS_ANODIC)
+            payload["cathodic_xy"] = self._process_points(result, PROCESS_CATHODIC)
         return payload or None
 
     @staticmethod
@@ -569,9 +635,12 @@ class CVAnalysisSection(QWidget):
         self.columns_label.setVisible(True)
 
     def _on_source_changed(self) -> None:
-        self.disarm_manual_peak_mode()
+        """A genuine USER pick of a different source series. Detach the
+        working result (its History entry is untouched and stays
+        selectable), drop all transient state, reset the data-dependent
+        detection default for the new series, and clear the overlay."""
+        self._invalidate_transient()
         self._detection_defaults_touched = False
-        self._results_selected_rows = []
         self._refresh_columns_label()
         self._refresh_metadata_columns()
         self._rebuild_cycles()
@@ -583,10 +652,15 @@ class CVAnalysisSection(QWidget):
         every definite anodic/cathodic tag, recompute the couple, and emit
         an in-place update. Never a new history entry, never touches the
         recorded current."""
-        if self._current_result is None:
+        result = self._current_result
+        series = self._source_series()
+        if result is None or series is None or (
+            result.source_series_id is not None and result.source_series_id != series.id
+        ):
+            # No result, or one that no longer belongs to the shown series
+            # (see `_invalidate_transient`) -- just refresh the overlay.
             self.overlay_changed.emit()
             return
-        result = self._current_result
         result.sign_convention = self._sign_convention().value
         for peak in result.peaks:
             peak.process = _PROCESS_FLIP.get(peak.process, peak.process)
@@ -753,14 +827,36 @@ class CVAnalysisSection(QWidget):
                 continue
         return collection.ranges
 
-    def _ranges_from_metadata(self, column: str) -> list[tuple[int, int]]:
+    def _valid_row_mask(self) -> np.ndarray | None:
+        """Boolean mask over ``source_series.dataframe`` rows that survive
+        ``numeric_xy``'s NaN filter -- i.e. the rows present in ``_raw_xy``,
+        in the same order. Everything downstream (sweep segmentation, peak
+        indices, the overlay) works in this CLEANED positional space, so a
+        metadata cycle column must be mapped through this mask too."""
         series = self._source_series()
-        if series is None or not column:
+        if series is None:
+            return None
+        df = series.dataframe
+        try:
+            x = pd.to_numeric(df[series.x_column], errors="coerce")
+            y = pd.to_numeric(df[series.y_column], errors="coerce")
+        except KeyError:
+            return None
+        return (x.notna() & y.notna()).to_numpy()
+
+    def _ranges_from_metadata(self, column: str) -> list[tuple[int, int]]:
+        """Contiguous ``(start, end)`` runs of equal value in ``column``,
+        in the CLEANED-row positional space (aligned with ``_raw_xy`` --
+        NaN rows in the potential/current columns are removed first, so the
+        ranges index the same array ``_sweeps_for_range`` slices)."""
+        series = self._source_series()
+        mask = self._valid_row_mask()
+        if series is None or not column or mask is None:
             return []
         df = series.dataframe
         if column not in df.columns:
             return []
-        values = df[column].to_numpy()
+        values = df[column].to_numpy()[mask]
         ranges: list[tuple[int, int]] = []
         if len(values) == 0:
             return ranges
@@ -886,7 +982,12 @@ class CVAnalysisSection(QWidget):
         if self.width_check.isChecked() and self.width_spin.value() > 0:
             samples = mv_to_sample_distance(potential, self.width_spin.value())
             width = float(samples) if samples is not None else None
-        return {"prominence": self._prominence_value(), "distance": distance, "width": width}
+        # `prominence=0.0` (not None) when the field is blank: it filters
+        # nothing (every local maximum has prominence >= 0) but makes SciPy
+        # COMPUTE a prominence for every automatic candidate, so couple
+        # selection can always rank them by prominence rather than falling
+        # back to detection order (see `results.assign_couple`).
+        return {"prominence": self._prominence_value() or 0.0, "distance": distance, "width": width}
 
     def _on_find_peaks_clicked(self) -> None:
         series = self._source_series()
@@ -926,7 +1027,9 @@ class CVAnalysisSection(QWidget):
         parameters = {
             "sweep_selection": self.sweep_combo.currentData(),
             "detection": {
-                "prominence": detection["prominence"],
+                # the semantic value (None when the researcher left the
+                # field blank), not the 0.0 passed to find_peaks
+                "prominence": self._prominence_value(),
                 "min_separation_mv": self.min_sep_spin.value() or None,
                 "width_mv": self.width_spin.value() if self.width_check.isChecked() else None,
             },
@@ -984,12 +1087,27 @@ class CVAnalysisSection(QWidget):
             self.status_message.emit("Click a peak location inside the selected cycle.")
         self.manual_peak_mode_changed.emit(active)
 
+    #: A click whose nearest point on the selected cycle's trace is farther
+    #: than this (as a fraction of the cycle's own E×I bounding-box
+    #: diagonal, in normalised coordinates) is rejected -- it is not on the
+    #: selected cycle's curve. Generous enough to tolerate an imprecise but
+    #: clearly-intended click, far below the distance to empty space or to
+    #: a wildly wrong current.
+    _MANUAL_CLICK_MAX_NORM_DISTANCE = 0.12
+
     def add_manual_peak(self, potential_v: float, current_a: float) -> None:
         """Called by ``MainWindow`` after a canvas click while Add Peak is
-        armed. Snaps the click to the nearest sample WITHIN the sweep it
-        landed in (the same E appears twice in a cycle), assigns a best-
-        guess process, and adds a manual candidate to the current result --
-        or starts a fresh (empty) result to hold it."""
+        armed (the wrong-panel / Panel3D / non-finite guards already
+        passed in ``MainWindow._handle_cv_manual_peak_click``).
+
+        Finds the closest point on the SELECTED CYCLE's trace to the click,
+        in (potential, current) space normalised by the cycle's own
+        extent -- so the correct sweep is chosen by proximity to the
+        actual curve (never "the other sweep just because it shares this
+        potential"), and a click that is not on the selected cycle's curve
+        at all (empty space, a different cycle far away, a wildly wrong
+        current) is REJECTED with a status message and adds nothing.
+        """
         self._set_manual_peak_mode(False)
         series = self._source_series()
         xy = self._raw_xy()
@@ -1001,40 +1119,58 @@ class CVAnalysisSection(QWidget):
         if not cycle.sweeps:
             self.status_message.emit("The selected cycle has no sweep to place a peak on.")
             return
-        # The same E appears twice in a cycle -- choose the sweep whose
-        # current at the snapped index is closest to the click's y.
+
+        cycle_e = e[cycle.start:cycle.end]
+        cycle_i = i[cycle.start:cycle.end]
+        e_scale = float(np.ptp(cycle_e)) or 1.0
+        i_scale = float(np.ptp(cycle_i)) or 1.0
+
         best = None
-        best_err = np.inf
+        best_d = np.inf
         for s in cycle.sweeps:
-            idx, _ = self._nearest_in_sweep(e, s, potential_v)
-            err = abs(i[idx] - current_a)
-            if err < best_err:
-                best_err, best = err, (s, idx)
+            seg_e = e[s.start:s.end]
+            seg_i = i[s.start:s.end]
+            d = np.hypot((seg_e - potential_v) / e_scale, (seg_i - current_a) / i_scale)
+            local = int(np.argmin(d))
+            if d[local] < best_d:
+                best_d = float(d[local])
+                best = (s, s.start + local)
+
+        if best is None or best_d > self._MANUAL_CLICK_MAX_NORM_DISTANCE:
+            self.status_message.emit(
+                "Click on the selected cycle's curve to add a candidate peak."
+            )
+            return
+
         sweep, idx = best
         snapped_e = float(e[idx])
         snapped_i = float(i[idx])
         median_i = float(np.median(i[sweep.start:sweep.end]))
-        oriented = (snapped_i - median_i) * oxidative_sign(self._sign_convention())
-        if abs(snapped_i - median_i) < 1e-15:
+        offset = snapped_i - median_i
+        # ambiguous when the click sits essentially on the sweep's own
+        # median line -- no clear oxidative/reductive direction
+        if abs(offset) < 0.02 * i_scale:
             process = PROCESS_UNASSIGNED
+        elif offset * oxidative_sign(self._sign_convention()) > 0:
+            process = PROCESS_ANODIC
         else:
-            process = PROCESS_ANODIC if oriented > 0 else PROCESS_CATHODIC
+            process = PROCESS_CATHODIC
         seed = CVPeakSeed.manual(snapped_e, snapped_i, sweep=sweep.direction, process=process)
 
-        if self._current_result is None or self._current_result.source_panel_id != self._figure.active_panel.id \
-                or (self._current_result.cycle_index is not None and self._current_result.cycle_index != cycle.index):
+        current = self._current_result
+        matches_here = (
+            current is not None
+            and current.source_panel_id == self._figure.active_panel.id
+            and (current.source_series_id is None or current.source_series_id == series.id)
+            and (current.cycle_index is None or current.cycle_index == cycle.index)
+        )
+        if not matches_here:
             self._start_result_with_manual_peak(series, cycle, seed)
             return
-        self._current_result.peaks.append(peak_result_from_seed(seed))
-        self._recompute_couple(self._current_result)
+        current.peaks.append(peak_result_from_seed(seed))
+        self._recompute_couple(current)
         self.overlay_changed.emit()
-        self.result_updated.emit(self._current_result)
-
-    @staticmethod
-    def _nearest_in_sweep(e: np.ndarray, sweep: SweepSegment, potential_v: float) -> tuple[int, float]:
-        seg = e[sweep.start:sweep.end]
-        local = int(np.argmin(np.abs(seg - potential_v)))
-        return sweep.start + local, float(seg[local])
+        self.result_updated.emit(current)
 
     def _start_result_with_manual_peak(self, series: PlotSeries, cycle: Cycle, seed: CVPeakSeed) -> None:
         peaks = [peak_result_from_seed(seed)]

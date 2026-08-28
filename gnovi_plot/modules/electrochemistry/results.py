@@ -398,32 +398,52 @@ def peak_result_from_seed(
     )
 
 
-def _peak_result_magnitude(peak: CVPeakResult) -> float:
-    """A single "how prominent is this peak" number that works for both an
-    automatic candidate (which has a SciPy ``prominence``) and a manual one
-    (which does not) -- the automatic prominence when present, else the
-    raw current magnitude at the extremum. Used only to pick the couple
-    member of each process; the researcher curates by enable/disable.
+def _pick_couple_member(indexed: list[tuple[int, CVPeakResult]]) -> CVPeakResult | None:
+    """Choose one process's couple member from its enabled candidates,
+    each paired with its position in the result's ``peaks`` list.
+
+    Deterministic ordering, and NEVER a raw-current-magnitude ranking
+    (raw current at the extremum is dominated by the charging background
+    and is not comparable to a SciPy prominence):
+
+    1. If any candidate carries a ``prominence`` (every automatic candidate
+       from a normal Find Peaks does), the one with the LARGEST prominence
+       wins -- ties broken toward the EARLIEST position for stability.
+       Prominence is the "how far this stands above its surroundings"
+       measure, so a genuine wave always outranks a small bump, and a
+       stray manual click (no prominence) can never silently displace a
+       real automatic couple member.
+    2. Otherwise -- only manual candidates, or an automatic pass run with
+       no prominence threshold at all, so nothing has a prominence -- the
+       fallback is the candidate added LAST (highest position): a manual
+       candidate's most recent deliberate placement, or the last automatic
+       peak in detection order.
+
+    A researcher who adds a manual candidate to REPLACE a spurious
+    automatic one simply disables that automatic candidate (it is right
+    there in the peak table), after which rule 2 (or rule 1 among the
+    remaining automatics) picks the manual one.
     """
-    if peak.prominence is not None:
-        return abs(peak.prominence)
-    return abs(peak.i_peak_raw_a)
+    if not indexed:
+        return None
+    with_prominence = [(idx, p) for idx, p in indexed if p.prominence is not None]
+    if with_prominence:
+        return max(with_prominence, key=lambda ip: (ip[1].prominence, -ip[0]))[1]
+    return max(indexed, key=lambda ip: ip[0])[1]
 
 
 def assign_couple(
     peaks: list[CVPeakResult],
 ) -> tuple[CVPeakResult | None, CVPeakResult | None]:
-    """The anodic/cathodic couple for a cycle: the largest-magnitude
-    ENABLED anodic candidate + the largest-magnitude enabled cathodic
-    candidate (see :func:`_peak_result_magnitude`). ``unassigned`` peaks
-    are never couple members. Either side is ``None`` when that process has
-    no enabled candidate.
+    """The anodic/cathodic couple for a cycle -- one ENABLED anodic
+    candidate + one enabled cathodic candidate (see
+    :func:`_pick_couple_member` for the exact, deterministic selection
+    rule). ``unassigned`` and disabled peaks are never couple members.
+    Either side is ``None`` when that process has no enabled candidate.
     """
-    anodic = [p for p in peaks if p.enabled and p.process == PROCESS_ANODIC]
-    cathodic = [p for p in peaks if p.enabled and p.process == PROCESS_CATHODIC]
-    best_a = max(anodic, key=_peak_result_magnitude, default=None)
-    best_c = max(cathodic, key=_peak_result_magnitude, default=None)
-    return best_a, best_c
+    anodic = [(idx, p) for idx, p in enumerate(peaks) if p.enabled and p.process == PROCESS_ANODIC]
+    cathodic = [(idx, p) for idx, p in enumerate(peaks) if p.enabled and p.process == PROCESS_CATHODIC]
+    return _pick_couple_member(anodic), _pick_couple_member(cathodic)
 
 
 def _as_measurement(peak: CVPeakResult) -> CVPeakMeasurement:
