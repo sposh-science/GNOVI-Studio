@@ -657,6 +657,28 @@ QToolButton#ToolStripButtonLeft:focus, QToolButton#ToolStripButtonRight:focus {{
     border-color: {accent};
 }}
 
+/* Tool-strip section headings (DATA/PLOT/FORMAT/ANALYZE) -- pure visual
+grouping above their `add_page` buttons, see `ToolDrawer.add_section`'s own
+docstring for why this is a plain `QLabel`, never a button. Small, muted,
+letter-spaced so it reads as a subordinate group caption rather than
+another destination (the buttons below it are the destinations, not it) --
+`muted_text` is the same restrained token every other secondary-text rule
+in this stylesheet already uses, not a one-off color. A thin top border +
+small top margin separates one group from the previous one without
+costing much vertical space; the leading "DATA" heading gets the same
+border too (Qt QSS has no reliable first-child selector to special-case
+it), which reads as a harmless top rule under the strip's own existing
+content margin rather than a visible defect. */
+QLabel#ToolStripSectionLeft, QLabel#ToolStripSectionRight {{
+    color: {muted_text};
+    font-size: 7pt;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    padding: 6px 2px 2px 2px;
+    margin-top: 4px;
+    border-top: 1px solid {border};
+}}
+
 /* Context/status text (Active panel / Graph / Data, active-dataset
 context) -- restrained accent color at normal weight instead of bold; see
 module docstring. Applied via a dynamic property rather than a widget
@@ -677,6 +699,22 @@ QLabel[contextRow="true"] {{
     padding: 8px 10px;
     color: {context_accent};
     font-weight: 400;
+}}
+
+/* Adaptive drawer-page heading (e.g. "2D Axes" / "3D Axes & View") -- see
+`FigurePropertiesPanel.page_heading_2d`/`.page_heading_3d`'s own comment.
+Deliberately the opposite weight rule from `contextRow` right above (bold,
+full-strength `text` color, not muted `context_accent`): this names WHICH
+adaptive page/editor is on screen, a heading, not live figure/dataset
+status -- so it gets the normal heading treatment other chrome in this app
+already avoids reserving for state. Applied via a dynamic property, same
+mechanism as `contextRow`, so any plain QLabel can opt in without a
+dedicated subclass. */
+QLabel[pageHeading="true"] {{
+    color: {text};
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    padding: 2px 0 4px 0;
 }}
 
 /* Workbench header -- see gui.widgets.workbench_header.WorkbenchHeader.

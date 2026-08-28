@@ -4,7 +4,15 @@ import math
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QStackedWidget, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QStackedWidget,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 STRIP_WIDTH = 64
 _ICON_SIZE = 22
@@ -130,6 +138,13 @@ class ToolDrawer(QWidget):
         self._buttons: dict[str, QToolButton] = {}
         self._pages: dict[str, QWidget] = {}
         self._active_key: str | None = None
+        # Ordered record of everything inserted into the strip -- both
+        # `add_page` buttons and `add_section` headings -- as
+        # `("page", key)` / `("section", label)` tuples, in insertion order.
+        # Exists purely so callers/tests can assert the strip's exact visual
+        # order (buttons AND headings together) without reaching into Qt
+        # layout internals; `ToolDrawer` itself never reads this back.
+        self._strip_order: list[tuple[str, str]] = []
 
         self._strip = QWidget()
         # Plain objectName per side rather than a `[side="..."]` dynamic-
@@ -166,6 +181,30 @@ class ToolDrawer(QWidget):
     def strip_width(self) -> int:
         return STRIP_WIDTH
 
+    @property
+    def strip_order(self) -> list[tuple[str, str]]:
+        """The strip's exact visual order, top to bottom: `("page", key)`
+        for each `add_page` button and `("section", label)` for each
+        `add_section` heading, interleaved as inserted."""
+        return list(self._strip_order)
+
+    def add_section(self, label: str) -> None:
+        """Insert a subtle, non-interactive group heading (e.g. "PLOT")
+        above whatever `add_page` buttons follow it -- pure visual grouping
+        (see `MainWindow`'s own strip-registration comment for the target
+        DATA/PLOT/FORMAT/ANALYZE grouping), never a navigation destination:
+        a plain `QLabel`, not a `QToolButton` -- not checkable, never
+        receives active-page/checked styling, never added to `_buttons` or
+        `_pages` (so `show_page`/`_on_button_clicked` can never target it),
+        and `Qt.NoFocus` keeps it out of the tab order entirely."""
+        heading = QLabel(label)
+        heading.setObjectName("ToolStripSectionLeft" if self._side == "left" else "ToolStripSectionRight")
+        heading.setAlignment(Qt.AlignCenter)
+        heading.setFocusPolicy(Qt.NoFocus)
+        heading.setWordWrap(True)
+        self._strip_layout.insertWidget(self._strip_layout.count() - 1, heading)
+        self._strip_order.append(("section", label))
+
     def add_page(self, key: str, label: str, tooltip: str, icon_kind: str, widget: QWidget) -> None:
         button = QToolButton()
         button.setObjectName("ToolStripButtonLeft" if self._side == "left" else "ToolStripButtonRight")
@@ -185,6 +224,7 @@ class ToolDrawer(QWidget):
         self._buttons[key] = button
         self._pages[key] = widget
         self._stack.addWidget(widget)
+        self._strip_order.append(("page", key))
 
     def _on_button_clicked(self, key: str) -> None:
         if self._active_key == key:

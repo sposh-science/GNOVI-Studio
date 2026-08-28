@@ -586,6 +586,11 @@ def _make_grouped_panel_at(window, dataset, index, monkeypatch, group_by="Temper
 
 
 def test_group_by_populates_the_3d_series_list_with_one_entry_per_group(qapp, monkeypatch):
+    """The 3D creation page's own read-only series list was removed (see PR
+    "Sidebar Navigation & 2D/3D Workflow Polish"'s own audit) once the
+    adaptive Series page was confirmed to fully cover it -- a grouped add
+    must still create every Series3D correctly, and they must show up
+    immediately on the Series page, the one place that now manages them."""
     window, _dataset = _make_3_panel_window()
     diode = _make_diode_dataset()
     window.dataset_manager.add(diode)
@@ -596,8 +601,8 @@ def test_group_by_populates_the_3d_series_list_with_one_entry_per_group(qapp, mo
     assert isinstance(panel, Panel3D)
     assert len(panel.series) == 2
     window.toolbar_panel_combo.setCurrentIndex(1)
-    window.plot3d_panel.refresh()
-    assert window.plot3d_panel.series_list.count() == 2
+    window.series_panel.refresh()
+    assert window.series_panel.series3d_list.count() == 2
     window.close()
 
 

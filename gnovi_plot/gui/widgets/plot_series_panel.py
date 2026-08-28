@@ -205,7 +205,7 @@ class PlotSeriesPanel(QWidget):
         # `figure_size_panel.font_family_combo` for the same pattern.
         self.hist_mode_combo.setMinimumWidth(80)
 
-        list_group = QGroupBox("Plot Series")
+        list_group = QGroupBox("2D Series")
         list_layout = QVBoxLayout(list_group)
         list_layout.addWidget(self.series_list)
         buttons = QHBoxLayout()
@@ -252,7 +252,7 @@ class PlotSeriesPanel(QWidget):
         stack_buttons.addWidget(self.reset_offsets_button)
         stack_form.addRow(stack_buttons)
 
-        self.list_section = CollapsibleSection("Plot Series", list_group)
+        self.list_section = CollapsibleSection("2D Series", list_group)
         self.props_section = CollapsibleSection("Series Properties", props_group)
         self.stack_section = CollapsibleSection("Stacked / Offset Curves", stack_group)
 

@@ -1,10 +1,16 @@
 """`Plot3DPanel` -- the "3D" sidebar page's own widget-level behavior
-(dataset/column selection, plot type, Group by, validation, series-list
-summary, signal emission). Creation-safety decisions (empty vs. populated
-2D panel, append-to-existing-Panel3D) are NOT this panel's concern -- see
-`gui.main_window.MainWindow._on_add_3d_series_requested` and
-`test_3d_scatter_gui.py` for those, since they need `GnoviFigure.
-active_panel`'s type/content, which only the owner resolves.
+(dataset/column selection, plot type, Group by, validation, "Clear 3D
+Plot" state, signal emission). This page's own read-only series-list
+summary was removed (see PR "Sidebar Navigation & 2D/3D Workflow Polish")
+once the adaptive Series page's `series3d_list` was confirmed to fully
+cover selecting/renaming/styling/removing/clearing every `Series3D` this
+page creates -- see `test_sidebar_navigation.py` for the tests covering
+that removal and the Series page's own coverage. Creation-safety decisions
+(empty vs. populated 2D panel, append-to-existing-Panel3D) are NOT this
+panel's concern -- see `gui.main_window.MainWindow.
+_on_add_3d_series_requested` and `test_3d_scatter_gui.py` for those, since
+they need `GnoviFigure.active_panel`'s type/content, which only the owner
+resolves.
 """
 
 import pandas as pd
@@ -344,60 +350,50 @@ def test_clear_button_emits_clear_3d_plot_requested(qapp):
     panel.close()
 
 
-# --- 3D series list summary, reflecting the active panel ------------------------------
+# --- "Clear 3D Plot" state, reflecting the active panel -----------------------------
+#
+# This page's own read-only 3D series list was removed (see the module
+# docstring) -- what `refresh()` still owns is `active_panel_label` and
+# `clear_button`'s enabled state, both covered below.
 
 
-def test_refresh_shows_no_series_and_disables_clear_for_a_2d_active_panel(qapp):
+def test_refresh_disables_clear_for_a_2d_active_panel(qapp):
     figure = GnoviFigure()
     panel, _manager, _figure = _make_panel(_make_dataset(), figure=figure)
 
-    assert panel.series_list.count() == 0
     assert panel.clear_button.isEnabled() is False
     panel.close()
 
 
-def test_refresh_lists_the_active_panel3ds_series_and_enables_clear(qapp):
+def test_refresh_enables_clear_for_a_populated_panel3d(qapp):
     dataset = _make_dataset()
     panel3d = Panel3D()
     panel3d.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity", label="mat"))
     figure = GnoviFigure(panels=[panel3d])
     panel, _manager, _figure = _make_panel(dataset, figure=figure)
 
-    assert panel.series_list.count() == 1
-    assert panel.series_list.item(0).text() == "mat"
     assert panel.clear_button.isEnabled() is True
     panel.close()
 
 
-def test_refresh_lists_multiple_grouped_families_together(qapp):
-    """Multiple 3D Series list entries when several grouped families
-    coexist in one Panel3D -- see this milestone's own "multiple grouped
-    families can coexist" requirement."""
-    dataset = _make_diode_dataset()
-    panel3d = Panel3D()
-    panel3d.add_series(
-        Series3D(dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", label="25", row_indices=(0, 2, 4))
-    )
-    panel3d.add_series(
-        Series3D(dataset=dataset, x_column="Voltage_V", y_column="Temperature_C", z_column="Current_mA", label="35", row_indices=(1, 3, 5))
-    )
-    figure = GnoviFigure(panels=[panel3d])
-    panel, _manager, _figure = _make_panel(dataset, figure=figure)
+def test_refresh_disables_clear_for_an_empty_panel3d(qapp):
+    """An empty `Panel3D` (no series yet) -- still nothing to clear."""
+    figure = GnoviFigure(panels=[Panel3D()])
+    panel, _manager, _figure = _make_panel(_make_dataset(), figure=figure)
 
-    assert panel.series_list.count() == 2
-    assert {panel.series_list.item(i).text() for i in range(2)} == {"25", "35"}
+    assert panel.clear_button.isEnabled() is False
     panel.close()
 
 
-def test_set_figure_repoints_and_refreshes(qapp):
+def test_set_figure_repoints_and_refreshes_clear_button_state(qapp):
     dataset = _make_dataset()
     panel, _manager, _figure = _make_panel(dataset)
-    assert panel.series_list.count() == 0
+    assert panel.clear_button.isEnabled() is False
 
     panel3d = Panel3D()
     panel3d.add_series(Series3D(dataset=dataset, x_column="temperature", y_column="composition", z_column="conductivity"))
     new_figure = GnoviFigure(panels=[panel3d])
     panel.set_figure(new_figure)
 
-    assert panel.series_list.count() == 1
+    assert panel.clear_button.isEnabled() is True
     panel.close()

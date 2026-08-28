@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QPushButton,
     QSpinBox,
@@ -321,9 +322,20 @@ class FigurePropertiesPanel(QWidget):
 
         self.reset_all_button = QPushButton("Reset to Defaults")
 
+        # Adaptive page heading -- static text is correct here (unlike
+        # `active_panel_label` above it, which reflects live figure state):
+        # this page and the 3D one below are two entirely separate widgets
+        # in a `QStackedWidget`, switched by `isinstance(active_panel,
+        # Panel3D)` in `refresh()`, so whichever one is actually visible
+        # already IS the correct context -- see this class's own docstring
+        # and PR "Sidebar Navigation & 2D/3D Workflow Polish"'s Part 5.
+        self.page_heading_2d = QLabel("2D Axes")
+        self.page_heading_2d.setProperty("pageHeading", True)
+
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.page_heading_2d)
         layout.addWidget(labels_group)
         layout.addWidget(limits_group)
         layout.addWidget(ticks_group)
@@ -544,9 +556,14 @@ class FigurePropertiesPanel(QWidget):
         view_buttons.addWidget(self.d3_reset_view_button)
         view_form.addRow(view_buttons)
 
+        # See the matching `page_heading_2d` comment in `_build_2d_page`.
+        self.page_heading_3d = QLabel("3D Axes & View")
+        self.page_heading_3d.setProperty("pageHeading", True)
+
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.page_heading_3d)
         layout.addWidget(labels_group)
         layout.addWidget(limits_group)
         layout.addWidget(aspect_group)
