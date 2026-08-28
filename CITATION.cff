@@ -9,6 +9,8 @@ authors:
 license: GPL-3.0-or-later
 repository-code: "https://github.com/wavicles/GNOVI-Studio"
 url: "https://github.com/wavicles/GNOVI-Studio"
+version: 0.9.0
+date-released: 2026-08-23
 abstract: >-
   Scientific Plotting & Analysis Studio -- a cross-platform Python desktop
   application for scientific plotting, experimental data visualization,
