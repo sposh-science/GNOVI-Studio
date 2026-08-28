@@ -27,13 +27,16 @@ from gnovi_plot.analysis.segments import (
 )
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.data.dataset_manager import DatasetManager
-from gnovi_plot.data.importers.text_importer import DataImportError
+from gnovi_plot.data.importers.text_importer import SUPPORTED_EXTENSIONS, DataImportError
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_column, numeric_xy
 from gnovi_plot.gui.dialogs.import_data_dialog import ImportDataDialog
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.plotting.series import PlotSeries, PlotType
 
-_FILE_FILTER = "Data files (*.csv *.txt *.tsv *.dat);;All files (*)"
+# Driven by SUPPORTED_EXTENSIONS (never a second, hand-maintained
+# extension list here) so a format the importer accepts -- e.g. .xy/.xye
+# -- is never invisible under the dialog's default filter.
+_FILE_FILTER = f"Data files ({' '.join(f'*{ext}' for ext in sorted(SUPPORTED_EXTENSIONS))});;All files (*)"
 
 _AUTO_DETECTION_FAILED_MESSAGE = (
     "Automatic cycle detection could not identify repeating sweeps. "

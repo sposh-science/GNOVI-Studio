@@ -1672,12 +1672,13 @@ class MainWindow(QMainWindow):
         other double-click behavior on the canvas."""
         if event.inaxes is None:
             return
-        if self._xrd_manual_peak_mode and event.button == 1 and event.xdata is not None and event.ydata is not None:
+        if self._xrd_manual_peak_mode and event.button == 1:
             # Consumes the click entirely -- never also activates/focuses
-            # a panel (see AnalysisPanel.xrd_add_manual_peak's own
-            # docstring: this is a SEED near the click, not a claim about
-            # a measured peak center).
-            self.analysis_panel.xrd_add_manual_peak(event.xdata, event.ydata)
+            # a panel, and never falls through to the ordinary
+            # activate-on-click branch below, even when rejected (see
+            # `_handle_xrd_manual_peak_click`'s own docstring for exactly
+            # what a rejected click does -- namely, nothing at all).
+            self._handle_xrd_manual_peak_click(event)
             return
         if event.dblclick and event.button == 1 and self._is_current_workbench_focused():
             self._restore_multi_panel_view()
@@ -1686,6 +1687,38 @@ class MainWindow(QMainWindow):
         if index is None or index == self.figure_model.active_panel_index:
             return
         self._set_active_panel(index)
+
+    def _handle_xrd_manual_peak_click(self, event) -> None:
+        """A click while "Add Peak" is armed only ever adds a seed to the
+        Panel `AnalysisPanel.xrd_add_manual_peak` actually targets --
+        `figure_model.active_panel` (see `XRDAnalysisSection.
+        add_manual_peak`, which stamps `source_panel_id=self._figure.
+        active_panel.id`). So the click's own Axes must resolve, via
+        `panel_index_for_axes` -- the same click-to-panel mapping
+        `_on_canvas_click`'s ordinary activate-on-click branch already
+        uses below -- to that SAME active panel index; deliberately not
+        `plot_canvas.active_axes()` (which answers "what panel is
+        active", not "what panel did this click land in" -- using it
+        here would accept a click on any panel while Add Peak is armed,
+        recreating exactly the wrong-panel bug this guards against).
+
+        A click on any other panel's Axes (a second 2D panel, a
+        `Panel3D`, or anything `panel_index_for_axes` doesn't recognize
+        as one of ours), non-finite coordinates, or a click outside any
+        data area is silently ignored: no seed added, active panel never
+        switched, `xrd_add_manual_peak` never called at all -- so no
+        result/history mutation and no `_set_dirty` call happens for a
+        rejected click, same as clicking outside any Axes already does."""
+        index = self.plot_canvas.panel_index_for_axes(event.inaxes)
+        if index is None or index != self.figure_model.active_panel_index:
+            return
+        if isinstance(self.figure_model.active_panel, Panel3D):
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        if not (math.isfinite(event.xdata) and math.isfinite(event.ydata)):
+            return
+        self.analysis_panel.xrd_add_manual_peak(event.xdata, event.ydata)
 
     def _on_canvas_context_menu(self, event) -> None:
         """Right-click inside a Panel's Axes opens a context menu targeting

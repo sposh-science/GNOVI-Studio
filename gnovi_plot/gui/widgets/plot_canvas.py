@@ -444,16 +444,32 @@ class PlotCanvas(FigureCanvasQTAgg):
         panel's Axes -- always a full clear-and-redraw of whatever this
         canvas drew before, never an incremental diff. A no-op (after
         clearing) when both are `None`/empty, or the active panel is a
-        `Panel3D` (XRD overlays never apply to 3D)."""
+        `Panel3D` (XRD overlays never apply to 3D).
+
+        Resolves the target Axes itself rather than calling
+        `active_axes()`: that method assumes `figure.active_panel_index`
+        is always in bounds for `self.axes_list` (true for every OTHER
+        caller, which only ever runs right after a matching `render()`)
+        and would raise `IndexError` -- or, for a negative index, silently
+        wrap to the wrong Axes -- if it weren't. An XRD overlay refresh
+        can be triggered by `AnalysisPanel`/`XRDAnalysisSection` signals
+        independently of any render (e.g. a preview recomputed before the
+        canvas has redrawn a just-changed figure), so this stays
+        deliberately fail-safe: an out-of-range index means no overlay
+        drawn, never a crash or a wrong-panel overlay. Focus mode is
+        still resolved exactly like `active_axes()` does (the one Axes
+        this canvas actually owns while focused)."""
         self.clear_analysis_overlay()
         if isinstance(figure.active_panel, Panel3D):
             return
         if not peak_points and preview_xy is None:
             return
-        if not (0 <= figure.active_panel_index < len(self.axes_list)) or self.is_focused:
-            ax = self.axes_list[0] if self.is_focused else None
-        else:
+        if self.is_focused:
+            ax = self.axes_list[0]
+        elif 0 <= figure.active_panel_index < len(self.axes_list):
             ax = self.axes_list[figure.active_panel_index]
+        else:
+            ax = None
         if ax is None:
             return
 

@@ -21,13 +21,14 @@ from gnovi_plot.core.project_io import load_project, save_project
 from gnovi_plot.core.workbench import Workbench
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.data.dataset_manager import DatasetManager
+from gnovi_plot.gui.main_window import MainWindow
 from gnovi_plot.gui.widgets.analysis_panel import AnalysisPanel
 from gnovi_plot.gui.widgets.xrd_analysis_section import XRDAnalysisSection
 from gnovi_plot.modules.xrd import preprocessing as xrd_preprocessing
 from gnovi_plot.modules.xrd.preprocessing import PybaselinesNotAvailableError
 from gnovi_plot.modules.xrd.radiation import CU_KALPHA1_ANGSTROM
 from gnovi_plot.modules.xrd.results import XRDAnalysisResult
-from gnovi_plot.plotting.figure import GnoviFigure, Panel3D
+from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D
 from gnovi_plot.plotting.series import PlotSeries
 from gnovi_plot.plotting.series3d import Plot3DType, Series3D
 
@@ -693,3 +694,237 @@ def test_xrd_result_saves_and_reopens_with_project(qapp, tmp_path):
     assert len(reloaded_result.peaks) == len(result.peaks)
     assert reloaded_result.engine == "gnovi"
     assert reloaded_result.operation == "xrd_peak_detection"
+
+
+# --- Review-fix regression: manual peak click must target the panel it
+# actually landed in, never any other panel merely because "Add Peak" is
+# armed (code-review finding #1) ---------------------------------------------
+
+
+class _FakeClickEvent:
+    def __init__(self, inaxes, xdata, ydata, button=1, dblclick=False):
+        self.inaxes = inaxes
+        self.xdata = xdata
+        self.ydata = ydata
+        self.button = button
+        self.dblclick = dblclick
+
+
+def _two_panel_xrd_window():
+    window = MainWindow()
+    window.figure_size_panel.layout_combo.setCurrentIndex(window.figure_size_panel.layout_combo.findText("1 x 2"))
+    ds1 = _synthetic_pattern_dataset(name="Pattern 1", seed=11)
+    ds2 = _synthetic_pattern_dataset(name="Pattern 2", seed=12)
+    window.dataset_manager.add(ds1)
+    window.dataset_manager.add(ds2)
+    window.figure_model.panels[0].add_series(PlotSeries.line(ds1, "2theta", "intensity", label="Pattern 1"))
+    window.figure_model.panels[1].add_series(PlotSeries.line(ds2, "2theta", "intensity", label="Pattern 2"))
+    window._on_figure_content_changed()
+    window._set_active_panel(0)
+    window.analysis_panel.tool_combo.setCurrentText("XRD Peak Analysis")
+    xrd = window.analysis_panel.xrd_section_widget
+    xrd.radiation_combo.setCurrentIndex(xrd.radiation_combo.findData("cu_ka1"))
+    xrd.add_peak_button.setChecked(True)  # arm "Add Peak" for Panel 1
+    return window, xrd
+
+
+def test_manual_peak_click_on_a_different_panel_is_ignored(qapp):
+    window, xrd = _two_panel_xrd_window()
+    assert xrd.current_result() is None
+
+    other_axes = window.plot_canvas.axes_list[1]
+    was_dirty = window._dirty
+    window._on_canvas_click(_FakeClickEvent(inaxes=other_axes, xdata=45.0, ydata=200.0))
+    assert xrd.current_result() is None
+    assert window.figure_model.active_panel_index == 0  # never silently switched
+    assert window._dirty == was_dirty  # a rejected click never dirties the project
+
+    own_axes = window.plot_canvas.axes_list[0]
+    window._on_canvas_click(_FakeClickEvent(inaxes=own_axes, xdata=45.0, ydata=200.0))
+    assert xrd.current_result() is not None
+    assert len(xrd.current_result().peaks) == 1
+    assert xrd.current_result().peaks[0].two_theta == pytest.approx(45.0)
+
+
+def test_manual_peak_click_rejects_non_finite_coordinates(qapp):
+    window, xrd = _two_panel_xrd_window()
+    own_axes = window.plot_canvas.axes_list[0]
+    window._on_canvas_click(_FakeClickEvent(inaxes=own_axes, xdata=float("nan"), ydata=200.0))
+    assert xrd.current_result() is None
+    window._on_canvas_click(_FakeClickEvent(inaxes=own_axes, xdata=45.0, ydata=float("inf")))
+    assert xrd.current_result() is None
+
+
+def test_manual_peak_click_ignores_outside_any_axes(qapp):
+    window, xrd = _two_panel_xrd_window()
+    window._on_canvas_click(_FakeClickEvent(inaxes=None, xdata=None, ydata=None))
+    assert xrd.current_result() is None
+
+
+def test_manual_peak_click_ignores_when_active_panel_is_3d(qapp):
+    window, xrd = _two_panel_xrd_window()
+    window.figure_model.panels[1] = Panel3D()
+    window._on_figure_content_changed()
+    # Add Peak was armed while Panel 1 (2D) was active; switching active
+    # panel to the now-3D Panel 2 does not itself disarm it -- the click
+    # handler's own Panel3D guard is what must reject a click there.
+    window._set_active_panel(1)
+    axes_3d = window.plot_canvas.axes_list[1]
+    window._on_canvas_click(_FakeClickEvent(inaxes=axes_3d, xdata=45.0, ydata=200.0))
+    assert xrd.current_result() is None
+
+
+# --- Review-fix regression: an actual History-row click (not just
+# `sync_history`'s own programmatic path) must fully reload the XRD
+# section (code-review finding #2) -------------------------------------------
+
+
+def test_clicking_an_xrd_history_row_reloads_the_xrd_section(qapp):
+    figure = GnoviFigure()
+    ds = _synthetic_pattern_dataset(seed=21)
+    _panel_with_series(figure, ds)
+    panel = AnalysisPanel(figure, DatasetManager())
+    xrd = panel.xrd_section_widget
+    xrd.radiation_combo.setCurrentIndex(xrd.radiation_combo.findData("cu_ka1"))
+
+    xrd.prominence_spin.setValue(40.0)
+    xrd._on_find_peaks_clicked()
+    result_a = xrd.current_result()
+
+    xrd.prominence_spin.setValue(120.0)
+    xrd._on_find_peaks_clicked()
+    result_b = xrd.current_result()
+    assert result_a.result_id != result_b.result_id
+
+    panel.tool_combo.setCurrentText("Curve Fitting")  # simulate having navigated away
+    panel.sync_history([result_a, result_b], result_b)
+
+    # An actual click (never sync_history) on result A's row must restore it.
+    panel.history_list.setCurrentRow(panel._history_results.index(result_a))
+    assert panel.tool_combo.currentText() == "XRD Peak Analysis"
+    assert xrd.current_result() is result_a
+    assert xrd.peak_table.rowCount() == len(result_a.peaks)
+
+    # Editing now must only ever touch result A, never result B.
+    before_b = len(result_b.peaks)
+    xrd.add_manual_peak(50.0, 10.0)
+    assert xrd.current_result() is result_a
+    assert len(result_b.peaks) == before_b
+
+    panel.history_list.setCurrentRow(panel._history_results.index(result_b))
+    assert xrd.current_result() is result_b
+    assert xrd.peak_table.rowCount() == len(result_b.peaks)
+
+
+def test_clicking_between_a_fit_result_and_an_xrd_result_in_the_same_history(qapp):
+    figure = GnoviFigure()
+    ds = _synthetic_pattern_dataset(seed=23)
+    _panel_with_series(figure, ds)
+    panel = AnalysisPanel(figure, DatasetManager())
+    xrd = panel.xrd_section_widget
+    xrd.radiation_combo.setCurrentIndex(xrd.radiation_combo.findData("cu_ka1"))
+    xrd.prominence_spin.setValue(40.0)
+    xrd._on_find_peaks_clicked()
+    xrd_result = xrd.current_result()
+
+    from gnovi_plot.analysis.fitting import LINEAR, fit_curve
+
+    fit_result = fit_curve(
+        [1.0, 2.0, 3.0, 4.0],
+        [1.0, 2.0, 3.0, 4.0],
+        LINEAR,
+        source_dataset_id=ds.id,
+        x_column="2theta",
+        y_column="intensity",
+        source_panel_id=figure.active_panel.id,
+    )
+
+    panel.sync_history([fit_result, xrd_result], fit_result)
+    assert panel.tool_combo.currentText() == "Curve Fitting"
+
+    panel.history_list.setCurrentRow(panel._history_results.index(xrd_result))
+    assert panel.tool_combo.currentText() == "XRD Peak Analysis"
+    assert xrd.current_result() is xrd_result
+
+    panel.history_list.setCurrentRow(panel._history_results.index(fit_result))
+    assert panel.tool_combo.currentText() == "Curve Fitting"
+    assert panel._current_result is fit_result
+    assert xrd.current_result() is None  # never left pointing at the stale XRD result
+
+
+# --- Review-fix regression: transient background/smoothing preview state
+# and the Detection Input options that depend on it must be invalidated on
+# every source-context change, not just an explicit source-combo edit
+# (code-review finding #3) ---------------------------------------------------
+
+
+def test_detection_input_options_invalidated_on_active_panel_switch(qapp):
+    figure = GnoviFigure()
+    ds1 = _synthetic_pattern_dataset(name="Pattern 1", seed=31)
+    ds2 = _synthetic_pattern_dataset(name="Pattern 2", seed=32)
+    _panel_with_series(figure, ds1)
+    figure.panels.append(Panel())
+    figure.panels[1].add_series(PlotSeries.line(ds2, "2theta", "intensity"))
+    manager = DatasetManager()
+    manager.add(ds1)
+    manager.add(ds2)
+
+    section = XRDAnalysisSection(figure, manager)
+    section.background_method_combo.setCurrentText("arPLS")
+    section._on_preview_background_clicked()
+    assert section._background_preview is not None
+    options = [section.detection_input_combo.itemData(i) for i in range(section.detection_input_combo.count())]
+    assert "background_corrected" in options
+    assert section.add_corrected_button.isEnabled()
+
+    figure.set_active_panel(1)
+    section.set_figure(figure)  # a Workbench-switch-style repoint clears it unconditionally
+    assert section._background_preview is None
+    options_after = [section.detection_input_combo.itemData(i) for i in range(section.detection_input_combo.count())]
+    assert "background_corrected" not in options_after
+    assert section.detection_input_combo.currentData() == "raw"
+    assert not section.add_corrected_button.isEnabled()
+
+
+def test_detection_input_options_invalidated_when_refresh_resolves_a_different_series(qapp):
+    figure = GnoviFigure()
+    ds1 = _synthetic_pattern_dataset(name="Pattern 1", seed=33)
+    ds2 = _synthetic_pattern_dataset(name="Pattern 2", seed=34)
+    series1 = _panel_with_series(figure, ds1)
+    manager = DatasetManager()
+    manager.add(ds1)
+    manager.add(ds2)
+
+    section = XRDAnalysisSection(figure, manager)
+    section.background_method_combo.setCurrentText("arPLS")
+    section._on_preview_background_clicked()
+    assert section._background_preview is not None
+
+    # Simulate the active panel's series changing out from under an
+    # existing preview (e.g. Extract/Focus swapping which series
+    # `_eligible_series` resolves) without a full set_figure repoint --
+    # `refresh()` itself must notice and invalidate.
+    figure.active_panel.remove_series(series1.id)
+    figure.active_panel.add_series(PlotSeries.line(ds2, "2theta", "intensity"))
+    section.refresh()
+    assert section._background_preview is None
+    options = [section.detection_input_combo.itemData(i) for i in range(section.detection_input_combo.count())]
+    assert options == ["raw"]
+
+
+def test_detection_input_options_survive_an_unrelated_refresh_of_the_same_series(qapp):
+    figure = GnoviFigure()
+    ds = _synthetic_pattern_dataset(seed=35)
+    _panel_with_series(figure, ds)
+    manager = DatasetManager()
+    manager.add(ds)
+
+    section = XRDAnalysisSection(figure, manager)
+    section.background_method_combo.setCurrentText("arPLS")
+    section._on_preview_background_clicked()
+    assert section._background_preview is not None
+
+    section.refresh()  # e.g. an unrelated figure-content-changed refresh
+    assert section._background_preview is not None  # not discarded for no reason
+    options = [section.detection_input_combo.itemData(i) for i in range(section.detection_input_combo.count())]
+    assert "background_corrected" in options

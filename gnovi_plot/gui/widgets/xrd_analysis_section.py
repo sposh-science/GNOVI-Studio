@@ -383,10 +383,20 @@ class XRDAnalysisSection(QWidget):
     # --- wiring from AnalysisPanel -----------------------------------------
 
     def set_figure(self, figure: GnoviFigure) -> None:
+        """Repoint at a different `GnoviFigure` -- a Workbench switch or a
+        New/Open Project (both funnel through `MainWindow`'s single
+        Figure-retargeting method, see its own docstring). Unconditionally
+        invalidates any background/smoothing preview: it was computed
+        against the OLD figure's source series, which no longer has any
+        relationship to whatever `refresh()` (below) resolves as the
+        selected source next -- never left for `refresh()`'s own
+        same-series-id check to catch, since a coincidentally-matching id
+        across two different figures/projects isn't a case worth risking
+        (see `_invalidate_previews`'s own docstring for what this
+        clears)."""
         self._figure = figure
         self._current_result = None
-        self._background_preview = None
-        self._smooth_preview = None
+        self._invalidate_previews()
         self._set_manual_peak_mode(False)
         self._refresh_peak_table()
         self.refresh()
@@ -397,7 +407,20 @@ class XRDAnalysisSection(QWidget):
     def refresh(self) -> None:
         """Rebuild the source-series list; disable everything with a clear
         explanation when the active panel is a Panel3D (see `_eligible_
-        series`) or has no eligible 2D series yet."""
+        series`) or has no eligible 2D series yet.
+
+        Called for far more than a source-series change -- e.g. active-
+        panel switch (`MainWindow._on_panel_switched`) and any figure-
+        content change (`_on_figure_content_changed`) -- so a background/
+        smoothing preview computed against whatever series WAS selected
+        must be invalidated whenever this ends up resolving a DIFFERENT
+        series id as current (`target_index < 0`, below): an active-panel
+        switch has no series in common with the previous panel, so this
+        is what actually covers that case (`set_figure`, above, already
+        covers a Workbench switch/project open unconditionally). Left
+        alone when the exact same series id is still selected -- an
+        unrelated refresh (e.g. editing some other panel's series style)
+        must not discard an in-progress preview for no reason."""
         is_panel3d = isinstance(self._figure.active_panel, Panel3D)
         eligible = _eligible_series(self._figure)
 
@@ -414,6 +437,8 @@ class XRDAnalysisSection(QWidget):
             self.source_combo.setCurrentIndex(target_index)
         elif eligible:
             self.source_combo.setCurrentIndex(0)
+        if target_index < 0 and previous_id is not None:
+            self._invalidate_previews()
 
         has_eligible = bool(eligible)
         enabled = has_eligible and not is_panel3d
@@ -452,15 +477,53 @@ class XRDAnalysisSection(QWidget):
     def load_result(self, result: AnalysisResult | None) -> None:
         """Called when the shared Analysis History selection changes --
         restores `result` (if it's an XRDAnalysisResult) as the working
-        peak table/radiation, without rerunning detection. Never called
-        for a FitResult selection (AnalysisPanel only calls this when the
-        newly-current result is an XRDAnalysisResult or None)."""
+        peak table/radiation/detection settings/source selection, without
+        rerunning detection. Never called for a FitResult selection
+        (AnalysisPanel only calls this when the newly-current result is
+        an XRDAnalysisResult or None).
+
+        Deliberately does NOT restore a live background/smoothing
+        PREVIEW: those are transient, computed artifacts (see `set_
+        figure`/`_refresh_detection_input_options`'s own docstrings), and
+        silently recomputing arPLS/Savitzky-Golay as a side effect of
+        clicking a History row would be surprising, not helpful --
+        `result.parameters["preprocessing"]` (recorded at detection time)
+        remains inspectable via `provenance_details`/the Results view for
+        exactly what was actually used, even though this method doesn't
+        regenerate it as a preview overlay."""
         self._current_result = result if isinstance(result, XRDAnalysisResult) else None
         if self._current_result is not None:
             self._radiation = self._current_result.radiation
             self._sync_radiation_combo()
+            source_index = self.source_combo.findData(self._current_result.source_series_id)
+            if source_index >= 0:
+                self.source_combo.setCurrentIndex(source_index)
+            self._restore_detection_settings(self._current_result.parameters.get("detection", {}))
         self._refresh_peak_table()
+        self._refresh_detection_input_options()
         self.overlay_changed.emit()
+
+    def _restore_detection_settings(self, detection_params: dict) -> None:
+        """Reflects a stored result's own `prominence`/`distance`/`height`/
+        `width` back into the detection controls -- best-effort, `dict.get`
+        with each spinbox's own current value as the fallback, so a result
+        saved before a given key existed (or with that key `None`, meaning
+        "not used") leaves the corresponding control alone/unchecked
+        rather than raising or zeroing it out."""
+        prominence = detection_params.get("prominence")
+        if prominence is not None:
+            self.prominence_spin.setValue(prominence)
+        distance = detection_params.get("distance")
+        if distance is not None:
+            self.distance_spin.setValue(distance)
+        height = detection_params.get("height")
+        self.height_check.setChecked(height is not None)
+        if height is not None:
+            self.height_spin.setValue(height)
+        width = detection_params.get("width")
+        self.width_check.setChecked(width is not None)
+        if width is not None:
+            self.width_spin.setValue(width)
 
     def overlay_points(self) -> list[tuple[float, float, str]] | None:
         """(x, y, label) for every ENABLED peak of the current result, in
@@ -516,6 +579,19 @@ class XRDAnalysisSection(QWidget):
         return x.to_numpy(), y.to_numpy()
 
     def _on_source_changed(self) -> None:
+        self._invalidate_previews()
+
+    def _invalidate_previews(self) -> None:
+        """Clears any transient background/smoothing preview -- and
+        whatever Detection Input option depended on it -- because the
+        resolved source data it was computed against no longer applies.
+        The one shared place every preview-invalidating context change
+        (`_on_source_changed`, `refresh`, `set_figure` -- see each of
+        their own docstrings for exactly which real-world action routes
+        through them) goes through, so "what makes a preview go stale"
+        is answered in exactly one place. `_refresh_detection_input_
+        options` (which this always calls) is what actually removes any
+        now-unavailable Detection Input option and falls back to Raw."""
         self._background_preview = None
         self._smooth_preview = None
         self.add_corrected_button.setEnabled(False)

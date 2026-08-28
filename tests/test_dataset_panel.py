@@ -179,3 +179,21 @@ def test_dataset_combo_label_is_not_forced_bold(qapp):
 
     assert panel.dataset_combo_label.font().bold() is False
     panel.close()
+
+
+# --- Review-fix regression: the Import Data file filter must stay in sync
+# with text_importer.SUPPORTED_EXTENSIONS (code-review finding #4) ----------
+
+
+def test_import_file_filter_includes_every_supported_extension():
+    from gnovi_plot.data.importers.text_importer import SUPPORTED_EXTENSIONS
+    from gnovi_plot.gui.widgets.dataset_panel import _FILE_FILTER
+
+    for extension in SUPPORTED_EXTENSIONS:
+        assert f"*{extension}" in _FILE_FILTER
+    assert "*.xy" in _FILE_FILTER
+    assert "*.xye" in _FILE_FILTER
+    # Existing formats must remain -- this is a filter update, not a swap.
+    for extension in (".csv", ".txt", ".tsv", ".dat"):
+        assert f"*{extension}" in _FILE_FILTER
+    assert "All files (*)" in _FILE_FILTER
