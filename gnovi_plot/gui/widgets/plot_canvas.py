@@ -151,6 +151,13 @@ class PlotCanvas(FigureCanvasQTAgg):
         # already ax.cla()s every Axes -- same "drop stale refs, never
         # .remove() them" convention as _cursor_artists above).
         self._analysis_overlay_artists: list = []
+        # CV analysis overlay (selected-cycle tint, sweep tint, switching-
+        # potential line, candidate / enabled peak markers) -- same LIVE-
+        # ONLY contract as the XRD overlay above: reconstructed each render
+        # from the current CVCycleAnalysisResult, never persisted, never in
+        # a publication export (see `ExportFigureDialog._hide_gui_only_
+        # overlays`).
+        self._cv_overlay_artists: list = []
         self._active_panel_badge = _ActivePanelBadge(self)
         self._ensure_layout((1, 1), [Panel()])
 
@@ -243,6 +250,7 @@ class PlotCanvas(FigureCanvasQTAgg):
         # already did, and doing so again raises).
         self._cursor_artists = []
         self._analysis_overlay_artists = []
+        self._cv_overlay_artists = []
         self._last_figure = figure
         self._last_dark_mode = dark_mode
         self._last_focused_panel = focused_panel
@@ -497,5 +505,88 @@ class PlotCanvas(FigureCanvasQTAgg):
                     zorder=1000,
                 )
                 self._analysis_overlay_artists.append(annotation)
+
+        self.draw_idle()
+
+    # --- CV analysis overlay (selected-cycle / sweep tint, switching-
+    # potential line, candidate / enabled peak markers) -- see
+    # gui.widgets.cv_analysis_section.CVAnalysisSection. Same live-only,
+    # reconstruct-each-render, never-in-export contract as the XRD overlay
+    # above; drawn on the ACTIVE panel's Axes only, resolved fail-safe. ---
+
+    def clear_cv_overlay(self) -> None:
+        for artist in self._cv_overlay_artists:
+            try:
+                artist.remove()
+            except (ValueError, NotImplementedError):
+                pass
+        self._cv_overlay_artists = []
+        self.draw_idle()
+
+    # --- common export/save boundary --------------------------------------
+
+    def clear_gui_only_overlays(self) -> None:
+        """Detach EVERY live-only interaction aid that is a real Matplotlib
+        artist on the figure -- the reference cursor, the XRD peak/preview
+        overlay, and the CV cycle/sweep/candidate overlay. The single point
+        every path that writes the *live* figure to disk must call first
+        (GNOVI's Export dialog -- see `gui.dialogs.export_figure_dialog.
+        ExportFigureDialog._hide_gui_only_overlays` -- and Matplotlib's own
+        navigation-toolbar Save -- see `gui.main_window.
+        _CursorSafeNavigationToolbar.save_figure`), so no analysis aid can
+        end up in a publication file. Each redraws on the next mouse
+        move / render. Headless export paths (`export.figure_export.
+        export_figure`) build a fresh figure and never see these artists,
+        so they do not need this."""
+        self.clear_reference_cursor()
+        self.clear_analysis_overlay()
+        self.clear_cv_overlay()
+
+    def set_cv_overlay(self, figure: GnoviFigure, payload: dict | None) -> None:
+        """Redraw the CV overlay from ``payload`` (see ``CVAnalysisSection.
+        overlay_payload``) -- a full clear-and-redraw. A no-op (after
+        clearing) when ``payload`` is falsy or the active panel is a
+        ``Panel3D``. Axes resolution mirrors ``set_analysis_overlay``: an
+        out-of-range ``active_panel_index`` means no overlay, never a crash
+        or a wrong-panel draw."""
+        self.clear_cv_overlay()
+        if not payload or isinstance(figure.active_panel, Panel3D):
+            return
+        if self.is_focused:
+            ax = self.axes_list[0]
+        elif 0 <= figure.active_panel_index < len(self.axes_list):
+            ax = self.axes_list[figure.active_panel_index]
+        else:
+            return
+
+        rising = payload.get("cycle_rising_xy")
+        falling = payload.get("cycle_falling_xy")
+        if rising is not None:
+            (line,) = ax.plot(rising[0], rising[1], color="#b45309", linewidth=2.0, alpha=0.9, zorder=998)
+            self._cv_overlay_artists.append(line)
+        if falling is not None:
+            (line,) = ax.plot(falling[0], falling[1], color="#1d569f", linewidth=2.0, alpha=0.9, zorder=998)
+            self._cv_overlay_artists.append(line)
+
+        e_switch = payload.get("switching_potential_v")
+        if e_switch is not None:
+            vline = ax.axvline(e_switch, color="#8a8f99", linestyle="--", linewidth=1.0, zorder=997)
+            self._cv_overlay_artists.append(vline)
+
+        candidate = payload.get("candidate_xy")
+        if candidate and candidate[0]:
+            scatter = ax.scatter(
+                candidate[0], candidate[1], marker="o", s=48, facecolors="none",
+                edgecolors="#556360", linewidths=1.2, zorder=1001,
+            )
+            self._cv_overlay_artists.append(scatter)
+        for key, marker, color in (
+            ("anodic_xy", "^", "#b45309"),
+            ("cathodic_xy", "v", "#1d569f"),
+        ):
+            pts = payload.get(key)
+            if pts and pts[0]:
+                scatter = ax.scatter(pts[0], pts[1], marker=marker, s=60, color=color, zorder=1002)
+                self._cv_overlay_artists.append(scatter)
 
         self.draw_idle()

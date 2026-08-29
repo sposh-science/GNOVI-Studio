@@ -30,10 +30,14 @@ from gnovi_plot.core.app_info import __version__ as _APP_VERSION
 from gnovi_plot.modules.electrochemistry.common import SweepSegment
 from gnovi_plot.modules.electrochemistry.cv import (
     ORIGIN_AUTOMATIC,
+    PROCESS_ANODIC,
+    PROCESS_CATHODIC,
     RATIO_BASIS_CORRECTED,
     RATIO_BASIS_RAW,
     CVCoupleMetrics,
+    CVPeakMeasurement,
     CVPeakSeed,
+    couple_metrics,
 )
 
 CV_OPERATION_PEAK_ANALYSIS = "cv_peak_analysis"
@@ -220,18 +224,35 @@ class CVCycleAnalysisResult(AnalysisResult):
     peak_current_ratio_ipa_over_ipc: float | None
     peak_current_ratio_ipc_over_ipa: float | None
     peak_current_ratio_basis: str | None
+    # `peak_id` of the two peaks that currently form the anodic/cathodic
+    # couple the ΔEp / E½ / ratio numbers above were computed from -- so a
+    # reader can see WHICH peak numbers those metrics belong to (see
+    # `details()`). Defaulted (not required) so older `from_dict` calls and
+    # every CV-1 test keep working unchanged. `None` when no clean couple
+    # exists (0 or >1 enabled peak of a process, or a single-sweep result).
+    couple_anodic_peak_id: str | None = None
+    couple_cathodic_peak_id: str | None = None
 
     # --- display contract -------------------------------------------------
 
     def summary(self) -> str:
         enabled = sum(1 for p in self.peaks if p.enabled)
         cycle = "—" if self.cycle_index is None else str(self.cycle_index)
-        parts = [f"CV peak analysis: cycle {cycle}, {enabled}/{len(self.peaks)} peak(s)"]
+        parts = [f"CV peak analysis: cycle {cycle}, {enabled}/{len(self.peaks)} candidate(s)"]
         if self.delta_ep_v is not None:
             parts.append(f"ΔEp {self.delta_ep_v * 1e3:.0f} mV")
         if self.e_half_v is not None:
             parts.append(f"E½ {self.e_half_v:.3f} V")
         return ", ".join(parts)
+
+    def _peak_position(self, peak_id: str | None) -> int | None:
+        """1-based position of ``peak_id`` in :attr:`peaks`, or ``None``."""
+        if peak_id is None:
+            return None
+        for position, peak in enumerate(self.peaks, start=1):
+            if peak.peak_id == peak_id:
+                return position
+        return None
 
     def details(self) -> list[tuple[str, str]]:
         """A BOUNDED summary -- a fixed set of rows regardless of peak count
@@ -247,18 +268,30 @@ class CVCycleAnalysisResult(AnalysisResult):
             ("Cycle complete", "Yes" if self.cycle_complete else "No"),
             ("Sweeps", f"{len(self.sweeps)} ({directions})"),
             ("Peak candidates", str(len(self.peaks))),
-            ("Enabled", str(enabled)),
+            ("Enabled candidates", str(enabled)),
         ]
+
+        pos_a = self._peak_position(self.couple_anodic_peak_id)
+        pos_c = self._peak_position(self.couple_cathodic_peak_id)
+        if pos_a is not None and pos_c is not None:
+            rows.append(("Couple", f"peak #{pos_a} (anodic) + peak #{pos_c} (cathodic)"))
+        elif self.delta_ep_v is None and self.e_half_v is None:
+            rows.append(("Couple", "no anodic–cathodic couple in this cycle"))
+
         if self.delta_ep_v is not None:
             rows.append(("ΔEp", f"{self.delta_ep_v:.6g} V ({self.delta_ep_v * 1e3:.1f} mV)"))
         if self.e_half_v is not None:
             rows.append(("E½ (midpoint)", f"{self.e_half_v:.6g} V"))
+        basis = self.peak_current_ratio_basis
+        basis_suffix = f" ({basis.replace('_', ' ')})" if basis is not None else ""
         if self.peak_current_ratio_ipa_over_ipc is not None:
-            rows.append(("|Ipa| / |Ipc|", f"{self.peak_current_ratio_ipa_over_ipc:.4g}"))
+            rows.append(("|Ipa| / |Ipc|", f"{self.peak_current_ratio_ipa_over_ipc:.4g}{basis_suffix}"))
         if self.peak_current_ratio_ipc_over_ipa is not None:
-            rows.append(("|Ipc| / |Ipa|", f"{self.peak_current_ratio_ipc_over_ipa:.4g}"))
-        if self.peak_current_ratio_basis is not None:
-            rows.append(("Ratio basis", self.peak_current_ratio_basis))
+            rows.append(("|Ipc| / |Ipa|", f"{self.peak_current_ratio_ipc_over_ipa:.4g}{basis_suffix}"))
+        if basis == "raw_extremum" and self.peak_current_ratio_ipa_over_ipc is not None:
+            rows.append(
+                ("Note", "Ratio from raw extrema — draw peak baselines for a defensible value.")
+            )
         return rows
 
     def detail_table(self) -> tuple[list[str], list[list[str]]]:
@@ -304,6 +337,8 @@ class CVCycleAnalysisResult(AnalysisResult):
                 "peak_current_ratio_ipa_over_ipc": self.peak_current_ratio_ipa_over_ipc,
                 "peak_current_ratio_ipc_over_ipa": self.peak_current_ratio_ipc_over_ipa,
                 "peak_current_ratio_basis": self.peak_current_ratio_basis,
+                "couple_anodic_peak_id": self.couple_anodic_peak_id,
+                "couple_cathodic_peak_id": self.couple_cathodic_peak_id,
             }
         )
         return data
@@ -336,6 +371,8 @@ class CVCycleAnalysisResult(AnalysisResult):
             peak_current_ratio_ipa_over_ipc=data.get("peak_current_ratio_ipa_over_ipc"),
             peak_current_ratio_ipc_over_ipa=data.get("peak_current_ratio_ipc_over_ipa"),
             peak_current_ratio_basis=data.get("peak_current_ratio_basis"),
+            couple_anodic_peak_id=data.get("couple_anodic_peak_id"),
+            couple_cathodic_peak_id=data.get("couple_cathodic_peak_id"),
         )
 
 
@@ -361,6 +398,83 @@ def peak_result_from_seed(
     )
 
 
+def _pick_couple_member(indexed: list[tuple[int, CVPeakResult]]) -> CVPeakResult | None:
+    """Choose one process's couple member from its enabled candidates,
+    each paired with its position in the result's ``peaks`` list.
+
+    Deterministic ordering, and NEVER a raw-current-magnitude ranking
+    (raw current at the extremum is dominated by the charging background
+    and is not comparable to a SciPy prominence):
+
+    1. If any candidate carries a ``prominence`` (every automatic candidate
+       from a normal Find Peaks does), the one with the LARGEST prominence
+       wins -- ties broken toward the EARLIEST position for stability.
+       Prominence is the "how far this stands above its surroundings"
+       measure, so a genuine wave always outranks a small bump, and a
+       stray manual click (no prominence) can never silently displace a
+       real automatic couple member.
+    2. Otherwise -- only manual candidates, or an automatic pass run with
+       no prominence threshold at all, so nothing has a prominence -- the
+       fallback is the candidate added LAST (highest position): a manual
+       candidate's most recent deliberate placement, or the last automatic
+       peak in detection order.
+
+    A researcher who adds a manual candidate to REPLACE a spurious
+    automatic one simply disables that automatic candidate (it is right
+    there in the peak table), after which rule 2 (or rule 1 among the
+    remaining automatics) picks the manual one.
+    """
+    if not indexed:
+        return None
+    with_prominence = [(idx, p) for idx, p in indexed if p.prominence is not None]
+    if with_prominence:
+        return max(with_prominence, key=lambda ip: (ip[1].prominence, -ip[0]))[1]
+    return max(indexed, key=lambda ip: ip[0])[1]
+
+
+def assign_couple(
+    peaks: list[CVPeakResult],
+) -> tuple[CVPeakResult | None, CVPeakResult | None]:
+    """The anodic/cathodic couple for a cycle -- one ENABLED anodic
+    candidate + one enabled cathodic candidate (see
+    :func:`_pick_couple_member` for the exact, deterministic selection
+    rule). ``unassigned`` and disabled peaks are never couple members.
+    Either side is ``None`` when that process has no enabled candidate.
+    """
+    anodic = [(idx, p) for idx, p in enumerate(peaks) if p.enabled and p.process == PROCESS_ANODIC]
+    cathodic = [(idx, p) for idx, p in enumerate(peaks) if p.enabled and p.process == PROCESS_CATHODIC]
+    return _pick_couple_member(anodic), _pick_couple_member(cathodic)
+
+
+def _as_measurement(peak: CVPeakResult) -> CVPeakMeasurement:
+    return CVPeakMeasurement(
+        potential_v=peak.e_peak_v,
+        i_peak_raw_a=peak.i_peak_raw_a,
+        i_peak_corrected_a=peak.i_peak_corrected_a,
+        baseline_current_a=(peak.baseline.baseline_current_a if peak.baseline is not None else None),
+        process=peak.process,
+        sweep=peak.sweep,
+        index=-1,
+    )
+
+
+def couple_from_peak_results(
+    peaks: list[CVPeakResult],
+) -> tuple[CVCoupleMetrics | None, str | None, str | None]:
+    """``(metrics, anodic_peak_id, cathodic_peak_id)`` for the couple
+    :func:`assign_couple` picks from ``peaks``. ``metrics`` (and both ids)
+    are ``None`` when a full anodic+cathodic couple is not available. Pure:
+    reuses the CV-1 :func:`~gnovi_plot.modules.electrochemistry.cv.
+    couple_metrics` on measurements reconstructed from the stored peak
+    results, so ΔEp / E½ / ratio here always agree with a fresh measurement.
+    """
+    anodic, cathodic = assign_couple(peaks)
+    if anodic is None or cathodic is None:
+        return None, None, None
+    metrics = couple_metrics(_as_measurement(anodic), _as_measurement(cathodic))
+    return metrics, anodic.peak_id, cathodic.peak_id
+
+
 def build_cv_cycle_analysis_result(
     *,
     source_dataset_id: str,
@@ -373,6 +487,8 @@ def build_cv_cycle_analysis_result(
     cycle_confidence: str = CYCLE_CONFIDENCE_DETECTED,
     cycle_complete: bool = True,
     couple: CVCoupleMetrics | None = None,
+    couple_anodic_peak_id: str | None = None,
+    couple_cathodic_peak_id: str | None = None,
     source_dataset_name: str | None = None,
     source_series_id: str | None = None,
     source_series_label: str | None = None,
@@ -427,4 +543,6 @@ def build_cv_cycle_analysis_result(
         peak_current_ratio_ipa_over_ipc=r_ac,
         peak_current_ratio_ipc_over_ipa=r_ca,
         peak_current_ratio_basis=basis,
+        couple_anodic_peak_id=couple_anodic_peak_id,
+        couple_cathodic_peak_id=couple_cathodic_peak_id,
     )

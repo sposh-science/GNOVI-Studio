@@ -436,16 +436,18 @@ class _CursorSafeNavigationToolbar(NavigationToolbar2QT):
     """The Matplotlib navigation toolbar's own "Save" button calls
     `self.canvas.figure.savefig(...)` directly on the live Figure --
     correct for GNOVI's WYSIWYG export goal (see `ExportFigureDialog`'s own
-    docstring), but the reference cursor is a real Matplotlib artist on
-    that same Figure (see `PlotCanvas.update_reference_cursor` -- unlike
-    the active-panel badge, a separate Qt widget never added to the
-    Figure), so saving it as-is would otherwise export whatever crosshair/
-    reference line happens to be showing. Cleared immediately before
-    Matplotlib's own save dialog opens; it simply reappears on the next
-    mouse move over the canvas."""
+    docstring), but the reference cursor and the XRD/CV analysis overlays
+    are real Matplotlib artists on that same Figure (see `PlotCanvas.
+    update_reference_cursor`/`set_analysis_overlay`/`set_cv_overlay` --
+    unlike the active-panel badge, a separate Qt widget never added to the
+    Figure), so saving it as-is would otherwise bake whatever
+    crosshair/analysis aid happens to be showing into the file. All of
+    them are cleared via the shared `PlotCanvas.clear_gui_only_overlays`
+    boundary immediately before Matplotlib's own save dialog opens; they
+    reappear on the next mouse move / render."""
 
     def save_figure(self, *args):
-        self.canvas.clear_reference_cursor()
+        self.canvas.clear_gui_only_overlays()
         super().save_figure(*args)
 
 
@@ -568,6 +570,8 @@ class MainWindow(QMainWindow):
         # True right after XRD Peak Analysis's "Add Peak" is toggled on --
         # see `_on_canvas_click`/`AnalysisPanel.xrd_manual_peak_mode_changed`.
         self._xrd_manual_peak_mode = False
+        # The CV sibling -- Cyclic Voltammetry's "Add Peak (click graph)".
+        self._cv_manual_peak_mode = False
 
         # `_pending_undo_snapshot` always holds a snapshot of the figure as
         # of the last committed checkpoint; see `_commit_undo_checkpoint`.
@@ -965,11 +969,19 @@ class MainWindow(QMainWindow):
         self.analysis_panel.xrd_overlay_changed.connect(self._refresh_xrd_overlay)
         self.analysis_panel.xrd_manual_peak_mode_changed.connect(self._on_xrd_manual_peak_mode_changed)
         self.analysis_panel.xrd_status_message.connect(lambda msg: self.statusBar().showMessage(msg, 4000))
-        # The detailed XRD peak table lives in the bottom Results tab now
-        # (too wide for the left drawer); its row selection drives the
-        # left sidebar's Remove Selected / Enable-Disable actions.
+        self.analysis_panel.cv_result_updated.connect(self._on_cv_result_updated)
+        self.analysis_panel.cv_overlay_changed.connect(self._refresh_cv_overlay)
+        self.analysis_panel.cv_manual_peak_mode_changed.connect(self._on_cv_manual_peak_mode_changed)
+        self.analysis_panel.cv_status_message.connect(lambda msg: self.statusBar().showMessage(msg, 4000))
+        # The detailed XRD / CV peak table lives in the bottom Results tab
+        # now (too wide for the left drawer); its row selection drives the
+        # left sidebar's Remove Selected / Enable-Disable actions. Both
+        # tools listen -- only the visible one's sidebar acts on it.
         self.analysis_result_view.detail_selection_changed.connect(
             self.analysis_panel.xrd_set_selected_peak_rows
+        )
+        self.analysis_result_view.detail_selection_changed.connect(
+            self.analysis_panel.cv_set_selected_peak_rows
         )
 
         self.workbench_tab_bar.workbench_selected.connect(self._on_workbench_tab_selected)
@@ -1799,6 +1811,20 @@ class MainWindow(QMainWindow):
     def _on_xrd_manual_peak_mode_changed(self, active: bool) -> None:
         self._xrd_manual_peak_mode = active
 
+    def _on_cv_result_updated(self, result) -> None:
+        """The CV sibling of `_on_xrd_result_updated`: an in-place edit to
+        the current CVCycleAnalysisResult (manual candidate add/remove,
+        enable/disable, process reassignment, sign-convention change) --
+        the exact object already in `PanelResultHistory` was mutated, not
+        replaced, so this only re-displays it and marks the project dirty
+        (no new History entry, no undo checkpoint -- analysis-result edits
+        aren't part of the figure/series undo snapshot)."""
+        self.analysis_result_view.show_result(result)
+        self._set_dirty(True)
+
+    def _on_cv_manual_peak_mode_changed(self, active: bool) -> None:
+        self._cv_manual_peak_mode = active
+
     def _on_mouse_move(self, event) -> None:
         if event.inaxes is None or event.xdata is None or event.ydata is None:
             self.coord_label.setText("")
@@ -1832,6 +1858,9 @@ class MainWindow(QMainWindow):
             # `_handle_xrd_manual_peak_click`'s own docstring for exactly
             # what a rejected click does -- namely, nothing at all).
             self._handle_xrd_manual_peak_click(event)
+            return
+        if self._cv_manual_peak_mode and event.button == 1:
+            self._handle_cv_manual_peak_click(event)
             return
         if event.dblclick and event.button == 1 and self._is_current_workbench_focused():
             self._restore_multi_panel_view()
@@ -1872,6 +1901,26 @@ class MainWindow(QMainWindow):
         if not (math.isfinite(event.xdata) and math.isfinite(event.ydata)):
             return
         self.analysis_panel.xrd_add_manual_peak(event.xdata, event.ydata)
+
+    def _handle_cv_manual_peak_click(self, event) -> None:
+        """The CV sibling of `_handle_xrd_manual_peak_click` -- identical
+        wrong-panel guard (`panel_index_for_axes` must resolve to the
+        active panel index, NOT `active_axes()`), `Panel3D` guard, and
+        finite-coordinate guard. A rejected click does nothing: no
+        candidate added, no panel switch, no dirty. The CV section itself
+        then snaps the click to the nearest sample within the sweep it
+        landed in and assigns a best-guess process (see `CVAnalysisSection.
+        add_manual_peak`)."""
+        index = self.plot_canvas.panel_index_for_axes(event.inaxes)
+        if index is None or index != self.figure_model.active_panel_index:
+            return
+        if isinstance(self.figure_model.active_panel, Panel3D):
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        if not (math.isfinite(event.xdata) and math.isfinite(event.ydata)):
+            return
+        self.analysis_panel.cv_add_manual_peak(event.xdata, event.ydata)
 
     def _on_canvas_release(self, event) -> None:
         """A left-button release on the canvas. Interactive mouse rotation
@@ -2104,6 +2153,7 @@ class MainWindow(QMainWindow):
         # consuming clicks against the panel we're switching to -- see
         # `AnalysisPanel.disarm_xrd_manual_peak_mode`'s own docstring.
         self.analysis_panel.disarm_xrd_manual_peak_mode()
+        self.analysis_panel.disarm_cv_manual_peak_mode()
         self._refresh_active_panel_context()
         self._sync_toolbar_panel_controls()
         self._sync_results_to_active_panel()
@@ -2192,6 +2242,7 @@ class MainWindow(QMainWindow):
         self.properties_panel.sync_axes_limits(active_axes.get_xlim(), active_axes.get_ylim())
         self.series_panel.update_contrast_warnings(dark_mode)
         self._refresh_xrd_overlay()
+        self._refresh_cv_overlay()
 
     def _refresh_xrd_overlay(self) -> None:
         """Redraw the XRD peak-marker/label + background/smoothing-preview
@@ -2209,6 +2260,15 @@ class MainWindow(QMainWindow):
             peak_points=self.analysis_panel.xrd_overlay_points(),
             preview_xy=self.analysis_panel.xrd_preview_curve(),
         )
+
+    def _refresh_cv_overlay(self) -> None:
+        """The CV sibling of `_refresh_xrd_overlay` -- redraw the Cyclic
+        Voltammetry cycle/sweep/candidate overlay from `AnalysisPanel`'s
+        current `CVCycleAnalysisResult` + live source data (never cached
+        here). Called after every `_rerender()` and whenever
+        `AnalysisPanel.cv_overlay_changed` fires (cycle/sweep pick, peak
+        edits) without a full re-render."""
+        self.plot_canvas.set_cv_overlay(self.figure_model, self.analysis_panel.cv_overlay_payload())
 
     # --- Focus Panel (session/view state only -- see `self._focused_panel_ids`) --
 

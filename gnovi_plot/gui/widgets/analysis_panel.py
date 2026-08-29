@@ -35,13 +35,16 @@ from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.analysis_result_view import resolve_live_xy
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
+from gnovi_plot.gui.widgets.cv_analysis_section import CVAnalysisSection
 from gnovi_plot.gui.widgets.xrd_analysis_section import XRDAnalysisSection
+from gnovi_plot.modules.electrochemistry.results import CVCycleAnalysisResult
 from gnovi_plot.modules.xrd.results import XRDAnalysisResult
 from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.series import PlotSeries
 
 _TOOL_CURVE_FITTING = "Curve Fitting"
 _TOOL_XRD = "XRD Peak Analysis"
+_TOOL_CV = "Cyclic Voltammetry"
 
 _HISTORY_EMPTY_TEXT = "No completed analysis results for this panel yet."
 
@@ -153,6 +156,18 @@ class AnalysisPanel(QWidget):
     # informational, no state change.
     xrd_status_message = Signal(str)
 
+    # CV-only -- exact siblings of the xrd_* signals above (see
+    # `gui.widgets.cv_analysis_section.CVAnalysisSection`): an in-place edit
+    # to the current CVCycleAnalysisResult (manual peak add/remove/enable,
+    # process reassignment, sign-convention change) -> dirty + redisplay,
+    # never a new history entry; the CV overlay (selected-cycle/sweep tint,
+    # switching-potential line, candidate/enabled markers) may have changed;
+    # the next canvas click should add a manual candidate; a status string.
+    cv_result_updated = Signal(AnalysisResult)
+    cv_overlay_changed = Signal()
+    cv_manual_peak_mode_changed = Signal(bool)
+    cv_status_message = Signal(str)
+
     def __init__(self, figure: GnoviFigure, dataset_manager: DatasetManager, parent=None):
         super().__init__(parent)
         self._figure = figure
@@ -191,10 +206,13 @@ class AnalysisPanel(QWidget):
         # shared by every tool, never duplicated per tool.
         self.tool_label = QLabel("Analysis Tool")
         self.tool_combo = QComboBox()
-        self.tool_combo.addItems([_TOOL_CURVE_FITTING, _TOOL_XRD])
+        self.tool_combo.addItems([_TOOL_CURVE_FITTING, _TOOL_XRD, _TOOL_CV])
 
         self.xrd_section_widget = XRDAnalysisSection(figure, dataset_manager)
         self.xrd_section = CollapsibleSection("XRD Peak Analysis", self.xrd_section_widget)
+
+        self.cv_section_widget = CVAnalysisSection(figure, dataset_manager)
+        self.cv_section = CollapsibleSection("Cyclic Voltammetry", self.cv_section_widget)
 
         self.source_label = QLabel("Source series")
         self.source_combo = QComboBox()
@@ -278,6 +296,7 @@ class AnalysisPanel(QWidget):
         workflow_layout.setContentsMargins(0, 0, 0, 0)
         workflow_layout.addWidget(self.fit_section)
         workflow_layout.addWidget(self.xrd_section)
+        workflow_layout.addWidget(self.cv_section)
         workflow_layout.addWidget(self.history_section)
         workflow_layout.addStretch(1)
 
@@ -308,22 +327,38 @@ class AnalysisPanel(QWidget):
         self.xrd_section_widget.manual_peak_mode_changed.connect(self.xrd_manual_peak_mode_changed.emit)
         self.xrd_section_widget.status_message.connect(self.xrd_status_message.emit)
 
+        self.cv_section_widget.analysis_result_ready.connect(self.analysis_result_ready.emit)
+        self.cv_section_widget.add_to_plot_requested.connect(self.add_to_plot_requested.emit)
+        self.cv_section_widget.result_updated.connect(self._on_cv_result_updated)
+        self.cv_section_widget.overlay_changed.connect(self.cv_overlay_changed.emit)
+        self.cv_section_widget.manual_peak_mode_changed.connect(self.cv_manual_peak_mode_changed.emit)
+        self.cv_section_widget.status_message.connect(self.cv_status_message.emit)
+
         self._update_model_controls()
         self._update_tool_visibility()
         self.refresh()
 
     def _update_tool_visibility(self) -> None:
-        is_xrd = self.tool_combo.currentText() == _TOOL_XRD
-        self.fit_section.setVisible(not is_xrd)
+        tool = self.tool_combo.currentText()
+        is_xrd = tool == _TOOL_XRD
+        is_cv = tool == _TOOL_CV
+        self.fit_section.setVisible(not is_xrd and not is_cv)
         self.xrd_section.setVisible(is_xrd)
+        self.cv_section.setVisible(is_cv)
+        # Switching away from a tool while its "Add Peak" was armed must not
+        # leave it armed with its own controls now hidden -- a subsequent
+        # canvas click would otherwise still be consumed as a manual-peak
+        # add for a tool the scientist can no longer see. See each section's
+        # `disarm_manual_peak_mode` docstring.
         if not is_xrd:
-            # Switching away from XRD Peak Analysis while "Add Peak" was
-            # armed must not leave it armed with its own controls now
-            # hidden -- a subsequent canvas click would otherwise still
-            # be consumed as a manual-peak-add attempt for a tool the
-            # scientist can no longer even see. See `XRDAnalysisSection.
-            # disarm_manual_peak_mode`'s own docstring.
             self.xrd_section_widget.disarm_manual_peak_mode()
+        if not is_cv:
+            self.cv_section_widget.disarm_manual_peak_mode()
+        # The CV cycle/sweep overlay is only shown while CV is the current
+        # tool (see `cv_overlay_payload`) -- ask MainWindow to redraw so it
+        # appears/clears immediately on a tool switch, not just on the next
+        # figure re-render.
+        self.cv_overlay_changed.emit()
 
     def disarm_xrd_manual_peak_mode(self) -> None:
         """Called by `MainWindow` on an active-panel switch (see `_on_
@@ -332,6 +367,37 @@ class AnalysisPanel(QWidget):
         see `XRDAnalysisSection.disarm_manual_peak_mode`'s own
         docstring."""
         self.xrd_section_widget.disarm_manual_peak_mode()
+
+    def disarm_cv_manual_peak_mode(self) -> None:
+        """The CV sibling of `disarm_xrd_manual_peak_mode` -- an active-
+        panel switch must not carry a CV "Add Peak" arm to the next panel."""
+        self.cv_section_widget.disarm_manual_peak_mode()
+
+    def _on_cv_result_updated(self, result: AnalysisResult) -> None:
+        """An in-place edit to the current CVCycleAnalysisResult -- same
+        object already in history; MainWindow re-displays it and marks the
+        project dirty, never a new history entry (the XRD contract)."""
+        self.cv_result_updated.emit(result)
+
+    # --- CV proxies for MainWindow (mirror the xrd_* proxies) ----------
+
+    def cv_overlay_payload(self):
+        """The CV cycle/sweep/candidate overlay -- only while Cyclic
+        Voltammetry is the selected Analysis Tool, so a Curve Fitting or
+        XRD result never shows a stray CV cycle tint just because a CV
+        series happens to be plotted."""
+        if self.tool_combo.currentText() != _TOOL_CV:
+            return None
+        return self.cv_section_widget.overlay_payload()
+
+    def cv_is_manual_peak_mode(self) -> bool:
+        return self.cv_section_widget.is_manual_peak_mode()
+
+    def cv_add_manual_peak(self, potential_v: float, current_a: float) -> None:
+        self.cv_section_widget.add_manual_peak(potential_v, current_a)
+
+    def cv_set_selected_peak_rows(self, rows: list[int]) -> None:
+        self.cv_section_widget.set_selected_peak_rows(rows)
 
     def _on_xrd_result_updated(self, result: AnalysisResult) -> None:
         """An in-place edit to the current XRDAnalysisResult (manual peak
@@ -376,6 +442,7 @@ class AnalysisPanel(QWidget):
         self.history_status_label.setVisible(True)
         self._invalidate_pending_fit()  # also refreshes Add/Remove button state
         self.xrd_section_widget.set_figure(figure)
+        self.cv_section_widget.set_figure(figure)
         self.refresh()
 
     def set_manager(self, dataset_manager: DatasetManager) -> None:
@@ -384,6 +451,7 @@ class AnalysisPanel(QWidget):
         see the class docstring)."""
         self._manager = dataset_manager
         self.xrd_section_widget.set_manager(dataset_manager)
+        self.cv_section_widget.set_manager(dataset_manager)
 
     def refresh(self) -> None:
         """Rebuild the source-series list from the active panel's current
@@ -392,6 +460,7 @@ class AnalysisPanel(QWidget):
         plotted in the active panel, or which panel is active."""
         self.active_panel_label.refresh(self._figure)
         self.xrd_section_widget.refresh()
+        self.cv_section_widget.refresh()
 
         previous_id = self.source_combo.currentData()
         eligible = _eligible_series(self._figure)
@@ -666,8 +735,11 @@ class AnalysisPanel(QWidget):
         self._current_result = current if isinstance(current, FitResult) else None
         self._refresh_fit_curve_buttons()
         self.xrd_section_widget.load_result(current if isinstance(current, XRDAnalysisResult) else None)
+        self.cv_section_widget.load_result(current if isinstance(current, CVCycleAnalysisResult) else None)
         if isinstance(current, XRDAnalysisResult):
             self.tool_combo.setCurrentText(_TOOL_XRD)
+        elif isinstance(current, CVCycleAnalysisResult):
+            self.tool_combo.setCurrentText(_TOOL_CV)
         elif isinstance(current, FitResult):
             self.tool_combo.setCurrentText(_TOOL_CURVE_FITTING)
 
