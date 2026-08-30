@@ -213,6 +213,19 @@ class AnalysisResult:
         without residual support opens a residual window."""
         return self.kind
 
+    def residual_x_range(self) -> tuple[float, float] | None:
+        """The x-interval residuals should be computed over. `None` (the
+        default) means "the whole resolved source range" -- the correct
+        behaviour for a fit made against every point (see
+        `analysis.fitting.FitResult`). A result fitted only inside a local
+        window (see `modules.xrd.fitting.XRDPeakFitResult`) overrides this
+        with that window, so `gui.widgets.analysis_result_view.
+        AnalysisResultView` clips the live `(x, y)` to it before calling
+        `compute_residuals` and the residual view shows only the region
+        actually fitted, not the whole pattern with a baseline
+        extrapolated far outside it."""
+        return None
+
     def report_text(self, *, dataset_name: str | None = None, series_label: str | None = None) -> str:
         """Concise, human-readable text for clipboard/export -- names
         only, never raw ids (see `provenance_details()` for those).

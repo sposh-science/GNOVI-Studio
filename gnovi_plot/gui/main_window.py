@@ -2246,19 +2246,23 @@ class MainWindow(QMainWindow):
 
     def _refresh_xrd_overlay(self) -> None:
         """Redraw the XRD peak-marker/label + background/smoothing-preview
-        overlay (see `gui.widgets.xrd_analysis_section.XRDAnalysisSection`'s
-        own docstring) on top of whatever `_rerender()` just drew -- always
-        pulled fresh from `AnalysisPanel` (never cached here), since the
-        overlay is reconstructed from the current XRDAnalysisResult, not
-        persisted state. Called after every `_rerender()` (a render() would
+        overlay AND the Peak Profile Fitting aids (fit-window span, total
+        fitted profile, fitted local baseline -- see `AnalysisPanel.
+        xrd_fit_overlay`) on top of whatever `_rerender()` just drew --
+        always pulled fresh from `AnalysisPanel` (never cached here), since
+        the overlay is reconstructed from the current XRDAnalysisResult /
+        working fit, not persisted state. Called after every `_rerender()` (a render() would
         otherwise `ax.cla()` away any previous overlay silently) and
         whenever `AnalysisPanel.xrd_overlay_changed` fires on its own
         (peak edits, label-mode change, a fresh preview) without a full
         figure re-render."""
+        fit_window, fit_curves = self.analysis_panel.xrd_fit_overlay()
         self.plot_canvas.set_analysis_overlay(
             self.figure_model,
             peak_points=self.analysis_panel.xrd_overlay_points(),
             preview_xy=self.analysis_panel.xrd_preview_curve(),
+            fit_window=fit_window,
+            fit_curves=fit_curves,
         )
 
     def _refresh_cv_overlay(self) -> None:

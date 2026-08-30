@@ -808,10 +808,11 @@ class XRDPeakFitResult(AnalysisResult):
                 ("RSS", f"{self.rss:.6g}"),
                 ("Degrees of freedom", str(self.dof)),
                 ("Converged", "Yes" if self.converged else "No"),
+                ("Standard errors", "from fit covariance; not measurement uncertainty"),
             ]
         )
-        if self.warnings:
-            rows.append((f"Warnings ({len(self.warnings)})", self.warnings[0]))
+        for warning in self.warnings:
+            rows.append(("Caution", warning))
         return rows
 
     def supports_residuals(self) -> bool:
@@ -822,6 +823,27 @@ class XRDPeakFitResult(AnalysisResult):
 
     def residual_window_subtitle(self) -> str:
         return f"{self.model.replace('_', '-')} peak fit"
+
+    def residual_x_range(self) -> tuple[float, float]:
+        """Residuals for a peak fit are only meaningful inside the fitted
+        window -- outside it the fitted local baseline is extrapolated and
+        the peak component has decayed, so `observed - fitted` there is
+        dominated by unrelated pattern structure."""
+        return self.fit_window
+
+    def provenance_details(self) -> list[tuple[str, str]]:
+        """Base provenance (source ids, columns, engine, operation) plus
+        the researcher-visible chain back to the detected peak and the
+        exact profile convention this fit used."""
+        rows = super().provenance_details()
+        if self.source_result_id is not None:
+            rows.append(("Source detection result", self.source_result_id))
+        if self.source_peak_id is not None:
+            rows.append(("Source detected peak", self.source_peak_id))
+        convention = self.parameters.get("profile_convention")
+        if convention:
+            rows.append(("Profile convention", convention))
+        return rows
 
     # --- serialization -------------------------------------------------
 
