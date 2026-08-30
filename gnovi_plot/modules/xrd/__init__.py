@@ -1,12 +1,15 @@
 """GNOVI's native XRD numerical foundation: radiation/wavelength handling,
-Bragg's-law d-spacing, background/smoothing preprocessing, and peak
-detection -- pure NumPy/SciPy(+optional pybaselines) numerical code, no Qt,
-no Matplotlib, no XRD GUI yet.
+Bragg's-law d-spacing, background/smoothing preprocessing, peak detection,
+and single-peak profile fitting (Gaussian/Lorentzian/pseudo-Voigt) -- pure
+NumPy/SciPy(+optional pybaselines) numerical code, no Qt, no Matplotlib,
+no XRD GUI.
 
-Explicitly NOT part of this milestone (see PROJECT_GUIDE.md's XRD roadmap
-notes): profile/peak-shape fitting, Scherrer crystallite-size calculation,
-phase identification, Rietveld refinement, quantitative phase analysis, or
-any external-engine integration (GSAS-II/pyFAI/Profex/BGMN).
+Explicitly NOT part of this foundation (see PROJECT_GUIDE.md's XRD roadmap
+notes): the researcher-facing peak-fitting workspace/GUI, multi-peak or
+overlapping-peak deconvolution, Scherrer crystallite-size calculation,
+instrumental broadening correction, Williamson-Hall analysis, phase
+identification, Rietveld refinement, quantitative phase analysis, or any
+external-engine integration (GSAS-II/pyFAI/Profex/BGMN).
 
 This is a thin re-export of the module's public API; the actual
 implementation lives in the individual submodules below.
@@ -15,6 +18,33 @@ implementation lives in the individual submodules below.
 from __future__ import annotations
 
 from gnovi_plot.modules.xrd.bragg import InvalidBraggInputError, d_spacing
+from gnovi_plot.modules.xrd.fitting import (
+    BASELINE_CONSTANT,
+    BASELINE_LINEAR,
+    BASELINE_MODELS,
+    BASELINE_NONE,
+    FWHM_UNITS_TWO_THETA_DEG,
+    GAUSSIAN,
+    LORENTZIAN,
+    OPERATION_PEAK_FIT,
+    PROFILE_MODELS,
+    PSEUDO_VOIGT,
+    FitWindow,
+    XRDFitError,
+    XRDPeakFitResult,
+    derived_height,
+    estimate_seed_fwhm,
+    evaluate_baseline,
+    evaluate_peak_component,
+    evaluate_total,
+    fit_xrd_peak,
+    gaussian_normalized,
+    lorentzian_normalized,
+    peak_component,
+    propose_fit_window,
+    pseudo_voigt_normalized,
+    sample_fit_curve,
+)
 from gnovi_plot.modules.xrd.peaks import (
     ORIGIN_AUTOMATIC,
     ORIGIN_MANUAL,
@@ -65,4 +95,29 @@ __all__ = [
     "OPERATION_PEAK_DETECTION",
     "XRDAnalysisResult",
     "build_xrd_analysis_result",
+    "GAUSSIAN",
+    "LORENTZIAN",
+    "PSEUDO_VOIGT",
+    "PROFILE_MODELS",
+    "BASELINE_NONE",
+    "BASELINE_CONSTANT",
+    "BASELINE_LINEAR",
+    "BASELINE_MODELS",
+    "FWHM_UNITS_TWO_THETA_DEG",
+    "OPERATION_PEAK_FIT",
+    "FitWindow",
+    "XRDFitError",
+    "XRDPeakFitResult",
+    "fit_xrd_peak",
+    "propose_fit_window",
+    "estimate_seed_fwhm",
+    "derived_height",
+    "gaussian_normalized",
+    "lorentzian_normalized",
+    "pseudo_voigt_normalized",
+    "peak_component",
+    "evaluate_total",
+    "evaluate_peak_component",
+    "evaluate_baseline",
+    "sample_fit_curve",
 ]

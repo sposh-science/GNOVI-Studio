@@ -413,7 +413,9 @@ round trip for both 2D and 3D project state.
   fit-quality and residual computation for the residual diagnostics window.
 - `results.py` — `AnalysisResult`, the generic base and polymorphic,
   `kind`-based persistence registry that every analysis tool's result type
-  registers into.
+  registers into; also `ResidualData`, the domain-neutral `observed − fitted`
+  container any result type with residual support returns (a curve fit, an XRD
+  peak fit), rendered by the shared residual diagnostics window.
 - `panel_results.py` — `PanelResultHistory`: per-panel, multi-result analysis
   history with an explicit current-selection marker, owned by
   `core.workbench.Workbench`.
@@ -441,10 +443,82 @@ The native numerical foundation:
 - `peaks.py` — a small wrapper around `scipy.signal.find_peaks` returning
   `XRDPeakSeed` candidates (automatic or manual, enabled or disabled). A
   candidate is never a final measured position.
+- `fitting.py` — single-peak profile fitting: area-normalized Gaussian,
+  Lorentzian, and pseudo-Voigt shapes plus an optional local baseline (none /
+  constant / linear), fitted with `scipy.optimize.curve_fit` inside an explicit
+  2θ window. See "Peak profile fitting" below.
 
 None of this preprocessing mutates a `Dataset` in place; every function returns
 new arrays or results. Detection feeds `results.py`'s `XRDAnalysisResult`
-(`AnalysisResult` kind `"xrd_peaks"`).
+(`AnalysisResult` kind `"xrd_peaks"`); a fit feeds `fitting.py`'s
+`XRDPeakFitResult` (kind `"xrd_peak_fit"`).
+
+**Peak profile fitting.** `modules/xrd/fitting.py` is the XRD-3A numerical
+foundation — pure NumPy/SciPy, no Qt. `fit_xrd_peak(...)` fits ONE symmetric
+profile plus a local baseline and returns an `XRDPeakFitResult`.
+
+- **Canonical parameterization.** The profiles are area-normalized, so the
+  fitted amplitude is the integrated peak area `A` directly (there is no
+  independent height parameter). The common parameters are `A`, center `x0`,
+  and FWHM `Γ`. Pseudo-Voigt is `(1 − η)·Gaussian + η·Lorentzian` with the two
+  components sharing one center and one FWHM: **`η` is the Lorentzian fraction —
+  `η = 0` is a pure Gaussian, `η = 1` a pure Lorentzian.** The exact convention
+  is recorded verbatim in `parameters["profile_convention"]`. Peak height is
+  derived from `A`, `Γ`, and the model.
+- **Analytical area.** `A` is the full analytical, infinite-domain integrated
+  intensity of the peak component above the fitted local baseline. Because the
+  profiles are area-normalized, a finite fit window does not directly contain
+  all of `A` — the model constrains the wings through the profile shape.
+  Negligible for a Gaussian; not for a Lorentzian (a ±4·FWHM window around a
+  pure Lorentzian encloses ~92% of the reported `A`). A reported `A` is
+  therefore sensitive to the profile model, the fit window, and the baseline
+  model; quantitative area comparisons should use a consistent fitting
+  procedure and profile convention where possible, and the model choice should
+  be reported alongside the value.
+- **Local baseline** (`none` / `constant` / `linear`, default `linear`) is a fit
+  term, conceptually separate from `preprocessing.py`'s whole-pattern
+  background. The reported `A` never includes a baseline contribution. A
+  `none`-baseline fit warns when the data clearly do not return near zero at
+  the window edges (for a positive or a negative offset alike).
+- **FWHM** is the fitted `Γ`, reported in degrees 2θ (`fwhm_units =
+  "degrees_2theta"`) — never `find_peaks`' detection width, and never silently
+  converted to radians.
+- **Fit window** is always explicit. `propose_fit_window(...)` derives an
+  initial `center ± 4·FWHM` window from a seed's detection width and the local x
+  spacing, then clips it to the data range and to the midpoints toward
+  neighbouring detected peaks. A fit needs `max(2·P, 10)` finite points for `P`
+  free parameters — a numerical minimum, not proof the fit is scientifically
+  sound.
+- **Standard errors** are covariance-derived (`sqrt(diag(pcov))`), reported as
+  fit standard errors — not measurement uncertainties or confidence intervals.
+  A parameter's standard error is `None` when the whole covariance is singular
+  or non-finite (then all are `None`), or when that parameter sits at a fit
+  bound. Extreme parameter correlation (a dimensionless
+  correlation-matrix check, not `cond(pcov)`) and low degrees of freedom add a
+  caution but do **not** null otherwise-finite standard errors. The area
+  standard error is the covariance value for `A` directly; the derived-height
+  standard error is propagated through the `(A, Γ[, η])` sub-covariance with
+  cross-terms. When `η` converges to 0 or 1 the fit stays valid — only `η`'s
+  standard error is withheld, with a neutral "converged to the Gaussian /
+  Lorentzian endpoint" note.
+- **d-spacing** comes from the fitted centre via `bragg.d_spacing` when a
+  `Radiation` context is supplied, with the centre standard error propagated
+  analytically through Bragg's law; without radiation, d-spacing is simply
+  absent rather than computed from an assumed wavelength.
+- **Diagnostics:** RSS, RMSE, R² (a descriptive fit statistic only — not a
+  profile-model selection criterion), point count, parameter count, degrees of
+  freedom, and convergence state. No reduced χ² — there is no justified
+  per-point measurement variance. SciPy-internal solver strings are not stored
+  in the reproducibility parameter dict.
+- **Overlap** is flagged only from explicitly supplied neighbouring detected-peak
+  positions (a conservative, hedged "may not represent an isolated reflection").
+  There is no residual-based automatic overlap detector.
+- The fitted curve is regenerated from the model, parameters, baseline, and
+  window (`evaluate_total` / `sample_fit_curve`) — dense arrays are never
+  stored on the result.
+
+`XRDPeakFitResult` fits ONE peak component. Overlapping-peak deconvolution, if
+built, gets its own result kind rather than a components list here.
 
 **XRD Peak Analysis (GUI).** `gui/widgets/xrd_analysis_section.py`'s
 `XRDAnalysisSection` is a `CollapsibleSection` on the Analysis page, selected via
@@ -459,7 +533,8 @@ active panel (disabled, with an explanation, when the active panel is a
   Smoothed background-corrected — only options actually available are offered)
 - `find_peaks`-based detection with a peak table (seed 2θ, observed intensity,
   prominence, d-spacing, origin, enabled). There are no fitted-center/FWHM/area
-  columns, because profile fitting does not exist.
+  columns — the profile-fitting workspace that would surface those is not built
+  yet (see "Peak profile fitting" above for the numerical layer, and "Roadmap").
 - manual peak add/remove/enable-disable
 - CSV peak-table export
 
@@ -474,10 +549,16 @@ edits mutate the current entry in place. `.xy`/`.xye` pattern files are handled
 by the existing text importer alongside `.csv`/`.txt`/`.tsv`/`.dat` — no
 dedicated diffraction parser was added.
 
-**Not implemented, anywhere in the app:** peak-profile fitting
-(Gaussian/Lorentzian/pseudo-Voigt), FWHM/integrated-area/uncertainty from a fit,
-Scherrer crystallite-size calculation, phase identification, Rietveld
-refinement, quantitative phase analysis, Raman analysis, and external
+**Implemented numerically, no GUI yet:** single-peak profile fitting
+(`modules/xrd/fitting.py`, above) — the researcher-facing peak-fitting workspace
+that would drive it, show the fitted parameters in the Results tab, overlay the
+fitted curve, and offer "add fitted curve to plot" is not built.
+
+**Not implemented, anywhere in the app:** multi-peak / overlapping-peak
+deconvolution, Scherrer crystallite-size calculation, instrumental broadening
+correction, Williamson–Hall analysis, Kα1/Kα2 doublet modelling, asymmetric
+peak profiles, Poisson-weighted fitting / reduced χ², phase identification,
+Rietveld refinement, quantitative phase analysis, Raman analysis, and external
 scientific-engine integration (GSAS-II, pyFAI, Profex, BGMN). See "Roadmap".
 
 ### Electrochemistry / Cyclic Voltammetry (`modules/electrochemistry/`)
@@ -668,12 +749,15 @@ v1.0 requirement list. Priorities may change as work proceeds.
   scope: broadly useful analysis for materials-science researchers, not a
   reimplementation of a full commercial diffraction-analysis package. The
   numerical foundation (`modules/xrd/`) and the Analysis-page workspace
-  (`XRDAnalysisSection`) exist: radiation selection,
-  background/smoothing preview, peak detection with a peak table, manual peak
-  editing, live overlays, derived corrected/smoothed curves, and CSV export.
-  Still to come in Phase 1: peak-profile fitting
-  (Gaussian/Lorentzian/pseudo-Voigt), FWHM/area/uncertainty, and Scherrer
-  crystallite-size calculation. Not Phase 1: reference-database phase
+  (`XRDAnalysisSection`) exist: radiation selection, background/smoothing
+  preview, peak detection with a peak table, manual peak editing, live overlays,
+  derived corrected/smoothed curves, and CSV export. Single-peak profile fitting
+  (Gaussian/Lorentzian/pseudo-Voigt, area/FWHM/height/η, local baseline, fit
+  standard errors, propagated d-spacing error) is implemented as a numerical
+  layer (`modules/xrd/fitting.py`). Still to come in Phase 1: the
+  researcher-facing peak-fitting workspace over that layer, then Scherrer
+  crystallite-size calculation (which also needs instrumental broadening
+  correction). Not Phase 1: multi-peak deconvolution, reference-database phase
   identification, Rietveld refinement, and automated quantitative phase
   analysis.
 - **Electrochemistry / Cyclic Voltammetry** — the second domain-specific family.
@@ -705,13 +789,28 @@ current test count. The suite covers:
 
 - datasets, transforms, and numeric-validity helpers
 - 2D and 3D figures, panels, and series
-- Graph Library (2D and 3D) and project I/O (2D, 3D, and XRD), including
-  save/reopen persistence of analysis history and the current-selection marker
+- Graph Library (2D and 3D) and project I/O (2D, 3D, and both XRD result kinds),
+  including save/reopen persistence of analysis history and the current-selection
+  marker
 - workbenches and projects
 - equation evaluation and cycle detection
 - curve fitting, fit diagnostics, and residual analysis
 - XRD radiation, Bragg d-spacing, preprocessing, and peak detection, validated
   against synthetic patterns and independently derived analytical values
+- XRD single-peak profile fitting (`modules/xrd/fitting.py`) — profile
+  normalization and FWHM checked against closed-form values and `scipy.integrate`
+  over the real line; parameter recovery (area, centre, FWHM, η, baseline) from
+  deterministic synthetic Gaussian / Lorentzian / pseudo-Voigt data with and
+  without seeded noise; fit-window proposal, clipping, and ascending/descending
+  2θ equivalence; irregular x spacing; the failure and edge cases
+  (reversed/empty window, too few points, flat or negative-only signal,
+  non-finite data, parameter at a bound, low degrees of freedom, non-convergence,
+  singular covariance); the pseudo-Voigt Gaussian/Lorentzian endpoints as valid
+  fits; d-spacing error propagation; deterministic curve regeneration; result
+  serialization round trip; a realistic multi-peak pattern fitted one isolated
+  peak at a time through a local window; a characterization that a wrong profile
+  model can bias the fitted area while R² stays high; and an approximate
+  standard-error calibration check
 - the `modules/electrochemistry/` CV numerical foundation — unit conversion,
   sign convention, `ElectrodeContext`, sweep/cycle segmentation, candidate
   detection, local-linear baseline, peak measurement, couple metrics, charge

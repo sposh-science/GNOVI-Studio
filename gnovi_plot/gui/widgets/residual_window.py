@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from gnovi_plot.analysis.fitting import ResidualData
+from gnovi_plot.analysis.results import ResidualData
 from gnovi_plot.gui.widgets.residual_plot import ResidualPlotWidget
 
 _DEFAULT_SIZE = (560, 380)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from gnovi_plot.analysis.fitting import ResidualData
+from gnovi_plot.analysis.results import ResidualData
 from gnovi_plot.gui.widgets.residual_plot import ResidualPlotWidget
 
 
