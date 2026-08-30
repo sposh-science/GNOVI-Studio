@@ -1,11 +1,13 @@
 # GNOVI Studio
 
-[![CI](https://github.com/wavicles/GNOVI-Studio/actions/workflows/ci.yml/badge.svg)](https://github.com/wavicles/GNOVI-Studio/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/wavicles/GNOVI-Studio/actions/workflows/codeql.yml/badge.svg)](https://github.com/wavicles/GNOVI-Studio/actions/workflows/codeql.yml)
-[![Python](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fwavicles%2FGNOVI-Studio%2Fmain%2Fpyproject.toml&query=%24.project.requires-python&label=python)](pyproject.toml)
+[![CI](https://github.com/sposh-science/GNOVI-Studio/actions/workflows/ci.yml/badge.svg)](https://github.com/sposh-science/GNOVI-Studio/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/sposh-science/GNOVI-Studio/actions/workflows/codeql.yml/badge.svg)](https://github.com/sposh-science/GNOVI-Studio/actions/workflows/codeql.yml)
+[![Python](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsposh-science%2FGNOVI-Studio%2Fmain%2Fpyproject.toml&query=%24.project.requires-python&label=python)](pyproject.toml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22066802.svg)](https://doi.org/10.5281/zenodo.22066802)
-[![Software Heritage](https://archive.softwareheritage.org/badge/directory/788767f5421078a3a97b3c9cc94a4c310c90c075/)](https://archive.softwareheritage.org/swh:1:dir:788767f5421078a3a97b3c9cc94a4c310c90c075;origin=https://doi.org/10.5281/zenodo.22066802;visit=swh:1:snp:e3fdd6a23a82d9ec656225cd5c3612e15d68e528;anchor=swh:1:rel:0938fb937d72a19cbe55c00b33e3cb9b4ec486c6;path=wavicles-GNOVI-Studio-ad7c865)
+[![Software Heritage (v0.9.0 archive)](https://archive.softwareheritage.org/badge/directory/788767f5421078a3a97b3c9cc94a4c310c90c075/)](https://archive.softwareheritage.org/swh:1:dir:788767f5421078a3a97b3c9cc94a4c310c90c075;origin=https://doi.org/10.5281/zenodo.22066802;visit=swh:1:snp:e3fdd6a23a82d9ec656225cd5c3612e15d68e528;anchor=swh:1:rel:0938fb937d72a19cbe55c00b33e3cb9b4ec486c6;path=wavicles-GNOVI-Studio-ad7c865)
+[![Software Heritage (origin)](https://archive.softwareheritage.org/badge/origin/https://github.com/sposh-science/GNOVI-Studio/)](https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/sposh-science/GNOVI-Studio)
+[![Software Heritage (source tree)](https://archive.softwareheritage.org/badge/swh:1:dir:c8b895ac2eb96da1700b5666408a655d91515371/)](https://archive.softwareheritage.org/swh:1:dir:c8b895ac2eb96da1700b5666408a655d91515371;origin=https://github.com/sposh-science/GNOVI-Studio;visit=swh:1:snp:8077e6b88da029e94e562bbfe23d676c4256cd2f;anchor=swh:1:rev:7dd12a6b0aac3fae441e2918bdd54e658f0c80e6)
 [![OpenAIRE](https://img.shields.io/badge/Indexed%20in-OpenAIRE-blue.svg)](https://explore.openaire.eu/search/software?pid=10.5281/zenodo.22066803)
 
 **Scientific Plotting & Analysis Studio** — a cross-platform Python desktop
@@ -83,12 +85,18 @@ macOS is not currently CI-validated.
 GNOVI Studio is currently run from source. It is not yet published on PyPI,
 and no packaged installer or executable is provided.
 
+The commands below install GNOVI Studio in editable mode together with the
+`test` and `xrd` extras. These are the dependencies required to run the
+complete test suite, including the XRD arPLS baseline tests, which need the
+optional `pybaselines` package provided by the `xrd` extra. To run the
+application only, `pip install -e .` is sufficient.
+
 **Linux**
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[test]"
+pip install -e ".[test,xrd]"
 python -m gnovi_plot
 ```
 
@@ -97,11 +105,14 @@ python -m gnovi_plot
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
-pip install -e ".[test]"
+pip install -e ".[test,xrd]"
 python -m gnovi_plot
 ```
 
 **Running tests**
+
+The installation steps above include the `test` and `xrd` extras, which
+together provide everything the complete test suite needs. Run it with:
 
 ```bash
 pytest
@@ -163,7 +174,7 @@ GNOVI Studio is licensed under the [GPL-3.0-or-later](LICENSE).
 ## Contributing & Issues
 
 Bug reports, feature requests, and contributions are welcome. Please open an
-issue at [github.com/wavicles/GNOVI-Studio/issues](https://github.com/wavicles/GNOVI-Studio/issues).
+issue at [github.com/sposh-science/GNOVI-Studio/issues](https://github.com/sposh-science/GNOVI-Studio/issues).
 
 For development setup, architecture, and contribution conventions, see
 [PROJECT_GUIDE.md](PROJECT_GUIDE.md).
