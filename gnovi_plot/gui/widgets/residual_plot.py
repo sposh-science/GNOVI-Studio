@@ -4,7 +4,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from gnovi_plot.analysis.fitting import ResidualData
+from gnovi_plot.analysis.results import ResidualData
 
 _ZERO_LINE_COLOR = "#8a8f99"
 _POINT_COLOR = "#1f77b4"

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+import numpy as np
+
 # The `engine` value every result GNOVI computes itself uses -- see
 # `AnalysisResult.engine`'s own docstring. Every result in this codebase
 # sets `engine=ENGINE_GNOVI` today; a future external-engine integration
@@ -290,3 +292,30 @@ def result_from_dict(data: dict) -> "AnalysisResult":
     if result_cls is None:
         raise ValueError(f"Unknown analysis result kind: {kind!r}")
     return result_cls.from_dict(data)
+
+
+# --- Residual diagnostics (shared, domain-neutral) --------------------------
+#
+# `observed - fitted`, per point, for any result type that supports
+# residuals (`AnalysisResult.supports_residuals()` / `compute_residuals()`).
+# Lives here rather than in `analysis.fitting` so a domain module (e.g.
+# `modules.xrd.fitting`) can produce and a generic view
+# (`gui.widgets.residual_plot` / `residual_window`) can render residuals
+# without depending on the curve-fitting module specifically.
+# `analysis.fitting` re-exports this name for backward compatibility.
+
+
+@dataclass
+class ResidualData:
+    """Per-point residuals for a fit -- observed minus fitted, at whatever
+    `(x, y)` the caller supplies (typically the source series' *current*
+    data, re-extracted fresh; see each result type's own
+    `compute_residuals`). Never persisted: fully reconstructible from a
+    result's stored model/parameters plus the source data, so storing it
+    separately would only be a redundant, potentially-stale copy.
+    """
+
+    x: np.ndarray
+    observed: np.ndarray
+    fitted: np.ndarray
+    residuals: np.ndarray  # observed - fitted

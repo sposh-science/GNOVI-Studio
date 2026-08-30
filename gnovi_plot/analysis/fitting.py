@@ -8,7 +8,12 @@ from typing import ClassVar
 import numpy as np
 from scipy.optimize import curve_fit
 
-from gnovi_plot.analysis.results import ENGINE_GNOVI, AnalysisResult, register_result_kind
+from gnovi_plot.analysis.results import (
+    ENGINE_GNOVI,
+    AnalysisResult,
+    ResidualData,  # re-exported: `from gnovi_plot.analysis.fitting import ResidualData` still works
+    register_result_kind,
+)
 from gnovi_plot.core.app_info import __version__ as _APP_VERSION
 
 LINEAR = "linear"
@@ -443,22 +448,6 @@ def sample_fit_curve(
         raise FitError(f"num_points must be at least 2 (got {num_points})")
     x = np.linspace(x_min, x_max, num_points)
     return x, evaluate_fit(result, x)
-
-
-@dataclass
-class ResidualData:
-    """Per-point residuals for a fit -- observed minus fitted, at whatever
-    `(x, y)` the caller supplies (typically the source series' *current*
-    data, re-extracted fresh; see `compute_residuals`). Never persisted:
-    fully reconstructible from a `FitResult`'s stored `model`/`params`
-    plus the source data, so storing it separately would only be a
-    redundant, potentially-stale copy (see `FitResult`'s own docstring).
-    """
-
-    x: np.ndarray
-    observed: np.ndarray
-    fitted: np.ndarray
-    residuals: np.ndarray  # observed - fitted
 
 
 def compute_residuals(result: FitResult, x: Sequence[float] | np.ndarray, y: Sequence[float] | np.ndarray) -> ResidualData:

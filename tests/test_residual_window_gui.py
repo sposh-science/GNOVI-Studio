@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 from PySide6.QtCore import Qt
 
-from gnovi_plot.analysis.fitting import ResidualData
+from gnovi_plot.analysis.results import ResidualData
 from gnovi_plot.gui.widgets.residual_window import ResidualWindow
 
 
