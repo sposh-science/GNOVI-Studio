@@ -13,7 +13,7 @@ APP_TAGLINE = "Scientific Plotting & Visualization"
 __version__ = "0.9.0"
 VERSION_LABEL = "v0.9.0 Beta"
 
-REPO_URL = "https://github.com/wavicles/GNOVI-Studio"
+REPO_URL = "https://github.com/sposh-science/GNOVI-Studio"
 ISSUES_URL = f"{REPO_URL}/issues"
 
 

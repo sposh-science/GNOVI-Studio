@@ -1,213 +1,743 @@
 # GNOVI Studio Project Guide
 
-This file documents GNOVI Studio's agreed architecture, conventions, and
-constraints for anyone working on this repository -- human contributors and
-any development tool alike. Treat it as the authoritative source for the
-project's design decisions, and follow it for all work in this repository.
+This guide documents the architecture, development conventions, scientific
+principles, and current direction of GNOVI Studio. It is intended to keep
+development consistent as the project grows. Treat it as the authoritative
+source for the project's design decisions, and follow it for all work in this
+repository.
 
 ## Project overview
 
-GNOVI Studio (repository: GNOVI-Studio, package name `gnovi-plot`, currently version 0.9.0 "Beta", tagged as `v0.9.0` with a citable DOI in `CITATION.cff`) is a cross-platform, open-source Python desktop application for scientific plotting and analysis. It combines experimental data visualization, mathematical equation graphing, and publication-quality figure creation in a single tool.
+GNOVI Studio (package name `gnovi-plot`, version 0.9.0 "Beta", tagged `v0.9.0`
+with a citable DOI in `CITATION.cff`) is a cross-platform, open-source Python
+desktop application for scientific plotting and analysis. It combines
+experimental data visualization, mathematical equation graphing, and
+publication-quality figure creation in a single tool.
 
-The project is past the pre-code phase: it is a working PySide6 application (`python -m gnovi_plot`) with an implemented `gui`/`data`/`plotting`/`equations`/`analysis`/`export`/`core` package structure, an 82-file pytest suite (more than 1,600 automated tests -- see "Testing and CI" for how to get an exact current count), and cross-platform CI + CodeQL running on every push/PR. 2D plotting, multi-panel figures, and a 3D foundation (scatter, line, grouped curve families, and publication-oriented styling) are all implemented and merged -- see "Current implementation status" below for the precise, current feature baseline, and "Roadmap" for what's next. This file still records the agreed vision and constraints so implementation stays consistent as the codebase grows.
+It is a working PySide6 application, launched with `python -m gnovi_plot`, with
+an implemented `gui`/`data`/`plotting`/`equations`/`analysis`/`modules`/`export`/
+`core` package structure and cross-platform CI plus CodeQL on every push and
+pull request. 2D plotting, multi-panel figures, and a 3D foundation (scatter,
+line, grouped curve families, and publication-oriented styling) are implemented.
+"Current implementation status" describes the feature baseline; "Roadmap"
+describes what is planned next.
 
 ## Technology stack
 
-- **Python** (>=3.9, CI runs 3.12) — implementation language
+- **Python** (>=3.9; CI runs 3.12) — implementation language
 - **PySide6** — GUI framework
-- **Pandas** — standard internal representation for all tabular experimental data
-- **NumPy** — numerical calculations (used directly in `analysis/cycles.py`, `analysis/fitting.py`, `data/numeric.py`, `equations/evaluator.py`, `modules/xrd/`, and `modules/electrochemistry/`). A declared `pyproject.toml` dependency (promoted from transitive-only alongside the CV numerical foundation, since it is imported directly across the codebase).
-- **Matplotlib** — authoritative scientific plotting and publication-quality rendering backend, for both 2D (line/scatter/histogram) and 3D (scatter/line/line+markers via `mpl_toolkits.mplot3d`). See "2D / 3D model architecture" and "Rendering architecture" below for exactly what's implemented. 3D surface/wireframe/mesh rendering is not implemented yet.
-- **SciPy** — curve fitting and numerical analysis, via `scipy.optimize.curve_fit` in `analysis/fitting.py` (`fit_curve`/`FitResult`) and, for XRD, `scipy.signal.find_peaks`/`savgol_filter` in `modules/xrd/`. A declared `pyproject.toml` dependency.
-- **SymPy** — equation parsing and symbolic mathematics (equation input must go through SymPy, never raw `eval()`)
-- **pybaselines** — arPLS baseline correction in `modules/xrd/preprocessing.py` only. Optional (`xrd` extra), not core — see "Analysis" below.
+- **pandas** — the canonical internal representation for all tabular
+  experimental data
+- **NumPy** — numerical calculations, used directly in `analysis/cycles.py`,
+  `analysis/fitting.py`, `data/numeric.py`, `equations/evaluator.py`,
+  `modules/xrd/`, and `modules/electrochemistry/`. A direct `pyproject.toml`
+  dependency.
+- **Matplotlib** — the authoritative scientific plotting and publication-quality
+  rendering backend, for both 2D (line/scatter/histogram) and 3D
+  (scatter/line/line+markers via `mpl_toolkits.mplot3d`). 3D
+  surface/wireframe/mesh rendering is not implemented. See "2D / 3D model
+  architecture" and "Rendering architecture".
+- **SciPy** — curve fitting and numerical analysis: `scipy.optimize.curve_fit`
+  in `analysis/fitting.py`, and `scipy.signal.find_peaks` / `savgol_filter` in
+  `modules/xrd/`. A direct `pyproject.toml` dependency.
+- **SymPy** — equation parsing and symbolic mathematics. Equation input always
+  goes through SymPy, never raw `eval()`.
+- **pybaselines** — arPLS baseline correction in `modules/xrd/preprocessing.py`
+  only. Optional (`xrd` extra), not a core dependency. See "Analysis".
 - **pytest** / **pytest-cov** — testing, with coverage collected in CI
 
 ## Architectural principles
 
-These constraints were established deliberately and should guide all design and implementation decisions, not just the initial scaffold:
+These constraints guide all design and implementation decisions.
 
-- **Modular by domain, not monolithic.** GUI, data management, plotting, equation handling, and scientific analysis are separate modules/packages. There is no monolithic `main.py` — it should only wire things together.
-- **Pandas DataFrame is the canonical internal representation** for tabular experimental data. Other layers (plotting, analysis) consume DataFrames rather than raw arrays/dicts where the data is tabular in nature. This still holds for every dataset in the app today: there is no grid/matrix (2D array/mesh) data representation yet -- see "Data model: current limitation and future direction" below.
-- **Matplotlib stays authoritative for publication-quality rendering.** Any interactive/alternate rendering path is additive, not a replacement.
-- **Multiple experimental datasets can coexist and overlap on the same axes.** The data/plotting layer supports this for both 2D `Panel`/`PlotSeries` and 3D `Panel3D`/`Series3D`.
-- **Equation curves and experimental data are meant to eventually coexist on the same graph.** Design the plotting layer so this integration doesn't require rework later. Not implemented yet -- there is still no `EquationSeries`; see "Analysis" and the development-philosophy note below.
-- **Equation plotting must eventually support both `y = f(x)` and `z = f(x, y)`.** Keep the equation-handling module general enough for both, even when only one is implemented first. Neither is implemented yet -- `equations/evaluator.py` only evaluates a formula against an existing DataFrame's columns (dataset calculated columns), not standalone equation plotting.
-- **No unrestricted `eval()` on user-entered equations, ever.** Equation parsing/evaluation must go through a safe SymPy-based approach.
-- **3D plotting is a core feature, not an add-on.** Matplotlib `mplot3d` now backs a real, merged 3D scatter/line/curve-family/publication-styling feature set (see "2D / 3D model architecture"). The plotting layer keeps a backend-agnostic `PlotBackend` interface (`plotting/backends/base.py`) rather than coupling the app directly to Matplotlib calls everywhere in `gui`/`core`, but see "Rendering architecture" below for exactly how far that abstraction currently goes -- do not describe `PlotBackend` as a general swappable-renderer system beyond what its actual Protocol provides today. 3D surface/wireframe/mesh is future work, likely dependent on a structured grid data model (see "Data model" and "Roadmap").
-- **Specialized scientific analysis (e.g. cyclic voltammetry, XRD) lives in its own module(s)**, separate from the general plotting engine. The general plotting/analysis core must not be hard-coded with domain-specific logic. `gnovi_plot/modules/` now holds `xrd/` and `electrochemistry/` (see "Analysis" below); the generic `analysis/`/`plotting/` layers stay domain-agnostic.
-- **Reproducibility is a major design goal.** Favor designs where a plotting/analysis session's inputs and parameters are enough to reproduce its output deterministically.
-- **GUI-created graphs should eventually be exportable as equivalent Python code.** Keep the plotting layer's API something a generated script could call directly (i.e. avoid GUI-only state that can't be expressed as code). Not implemented yet (no `code_export.py`).
-- **Cross-platform: Linux, Windows, macOS.** Linux is the primary development platform — verify assumptions don't silently depend on Linux-only behavior.
+- **Modular by domain, not monolithic.** GUI, data management, plotting,
+  equation handling, and scientific analysis are separate packages. There is no
+  monolithic `main.py`; the composition root only wires things together.
+- **The pandas DataFrame is the canonical internal representation** for tabular
+  experimental data. Plotting and analysis layers consume DataFrames rather than
+  raw arrays or dicts where the data is tabular. There is no grid/matrix data
+  representation yet — see "Data model".
+- **Matplotlib stays authoritative for publication-quality rendering.** Any
+  interactive or alternate rendering path is additive, not a replacement.
+- **Multiple experimental datasets can coexist and overlap on the same axes.**
+  The data and plotting layers support this for both 2D (`Panel`/`PlotSeries`)
+  and 3D (`Panel3D`/`Series3D`).
+- **Equation curves and experimental data are meant to coexist on the same
+  graph.** The plotting layer should not need rework to integrate this. Not yet
+  implemented — there is no `EquationSeries`.
+- **Equation plotting should support both `y = f(x)` and `z = f(x, y)`.** Keep
+  the equation-handling module general enough for both. Neither standalone form
+  is implemented; `equations/evaluator.py` currently evaluates a formula against
+  an existing DataFrame's columns (dataset calculated columns) only.
+- **No unrestricted `eval()` on user-entered equations, ever.** Parsing and
+  evaluation must go through the safe SymPy-based path.
+- **3D plotting is a core feature, not an add-on.** Matplotlib `mplot3d` backs a
+  real 3D scatter/line/curve-family/publication-styling feature set. The
+  plotting layer keeps a backend interface (`plotting/backends/base.py`) rather
+  than calling Matplotlib directly throughout `gui`/`core`. See "Rendering
+  architecture" for how far that abstraction currently goes.
+- **Specialized scientific analysis lives in its own module(s)**, separate from
+  the general plotting engine. The generic `analysis/` and `plotting/` layers
+  must stay domain-agnostic. Domain code lives under `gnovi_plot/modules/`
+  (`xrd/`, `electrochemistry/`).
+- **Reproducibility is a major design goal.** Favor designs where a session's
+  inputs and parameters are enough to reproduce its output deterministically.
+- **GUI-created graphs should be exportable as equivalent Python code.** Keep the
+  plotting API something a generated script could call directly; avoid GUI-only
+  state that cannot be expressed as code. Not yet implemented.
+- **Cross-platform: Linux, Windows, macOS.** Linux is the primary development
+  platform; verify assumptions don't silently depend on Linux-only behavior.
 
 ## Development philosophy
 
-- **Build incrementally.** Prefer small, working increments over large upfront builds.
-- **Don't implement roadmap items early just because they're planned.** Only build what's needed for the current step. The Matplotlib `mplot3d` backend and a 3D scatter/line/curve-family/publication-styling feature set have now been built and merged, so they no longer belong on this "not yet started" list; the `modules/` package now exists (`modules/xrd/` and `modules/electrochemistry/`), so it is off the list too. As of now the list still applies to: `z = f(x,y)` (and standalone `y = f(x)`) equation plotting, `EquationSeries` on the same graph as data, `code_export.py`, 3D surface/wireframe/mesh rendering, and a structured `GridDataset`/matrix-data model — none of these are built yet and shouldn't be started without being explicitly taken on.
-- **Discuss before major architectural changes or new major dependencies.** Contributors should not introduce a new core dependency or restructure module boundaries without raising it first.
+- **Build incrementally.** Prefer small, working increments over large upfront
+  builds.
+- **Don't implement roadmap items early just because they're planned.** Build
+  what the current step needs. Not yet started: standalone `y = f(x)` and
+  `z = f(x, y)` equation plotting, `EquationSeries` on the same graph as data,
+  code export (`code_export.py`), 3D surface/wireframe/mesh rendering, and a
+  structured `GridDataset`/matrix data model.
+- **Discuss before major architectural changes or new core dependencies.** Don't
+  introduce a new core dependency or restructure module boundaries without
+  raising it first.
 
-## Scientific Python Library Policy
+## Scientific Python library policy
 
-GNOVI Studio should use modern, actively maintained, stable Python scientific libraries wherever appropriate rather than reimplementing established numerical or scientific algorithms.
+Use modern, actively maintained, stable scientific-Python libraries rather than
+reimplementing established numerical or scientific algorithms.
 
 Prefer the current stable, mutually compatible releases of:
 
-- **NumPy** for numerical arrays and fundamental numerical operations
-- **SciPy** for optimization, curve fitting, signal processing, interpolation, statistics, and other scientific algorithms
-- **pandas** for tabular scientific data handling
-- **Matplotlib** for publication-quality scientific plotting and vector/raster export
-- **PySide6** / modern Qt APIs for the desktop GUI
+- **NumPy** — numerical arrays and fundamental operations
+- **SciPy** — optimization, curve fitting, signal processing, interpolation,
+  statistics
+- **pandas** — tabular scientific data handling
+- **Matplotlib** — publication-quality plotting and vector/raster export
+- **PySide6** / modern Qt APIs — the desktop GUI
 
-For future scientific capabilities such as XRD, Raman, UV–Vis, CV, spectroscopy, peak analysis, smoothing, baseline correction, and SEM/TEM image analysis, first evaluate established actively maintained Python libraries before implementing algorithms from scratch.
+For future scientific capabilities (XRD, Raman, UV–Vis, CV, spectroscopy, peak
+analysis, smoothing, baseline correction, SEM/TEM image analysis), evaluate
+established libraries before implementing algorithms from scratch.
 
-Do not add a dependency merely because it exists. A new dependency should provide a meaningful scientific, numerical, performance, reliability, or maintenance advantage.
+Do not add a dependency merely because it exists. A new dependency should
+provide a meaningful scientific, numerical, performance, reliability, or
+maintenance advantage.
 
-Use **latest stable and compatible**, not blindly latest. Before introducing or upgrading a major dependency, verify:
+Use the latest stable *and compatible* release, not blindly the latest. Before
+introducing or upgrading a major dependency, verify:
 
 - Python-version compatibility
-- Linux compatibility
-- Windows compatibility
-- macOS compatibility
+- Linux, Windows, and macOS compatibility
 - availability of binary wheels where relevant
 - compatibility with the existing GNOVI dependency stack
-- licensing compatibility with GNOVI Studio
+- license compatibility
 - suitability for future application packaging
 
-Avoid obsolete, abandoned, or unnecessarily niche libraries when a well-maintained scientific-Python alternative exists.
+Avoid obsolete, abandoned, or unnecessarily niche libraries when a
+well-maintained alternative exists.
 
-Keep numerical/scientific logic separated from the Qt GUI so scientific algorithms can be independently tested and replaced or upgraded without redesigning the user interface — this is already how `analysis/`/`equations/` are structured relative to `gui/` (see "Current implementation status" below), and new analysis tools should keep following that split.
+Keep numerical and scientific logic separated from the Qt GUI so algorithms can
+be tested and upgraded independently of the interface — this is how `analysis/`
+and `equations/` are structured relative to `gui/`, and new analysis tools
+should follow the same split.
 
-Do not change any existing working dependency solely to satisfy this policy. Apply it to new development and evaluate dependency upgrades separately.
+Do not change an existing working dependency solely to satisfy this policy.
+Apply it to new development, and evaluate upgrades separately.
 
 ## Current implementation status
 
-The package layout below reflects the repository as it exists now (not a plan to scaffold). Top-level packages under `gnovi_plot/`:
+Top-level packages under `gnovi_plot/`:
 
-- `gui/` — PySide6 presentation layer. `main_window.py` is the main application window: multi-Workbench UI (tabs, each with its own figure/panels/datasets), a grouped sidebar drawer (see "Sidebar / workspace" below), and cross-platform layout-robustness work (auto-collapsing drawers instead of shrinking below a usable minimum, normalized sidebar/control minimum widths, Workbench-vs-drawer width budgeting) that CI exercises on both Ubuntu and Windows. `widgets/analysis_panel.py` is the Curve Fitting / Analysis History drawer page (Run Fit, Add/Remove Fit Curve, a per-panel selectable result history); `widgets/analysis_result_view.py` and `widgets/residual_window.py` show fit results and residual diagnostics. `widgets/plot3d_panel.py` is the "3D" sidebar page (add/configure `Series3D`). `widgets/figure_properties_panel.py` (the "Axes" page) adapts to whichever panel type is active, rendering 3D-specific controls (camera, grid, panes, aspect, per-axis tick spacing) when the active panel is a `Panel3D`, instead of a separate duplicated 3D destination. Also `styles.py` (theming) and `undo_manager.py`. No `controllers/` submodule — GUI/core coordination goes through normal Qt signals/slots, as originally intended; still no need for a controller layer.
-- `data/` — `dataset.py` (`Dataset`: a pandas DataFrame plus metadata — name, units, source, color — with calculated-column support via `equations/evaluator.py`), `dataset_manager.py` (`DatasetManager`, holds multiple coexisting datasets, no Qt dependency), `numeric.py` (numeric-validity helpers for both 2D (`numeric_xy`, `numeric_column`) and 3D (`numeric_xyz`) series, plus `group_row_positions`, which backs `Series3D`'s "Group by" curve-family grouping — see below), `transforms.py` (row-range/calculated-column transformations), and `importers/text_importer.py` (CSV/TSV/TXT/DAT import — the only place file formats are known about). All of this is still exclusively tabular/column-based — see "Data model" below.
-- `plotting/` — backend-agnostic 2D+3D plotting engine: `figure.py` (`GnoviFigure`, `Panel`, and `Panel3D`; `series.py`'s `PlotSeries` with `PlotType.LINE/SCATTER/HISTOGRAM`; `series3d.py`'s `Series3D`), `graph.py`/`graph_library.py` (saved reusable graph definitions, for both `Panel` and `Panel3D`), `stacking.py`, `units.py`, and `backends/` (`base.py`'s `PlotBackend` Protocol plus `matplotlib_backend.py`, the only implementation). See "2D / 3D model architecture" and "Rendering architecture" below for detail. There is no `EquationSeries` yet, so equation curves and experimental data don't yet coexist on a graph. There is no `axes.py`; axis state lives on `GnoviFigure`/`Panel`/`Panel3D`.
-- `equations/` — `parser.py` (safe SymPy parsing via `parse_expr`, never raw `eval`) and `evaluator.py` (`evaluate_formula`: evaluates a formula against a DataFrame's columns to produce a new Series). Today this powers dataset calculated columns only; grid evaluation for standalone `y=f(x)`/`z=f(x,y)` equation plotting is not implemented.
-- `analysis/` — generic, domain-independent analysis only; see "Analysis" below.
-- `modules/` — specialized domain analyses, kept out of `analysis/`/`plotting/`. `modules/xrd/` is the first: a native numerical foundation (radiation/wavelength, Bragg's-law d-spacing, background/smoothing preprocessing, peak detection) — see "Analysis" below. `modules/electrochemistry/` is the second: the CV-1 numerical foundation (units/sign-convention helpers, sweep/cycle segmentation, candidate peak detection, a local-linear baseline primitive, peak measurement, ΔEp/E½/couple-ratio metrics, a charge-integration primitive, and the `CVCycleAnalysisResult` persistence type) — no CV GUI yet. See "Analysis" below for exactly what exists and what doesn't.
-- `export/` — see "Export" below.
-- `core/` — `app_info.py` (single source of truth for `APP_NAME = "GNOVI Studio"`, tagline, `__version__`, About text — kept in sync with `pyproject.toml`'s version via `tests/test_app_info.py`), `project.py` (`Project`, owns one or more `Workbench`es, including duplicate/remove/extract-panel-to-workbench), `workbench.py` (`Workbench`: a figure + its datasets + identity + its own `analysis_results` — a `PanelResultHistory`), and `project_io.py` (reads/writes the versioned `.gnovi` ZIP project container — see "Project format / persistence" below). No separate `session.py`/`config.py` yet — `Project`/`Workbench`/`project_io.py` currently serve the reproducibility role session.py was meant for.
-- `app.py` — thin composition root that wires the above together and launches the app via `python -m gnovi_plot`.
+- **`gui/`** — PySide6 presentation layer. `main_window.py` is the main window:
+  a multi-Workbench UI (tabs, each with its own figure, panels, and datasets), a
+  grouped sidebar drawer (see "Sidebar / workspace"), and cross-platform
+  layout-robustness handling (auto-collapsing drawers rather than shrinking
+  below a usable minimum, normalized sidebar/control minimum widths,
+  Workbench-vs-drawer width budgeting) that CI exercises on Ubuntu and Windows.
+  `widgets/analysis_panel.py` is the Curve Fitting / Analysis History drawer
+  page; `widgets/analysis_result_view.py` and `widgets/residual_window.py` show
+  fit results and residual diagnostics. `widgets/plot3d_panel.py` is the "3D"
+  sidebar page. `widgets/figure_properties_panel.py` (the "Axes" page) adapts to
+  the active panel type, showing 3D-specific controls (camera, grid, panes,
+  aspect, per-axis tick spacing) when the active panel is a `Panel3D`. Also
+  `styles.py` (theming) and `undo_manager.py`. GUI/core coordination goes
+  through Qt signals and slots; there is no `controllers/` submodule.
+- **`data/`** — `dataset.py` (`Dataset`: a pandas DataFrame plus metadata —
+  name, units, source, color — with calculated-column support via
+  `equations/evaluator.py`); `dataset_manager.py` (`DatasetManager`, holds
+  multiple coexisting datasets, no Qt dependency); `numeric.py` (numeric-validity
+  helpers for 2D series (`numeric_xy`, `numeric_column`) and 3D series
+  (`numeric_xyz`), plus `group_row_positions`, which backs `Series3D`'s
+  "Group by" curve-family grouping); `transforms.py` (row-range and
+  calculated-column transformations); and `importers/text_importer.py`
+  (CSV/TSV/TXT/DAT/XY/XYE import — the only place file formats are known). All of
+  this is tabular and column-based — see "Data model".
+- **`plotting/`** — the backend-agnostic 2D+3D plotting engine: `figure.py`
+  (`GnoviFigure`, `Panel`, `Panel3D`); `series.py` (`PlotSeries`, with
+  `PlotType.LINE`/`SCATTER`/`HISTOGRAM`); `series3d.py` (`Series3D`);
+  `graph.py`/`graph_library.py` (saved reusable graph definitions for `Panel`
+  and `Panel3D`); `stacking.py`; `units.py`; and `backends/` (`base.py`'s
+  `PlotBackend` Protocol plus `matplotlib_backend.py`, the only implementation).
+  There is no `EquationSeries` and no `axes.py`; axis state lives on
+  `GnoviFigure`/`Panel`/`Panel3D`.
+- **`equations/`** — `parser.py` (safe SymPy parsing via `parse_expr`, never raw
+  `eval`) and `evaluator.py` (`evaluate_formula`: evaluates a formula against a
+  DataFrame's columns to produce a new Series). This powers dataset calculated
+  columns only; grid evaluation for standalone equation plotting is not
+  implemented.
+- **`analysis/`** — generic, domain-independent analysis only. See "Analysis".
+- **`modules/`** — specialized domain analyses, kept out of `analysis/` and
+  `plotting/`. `modules/xrd/` is a native numerical foundation
+  (radiation/wavelength, Bragg's-law d-spacing, background/smoothing
+  preprocessing, peak detection). `modules/electrochemistry/` is the cyclic
+  voltammetry foundation (unit and sign-convention helpers, sweep/cycle
+  segmentation, candidate peak detection, a local-linear baseline primitive,
+  peak measurement, ΔEp/E½/couple-ratio metrics, charge integration, and the
+  `CVCycleAnalysisResult` persistence type). See "Analysis".
+- **`export/`** — see "Export".
+- **`core/`** — `app_info.py` (single source of truth for `APP_NAME`, tagline,
+  `__version__`, About text — kept in sync with `pyproject.toml` via
+  `tests/test_app_info.py`); `project.py` (`Project`, owns one or more
+  `Workbench`es, including duplicate, remove, and extract-panel-to-workbench);
+  `workbench.py` (`Workbench`: a figure, its datasets, its identity, and its own
+  `analysis_results` `PanelResultHistory`); and `project_io.py` (reads and
+  writes the versioned `.gnovi` ZIP project container — see "Project format /
+  persistence"). There is no separate `session.py` or `config.py` layer:
+  `Project`, `Workbench`, and `project_io.py` together hold the reproducible
+  session state — inputs, parameters, and results — that such a layer would
+  otherwise own.
+- **`app.py`** — thin composition root that wires the packages together and
+  launches the app via `python -m gnovi_plot`.
 
 ### 2D / 3D model architecture
 
-`GnoviFigure.panels` is a `list[Panel | Panel3D]` — a figure can freely mix 2D and 3D panels, and both panel kinds render into the same figure (see "Rendering architecture").
+`GnoviFigure.panels` is a `list[Panel | Panel3D]`: a figure can freely mix 2D
+and 3D panels, and both render into the same figure (see "Rendering
+architecture").
 
-- **`Panel`** (`plotting/figure.py`) — a 2D subplot: axis labels/limits/scale, grid, legend, tick spacing, scientific-notation toggles, `panel_aspect_preset`, and a list of `PlotSeries`.
-- **`Panel3D`** (`plotting/figure.py`) — the 3D sibling of `Panel`, rendered as a Matplotlib `mpl_toolkits.mplot3d.Axes3D`. It is deliberately **not a subclass of `Panel`**: `GnoviFigure.panels` uses plain structural duck typing (both expose `.id`/`.panel_label`/`.title`/`.series`/`.add_series`/`.remove_series`/`.get_series`/`.invalidate_series_for_dataset`/`.to_dict`), not a formal Protocol/ABC — the two dataclasses' actual field sets barely overlap (a 3D panel has no use for `xscale`/`tick_direction`; a 2D panel has no use for a third axis or a camera). `Panel3D` holds a list of `Series3D`.
-- **`PlotSeries`** (`plotting/series.py`) — a 2D series (`PlotType.LINE`/`SCATTER`/`HISTOGRAM`).
-- **`Series3D`** (`plotting/series3d.py`) — the 3D sibling of `PlotSeries`, deliberately not a variant of it. Supported kinds are `Plot3DType.SCATTER`, `LINE`, and `LINE_MARKER` — there is **no surface/mesh/wireframe/trisurf kind**; that is explicitly out of scope for the current milestone (see "Roadmap"). A `Series3D` optionally restricts itself to an explicit, ordered subset of its `Dataset`'s row positions via `row_indices`, which is how a "Group by" grouped curve family (e.g. one `Series3D` per distinct temperature in a sweep dataset) is represented: every series in the family shares the same live `Dataset`, only the row selection differs, and row order is always the dataset's own original source order (grouping never sorts by X or any other column, since a sweep can be genuinely non-monotonic by design).
+- **`Panel`** (`plotting/figure.py`) — a 2D subplot: axis labels/limits/scale,
+  grid, legend, tick spacing, scientific-notation toggles, `panel_aspect_preset`,
+  and a list of `PlotSeries`.
+- **`Panel3D`** (`plotting/figure.py`) — the 3D sibling of `Panel`, rendered as a
+  Matplotlib `mpl_toolkits.mplot3d.Axes3D`. It is not a subclass of `Panel`:
+  their field sets barely overlap (a 3D panel has no `xscale`/`tick_direction`; a
+  2D panel has no third axis or camera). `GnoviFigure.panels` relies on
+  structural duck typing — both expose
+  `.id`/`.panel_label`/`.title`/`.series`/`.add_series`/`.remove_series`/
+  `.get_series`/`.invalidate_series_for_dataset`/`.to_dict` — rather than a
+  shared Protocol or ABC. `Panel3D` holds a list of `Series3D`.
+- **`PlotSeries`** (`plotting/series.py`) — a 2D series
+  (`PlotType.LINE`/`SCATTER`/`HISTOGRAM`).
+- **`Series3D`** (`plotting/series3d.py`) — the 3D sibling of `PlotSeries`, not a
+  variant of it. Supported kinds are `Plot3DType.SCATTER`, `LINE`, and
+  `LINE_MARKER`. There is no surface/mesh/wireframe/trisurf kind — that is out of
+  scope for now (see "Roadmap"). A `Series3D` can restrict itself to an explicit,
+  ordered subset of its `Dataset`'s row positions via `row_indices`. That is how
+  a "Group by" grouped curve family is represented (for example, one `Series3D`
+  per distinct temperature in a sweep dataset): every series in the family shares
+  the same live `Dataset` and differs only in row selection. Row order is always
+  the dataset's original source order — grouping never sorts by X or any other
+  column, because a sweep can be genuinely non-monotonic.
 
 ### Rendering architecture
 
-Matplotlib remains the sole, authoritative rendering backend. `plotting/backends/matplotlib_backend.py` provides:
+Matplotlib is the sole authoritative rendering backend.
+`plotting/backends/matplotlib_backend.py` provides:
 
-- `render_figure(axes_list, figure, ...)` — draws every panel (2D or 3D) into its corresponding pre-built `Axes`.
-- `build_projection_aware_axes(mpl_figure, rows, cols, panels)` — constructs each subplot's `Axes` with the correct Matplotlib projection (`"3d"` for a `Panel3D` entry, the default 2D projection otherwise), so a figure with mixed 2D/3D panels lays out and renders correctly in one pass. This is exercised by both the live GUI canvas and export.
-- `render_panel_3d`/`_draw_series_3d` — the 3D counterpart of the existing 2D per-series drawing, using `Axes3D.scatter` (SCATTER) and `Axes3D.plot` (LINE/LINE_MARKER).
-- `_apply_3d_grid_style` — applies `Panel3D`'s per-panel grid styling through a documented Matplotlib private-API workaround (mplot3d has no public per-axis grid-style API); pane styling (`pane_visible`/`pane_color`/`pane_alpha`), by contrast, uses Matplotlib's fully public `Axis.pane` API.
+- `render_figure(axes_list, figure, ...)` — draws every panel (2D or 3D) into
+  its pre-built `Axes`.
+- `build_projection_aware_axes(mpl_figure, rows, cols, panels)` — constructs each
+  subplot's `Axes` with the correct projection (`"3d"` for a `Panel3D`, the
+  default 2D projection otherwise), so a figure with mixed 2D/3D panels lays out
+  and renders in one pass. Used by both the live GUI canvas and export.
+- `render_panel_3d` / `_draw_series_3d` — the 3D counterpart of the 2D per-series
+  drawing, using `Axes3D.scatter` (SCATTER) and `Axes3D.plot`
+  (LINE/LINE_MARKER).
+- `_apply_3d_grid_style` — applies `Panel3D`'s per-panel grid styling through a
+  documented Matplotlib private-API workaround (mplot3d has no public per-axis
+  grid-style API). Pane styling (`pane_visible`/`pane_color`/`pane_alpha`) uses
+  Matplotlib's public `Axis.pane` API.
 
-`plotting/backends/base.py` defines `PlotBackend` as a minimal `Protocol` with a single method, `render_figure(axes_list, figure)`. This keeps the app's GUI/export code decoupled from calling Matplotlib directly everywhere, but it is **not** a general, freely swappable multi-backend system today — `matplotlib_backend.py` is the only implementation, and the Protocol is intentionally scoped to only what that one implementation needs, not designed against a hypothetical future backend (e.g. PyVista) before one exists.
+`plotting/backends/base.py` defines `PlotBackend` as a minimal `Protocol` with a
+single method, `render_figure(axes_list, figure)`. This keeps GUI and export
+code from calling Matplotlib directly everywhere. It is not a general swappable
+multi-backend system: `matplotlib_backend.py` is the only implementation, and
+the Protocol is scoped to what that implementation needs.
 
 ### Sidebar / workspace
 
-The left tool drawer is grouped into four visually separated sections (`ToolDrawer.add_section` headings), in this order:
+The left tool drawer has four visually separated sections
+(`ToolDrawer.add_section` headings), in order:
 
-- **DATA** — `Data` (dataset import/list)
-- **PLOT** — `2D` and `3D` (add/configure `PlotSeries` / `Series3D`)
+- **DATA** — `Data` (dataset import and list)
+- **PLOT** — `2D` and `3D` (add and configure `PlotSeries` / `Series3D`)
 - **FORMAT** — `Series`, `Axes`, `Figure`, `Layout`
-- **ANALYZE** — `Analysis` (curve fitting / analysis history)
+- **ANALYZE** — `Analysis` (curve fitting and analysis history)
 
-`Series` and `Axes` are single destinations, not duplicated per panel type: both adapt their controls to whichever panel (`Panel` or `Panel3D`) is currently active, rather than the sidebar exposing separate 2D-Axes/3D-Axes or 2D-Series/3D-Series pages.
+`Series` and `Axes` are single destinations, not duplicated per panel type: each
+adapts its controls to whichever panel (`Panel` or `Panel3D`) is active, rather
+than exposing separate 2D and 3D pages.
 
 ### 3D publication controls
 
-`Panel3D` supports, at an architectural level (see `plotting/figure.py` for the full field list and each field's own docstring):
+`Panel3D` supports the following at an architectural level (see
+`plotting/figure.py` for the full field list and per-field docstrings):
 
 - Axis labels and limits (`x_label`/`y_label`/`z_label`, `xlim`/`ylim`/`zlim`)
-- Scientific/data aspect (`aspect_mode`: `"auto"` or `"equal"`, mapped to `Axes3D.set_aspect(...)` — deliberately not `set_box_aspect()`, which is a separate, unimplemented physical-shape concern)
-- Per-axis major/minor tick spacing (`major_tick_spacing_x/y/z`, `minor_tick_spacing_x/y/z`)
-- Grid styling (`grid_linestyle`/`grid_linewidth`/`grid_alpha`/`grid_color`) and pane styling (`pane_visible`/`pane_color`/`pane_alpha`)
+- Aspect (`aspect_mode`: `"auto"` or `"equal"`, mapped to `Axes3D.set_aspect`;
+  not `set_box_aspect`, which is a separate unimplemented concern)
+- Per-axis major and minor tick spacing
+  (`major_tick_spacing_x/y/z`, `minor_tick_spacing_x/y/z`)
+- Grid styling (`grid_linestyle`/`grid_linewidth`/`grid_alpha`/`grid_color`) and
+  pane styling (`pane_visible`/`pane_color`/`pane_alpha`)
 - Legend (`legend_visible`/`legend_loc`/`legend_ncol`/`legend_frameon`)
-- Camera (`elevation`/`azimuth`, the two `Axes3D.view_init(elev=, azim=)` parameters — deliberately not a full orientation; `roll` is not implemented)
+- Camera (`elevation`/`azimuth`, the `Axes3D.view_init` parameters; `roll` is not
+  implemented)
 
-Interactive mouse rotation of a 3D panel is **transient, live-view state** — it never writes back into `Panel3D.elevation`/`.azimuth`, never marks the project dirty, and never adds an undo checkpoint, exactly like interactive 2D pan/zoom never writes into `Panel.xlim`/`.ylim`. It works through Matplotlib `Axes3D`'s own native click-drag navigation; GNOVI does not implement or intercept the rotation itself (its canvas event handlers only observe events and never consume them). `matplotlib_backend.render_panel_3d` re-applies the stored `Panel3D.elevation`/`.azimuth` to the Axes only when they differ from what it last applied there (tracked as `ax._gnovi_applied_view`), so an incidental re-render — a grid/label edit, a panel switch, undo/redo, an XRD overlay refresh — never snaps an interactively-rotated view back, the same way `render_panel` only forces `set_xlim`/`set_ylim` for an explicitly-set 2D limit. After a completed drag `MainWindow._on_canvas_release` does one thing only: it refreshes the Axes-page Elevation/Azimuth readout (`FigurePropertiesPanel.sync_3d_camera_display`, display-only, signals blocked) so the numbers match what's on screen. The "Set Current View" control is the explicit, individually-undoable commit of the live view into the persistent `Panel3D` fields; "Reset View" restores the Matplotlib defaults. Both route through `MainWindow` (`_on_set_current_3d_view_requested` / `_on_reset_3d_view_requested`) because both must also clear `ax._gnovi_applied_view` so the render guard re-applies even when the new stored value equals the last applied one — the case that makes "Reset View" work immediately after a mouse rotation. The headless `export.figure_export.export_figure` path always renders from the stored `Panel3D` fields (a fresh Axes, so `ax._gnovi_applied_view` never applies); `export_live_figure` saves the on-screen Axes as-is.
+Interactive mouse rotation of a 3D panel is transient live-view state: it never
+writes back into `Panel3D.elevation`/`.azimuth`, never marks the project dirty,
+and never adds an undo checkpoint — the same rule interactive 2D pan/zoom
+follows for `Panel.xlim`/`.ylim`. Rotation is Matplotlib `Axes3D`'s own
+click-drag navigation; GNOVI observes those events without consuming them.
+
+The renderer re-applies stored camera state only when it has actually changed,
+so an incidental redraw — a grid or label edit, a panel switch, undo/redo, an
+overlay refresh — never snaps an interactively rotated view back. After a drag,
+the Axes page's elevation/azimuth readout updates to match the screen while the
+stored fields stay put.
+
+Two explicit controls act on the live view: **Set Current View** commits it into
+the persistent `Panel3D` fields as one undoable change, and **Reset View**
+restores Matplotlib's default orientation. Both also clear the renderer's
+change-tracking, so the chosen orientation is re-applied even when it equals the
+one last committed — this is what makes "Reset View" take effect immediately
+after a mouse rotation.
+
+On export, headless figure export renders from the stored `Panel3D` fields on a
+fresh Axes; live-figure export saves the on-screen Axes as-is.
 
 ### 2D view navigation
 
-The Matplotlib navigation toolbar (`_CursorSafeNavigationToolbar`, Home/Back/Forward/Pan/Zoom/Save) drives all interactive 2D view changes; GNOVI adds one button beside "Zoom": **Zoom Out** (`MainWindow._on_zoom_out`, icon `_make_zoom_out_icon`). It widens the active 2D panel's *current* X and Y view about their centers by a fixed step (`plotting/navigation.py::ZOOM_OUT_FACTOR`, 1.25× per click — incremental, never a jump to full data extent, which is Home's job). `plotting/navigation.py` is pure view-limit math: each axis keeps its own order (an inverted axis stays inverted) and its own scale (`"log"` widens multiplicatively in log space). Like all toolbar navigation it is **transient view state** — it never writes `Panel.xlim`/`.ylim` or any other model field, never marks the project dirty, and never adds a figure-content undo checkpoint — and it participates in the same Home/Back/Forward history via `NavigationToolbar2.push_current()` (baseline pushed on the first navigation, each click's result pushed on top). Disabled for a `Panel3D` (see `_refresh_active_panel_context`); 3D navigation is `Axes3D`'s own mouse handling.
+The Matplotlib navigation toolbar (`_CursorSafeNavigationToolbar` —
+Home/Back/Forward/Pan/Zoom/Save) drives all interactive 2D view changes. GNOVI
+adds one button beside "Zoom": **Zoom Out** (`MainWindow._on_zoom_out`). It
+widens the active 2D panel's current X and Y view about their centers by a fixed
+step (`plotting/navigation.py::ZOOM_OUT_FACTOR`, 1.25× per click). It is
+incremental — never a jump to full data extent, which is Home's job.
+
+`plotting/navigation.py` is pure view-limit math: each axis keeps its own order
+(an inverted axis stays inverted) and its own scale (a `"log"` axis widens
+multiplicatively in log space). Like all toolbar navigation, Zoom Out is
+transient view state — it never writes `Panel.xlim`/`.ylim` or any other model
+field, never marks the project dirty, and never adds a figure-content undo
+checkpoint. It participates in the normal Home/Back/Forward history via
+`NavigationToolbar2.push_current()`. Zoom Out is disabled for a `Panel3D`; 3D
+navigation is `Axes3D`'s own mouse handling.
 
 ### Export
 
-`export/figure_export.py` provides `export_figure` (from a `GnoviFigure` model, headless) and `export_live_figure` (WYSIWYG-tested against the live GUI canvas), plus panel-scoped export (`build_panel_export_figure`/`export_panel`, typed `panel: Panel | Panel3D`) reachable from the panel context menu ("Export Panel…") and the Panels menu ("Export Active Panel…"). Both full-figure and single-panel export work for 3D panels — `build_projection_aware_axes` (see "Rendering architecture") is used on the export path too, so 3D projection and camera state render the same way in an exported file as in the live canvas.
+`export/figure_export.py` provides `export_figure` (from a `GnoviFigure` model,
+headless) and `export_live_figure` (WYSIWYG-tested against the live GUI canvas),
+plus panel-scoped export (`build_panel_export_figure`/`export_panel`, typed
+`panel: Panel | Panel3D`) reachable from the panel context menu and the Panels
+menu. Full-figure and single-panel export both work for 3D panels;
+`build_projection_aware_axes` is used on the export path, so 3D projection and
+camera state render the same in a file as on the live canvas.
 
-Supported formats (`SUPPORTED_FORMATS` in `export/figure_export.py`): raster `png`, `tiff`; vector `svg`, `pdf`. DPI is configurable for the raster formats. No claim beyond this should be made about vector-specific behavior (e.g. per-element vector editability) without checking what the export tests actually establish.
+Supported formats (`SUPPORTED_FORMATS`): raster `png` and `tiff`; vector `svg`
+and `pdf`. DPI is configurable for the raster formats. Vector output is standard
+Matplotlib SVG/PDF, with no separate per-element editability guarantee.
 
 ### Focus / Extract
 
-Both are implemented generically over `Panel | Panel3D` — neither the "Focus Panel" nor "Extract Panel to New Workbench" code path contains a 2D-only type check:
+Both work generically over `Panel | Panel3D`; neither path contains a 2D-only
+type check.
 
-- **Focus** (`MainWindow._focus_panel`) tracks the focused panel purely by `.id` (a field both `Panel` and `Panel3D` expose); it never clones or type-checks the panel object, so a focused `Panel3D` is the exact same live object before, during, and after "Restore Multi-Panel View" — any modification made while focused persists, by construction.
-- **Extract** (`Project.extract_panel_to_workbench`) clones the source panel via `plotting.graph.clone_panel_with_shared_datasets`, which is explicitly documented to work unchanged for either `Panel` or `Panel3D` (a plain `copy.deepcopy` plus a fresh `.id`). For a `Panel3D`, this deep-copies its `Series3D` list (including grouped-curve `row_indices`) and all publication-styling fields (camera, grid, panes, legend, aspect, tick spacing), assigns the extracted panel a fresh `id`, and preserves 2D Extract's existing `Dataset`-sharing semantics (the extracted panel's series still reference the same live `Dataset` objects, not copies).
+- **Focus** (`MainWindow._focus_panel`) tracks the focused panel by `.id` only.
+  It never clones or type-checks the panel object, so a focused `Panel3D` is the
+  same live object before, during, and after "Restore Multi-Panel View" — any
+  change made while focused persists.
+- **Extract** (`Project.extract_panel_to_workbench`) clones the source panel via
+  `plotting.graph.clone_panel_with_shared_datasets` (a `copy.deepcopy` plus a
+  fresh `.id`), which works unchanged for `Panel` or `Panel3D`. For a `Panel3D`
+  it deep-copies the `Series3D` list (including grouped-curve `row_indices`) and
+  all publication-styling fields (camera, grid, panes, legend, aspect, tick
+  spacing), and preserves 2D Extract's `Dataset`-sharing semantics: the
+  extracted panel's series still reference the same live `Dataset` objects.
 
-Note: this behavior is proven correct for `Panel3D` today by code inspection and by Graph Library's dedicated `Panel3D` tests (which exercise the same shared `clone_panel_with_shared_datasets` function — see "Graph Library" below), plus a full existing Focus/Extract test suite. There is currently no *dedicated* `Panel3D`-specific Focus/Extract GUI test scenario; that is a test-coverage gap worth closing, not a functional limitation.
+`Panel3D` Focus/Extract behavior is currently covered by code inspection, by
+Graph Library's `Panel3D` tests (which exercise the same
+`clone_panel_with_shared_datasets` function), and by the existing Focus/Extract
+suite. A dedicated `Panel3D` Focus/Extract GUI test scenario is a known
+coverage gap, not a functional limitation.
 
 ### Graph Library
 
-`plotting/graph.py`'s `Graph.panel` is typed `Panel | Panel3D`, loaded polymorphically (kind-aware) via `panel_from_dict`, so a saved `Panel3D` reloads as a `Panel3D`. `graph_library.py`'s `save_panel_as_graph`/`load_graph_into_panel` route through the same `clone_panel_with_shared_datasets` function Extract uses. This full round trip — save a `Panel3D` graph, reload the library, load it into a figure as a fresh `Panel3D` — is covered by dedicated passing tests (`tests/test_panel3d_model.py`), including grouped-curve `row_indices`, publication-styling fields (camera/grid/pane/legend/aspect/tick spacing), and `Dataset`-sharing preservation.
+`plotting/graph.py`'s `Graph.panel` is typed `Panel | Panel3D` and loaded
+kind-aware via `panel_from_dict`, so a saved `Panel3D` reloads as a `Panel3D`.
+`graph_library.py`'s `save_panel_as_graph` / `load_graph_into_panel` route
+through the same `clone_panel_with_shared_datasets` function Extract uses. The
+full round trip — save a `Panel3D` graph, reload the library, load it into a
+figure — is covered by `tests/test_panel3d_model.py`, including grouped-curve
+`row_indices`, publication-styling fields, and `Dataset`-sharing preservation.
 
 ### Project format / persistence
 
-`core/project_io.py` defines `PROJECT_FORMAT_VERSION = 3`. The version history is tracked in-file: v1→v2 flattened `figures`/`active_figure_index` into named workbenches; v2→v3 allowed a `GnoviFigure.panels` list to contain `Panel3D` entries alongside `Panel`. Newer `Series3D`/`Panel3D` fields added since the initial 3D milestone are plain optional keys with safe defaults in each `from_dict`, so an older save loads without a further format-version bump and without misparsing. Loading refuses (with a clear error) a project whose `project_format_version` is newer than the running app's `PROJECT_FORMAT_VERSION`. Backward-compatibility claims beyond what's described here should be limited to what `tests/test_project_io.py`/`tests/test_project_io_3d.py` actually verify.
+`core/project_io.py` defines `PROJECT_FORMAT_VERSION = 3`. The version history:
 
-### Analysis
+- **v1 → v2** — flattened `figures`/`active_figure_index` into named workbenches.
+- **v2 → v3** — allowed a `GnoviFigure.panels` list to contain `Panel3D` entries
+  alongside `Panel`.
 
-`analysis/` contains only generic, domain-independent tooling: `cycles.py` (`detect_cycles`, turning-point-based repeating-sweep-cycle detection — documented as domain-independent, shaped for but not limited to cyclic-voltammetry data; its noise-tolerant, plateau-carrying direction primitive is factored out as `carried_step_directions` and reused, not duplicated, by `modules/electrochemistry/common.py`'s sweep segmentation), `segments.py` (`contiguous_row_range`, generic row-range selection), `fitting.py` (SciPy-based curve fitting — `fit_curve`/`FitResult`, plus fit-quality/residual computation for the residual diagnostics window), `results.py` (`AnalysisResult`, the generic base and polymorphic `kind`-based persistence registry any analysis tool's result type registers into — see below for its engine-neutral provenance fields), and `panel_results.py` (`PanelResultHistory`: per-panel, multi-result analysis history with an explicit current-selection marker, owned by `core.workbench.Workbench`).
+Newer `Series3D`/`Panel3D` fields are plain optional keys with safe defaults in
+each `from_dict`, so an older save loads without a further version bump and
+without misparsing. Loading refuses, with a clear error, any project whose
+`project_format_version` is newer than the running app's
+`PROJECT_FORMAT_VERSION`. The persistence test suite
+(`tests/test_project_io.py`, `tests/test_project_io_3d.py`) exercises this
+round trip for both 2D and 3D project state.
 
-`AnalysisResult` carries `engine`/`engine_version`/`operation`/`parameters` alongside its existing dataset/series/panel provenance — added ahead of any tool that needs a non-native value so every result (present and future) records *how* it was produced the same way. Every result in this codebase today sets `engine="gnovi"` (`ENGINE_GNOVI`); no external scientific engine (GSAS-II, pyFAI, BGMN, ...) is integrated, so nothing sets it to anything else yet.
+## Analysis
 
-**XRD (`modules/xrd/`)** is the first domain-specific analysis, and the first consumer of that provenance mechanism. The native numerical foundation: an explicit `Radiation` model (`radiation.py`, presets for Cu/Co/Mo K-alpha1 and their weighted-K-alpha averages, kept distinct — never silently assumed for a dataset), first-order Bragg's-law d-spacing (`bragg.py`), background correction (`preprocessing.py`: a low-order polynomial primitive fit to caller-specified baseline points, and arPLS via the optional `pybaselines` dependency, installed with the `xrd` extra (`pip install gnovi-plot[xrd]`) rather than core — its absence raises a clear `PybaselinesNotAvailableError` at call time, never breaks GNOVI startup), optional Savitzky-Golay smoothing (`preprocessing.py`, opt-in only, never automatic), and peak detection (`peaks.py`, a small wrapper around `scipy.signal.find_peaks` returning `XRDPeakSeed` candidates — automatic or manual, enabled/disabled, never a final measured position) feeding into `results.py`'s `XRDAnalysisResult` (`AnalysisResult` kind `"xrd_peaks"`). None of this preprocessing ever mutates a `Dataset` in place; every function returns new arrays/results.
+### Generic analysis (`analysis/`)
 
-**XRD Peak Analysis (GUI)** now exists on the Analysis page: `gui/widgets/xrd_analysis_section.py`'s `XRDAnalysisSection` is a second `CollapsibleSection` alongside Curve Fitting, selected via `AnalysisPanel`'s "Analysis Tool" combo — one Analysis destination, two workflows sharing the same Analysis History, exactly as this milestone's own design intended. It operates on a normal 2D `PlotSeries` in the active panel (disabled, with a clear explanation, when the active panel is a `Panel3D`); supports source-series/radiation selection, background/smoothing preview, an explicit detection-input chain ("Peak detection input: Raw / Background-corrected / Smoothed raw / Smoothed background-corrected" — only options that are actually available are ever offered), `find_peaks`-based detection with a peak table (seed 2θ, observed intensity, prominence, d-spacing, origin, enabled — deliberately no fitted-center/FWHM/area/model columns, since profile fitting doesn't exist), manual peak add/remove/enable-disable, and CSV peak-table export. Background/smoothing previews are transient (never registered as a `Dataset`/`PlotSeries` until explicitly accepted via "Add Corrected/Smoothed Curve to Plot", which follows the exact same derived-`Dataset` pattern `analysis.fitting.FitResult`'s "Add Fit Curve to Plot" already established). Peak markers/labels drawn on the graph are a **live-only overlay**, reconstructed each redraw from the current `XRDAnalysisResult` rather than a persisted Panel/figure annotation — they are not part of the saved figure and do not appear in Export Panel/Complete Figure (only an explicitly-added derived corrected/smoothed curve does). "Find Peaks" always creates a new Analysis History entry (same convention as "Run Fit"); manual peak edits mutate the current entry in place (dirty + redisplay, no new history entry). `.xy`/`.xye` XRD-pattern text files are now supported by the existing text importer (`data/importers/text_importer.py`) alongside `.csv`/`.txt`/`.tsv`/`.dat` — no dedicated diffraction parser was added.
+`analysis/` contains only generic, domain-independent tooling:
 
-**Explicitly not implemented, anywhere in the app**: peak-profile fitting (Gaussian/Lorentzian/pseudo-Voigt), FWHM/integrated-area/uncertainty from a fit, Scherrer crystallite-size calculation, phase identification, Rietveld refinement, quantitative phase analysis, Raman analysis, or any external scientific-engine integration (GSAS-II, pyFAI, Profex, BGMN) — all future work; see "Roadmap".
+- `cycles.py` — `detect_cycles`, turning-point-based detection of repeating
+  sweep cycles. Domain-independent, shaped for but not limited to cyclic
+  voltammetry. Its noise-tolerant, plateau-carrying direction primitive,
+  `carried_step_directions`, is factored out and reused by
+  `modules/electrochemistry/common.py`.
+- `segments.py` — `contiguous_row_range`, generic row-range selection.
+- `fitting.py` — SciPy-based curve fitting (`fit_curve`/`FitResult`), plus
+  fit-quality and residual computation for the residual diagnostics window.
+- `results.py` — `AnalysisResult`, the generic base and polymorphic,
+  `kind`-based persistence registry that every analysis tool's result type
+  registers into.
+- `panel_results.py` — `PanelResultHistory`: per-panel, multi-result analysis
+  history with an explicit current-selection marker, owned by
+  `core.workbench.Workbench`.
 
-**Electrochemistry / Cyclic Voltammetry (`modules/electrochemistry/`)** is the second domain-specific analysis. The package is named for the family (LSV, chronoamperometry, GCD, EIS are the intended later members) rather than `cv/`; there is deliberately **no** `ElectrochemicalExperiment`/`ElectrochemicalResult` base class and **no** plugin system — one technique does not justify an abstraction layer. CV-1 is the **numerical foundation only** (pure NumPy/SciPy; pandas only where the `Dataset` layer already uses it), no Qt, no Matplotlib, no CV GUI:
+**Provenance.** `AnalysisResult` carries `engine`, `engine_version`,
+`operation`, and `parameters` alongside its dataset/series/panel provenance, so
+every result records *how* it was produced. Every result in this codebase sets
+`engine="gnovi"` (`ENGINE_GNOVI`); no external scientific engine (GSAS-II,
+pyFAI, BGMN, ...) is integrated.
 
-- `common.py` — reusable primitives: unit helpers (V/mV, A/mA/µA/nA, V/s↔mV/s, C/mC; canonical internal units are V, A, V/s, C — *not* a units framework); `CurrentSignConvention` (`ANODIC_POSITIVE` default / `CATHODIC_POSITIVE`) as an **interpretation layer only** — the imported `Dataset`/array current is never modified or flipped, and the chosen convention is stored in every result; `ElectrodeContext` (an all-optional dataclass — `area_cm2`/`n`/`concentration_mol_cm3`/`temperature_k`/reference-working-counter-electrode/electrolyte — *none* required for basic peak analysis, *none* silently defaulted, a supplied non-positive numeric value raises); `segment_sweeps` (deterministic rising/falling segmentation, reusing `analysis.cycles.carried_step_directions`; tolerates noise/plateaus/arbitrary initial direction; a monotonic LSV-like trace is one segment, not an error; incomplete first/last sweeps are allowed and never assumed anodic/cathodic); and `integrate_current` (`Q = ∫ I dt` via `scipy.integrate.trapezoid` — direct time-domain when a time array is given, else `Q = (1/|v|) ∫ I d|E−E₀|` for a strictly-monotonic constant-rate sweep only; rejects a zero/negative scan rate and a non-monotonic potential, i.e. never integrates across a reversal; sign preserved; inputs never mutated).
-- `cv.py` — CV-specific: `pair_cycles` (2-by-2 sweep pairing on top of `segment_sweeps`; a truncated leading sweep is emitted alone as an incomplete cycle so it cannot misalign later cycles; incomplete cycles are flagged `complete=False`, never dropped or mispaired; *n* identical complete cycles → *n* complete cycles); `CVPeakSeed` (a candidate model mirroring `XRDPeakSeed`'s useful pattern — stable `id`, `origin` automatic/manual, `enabled` soft-exclude — but **not** a subclass and with **no** shared superclass; `process` anodic/cathodic/unassigned is independent of `sweep` rising/falling); `detect_cv_peaks` (`scipy.signal.find_peaks` run **per sweep**, never on a concatenated cycle; sign-convention-aware — oxidative candidates in `+I·oxidative_sign`, reductive in `−I·oxidative_sign`; `process` assigned from the current direction, not the sweep direction; small parameter surface — `prominence` primary, `distance`/`width` optional); `local_linear_baseline` (a straight line through the recorded current at *only* the caller-specified anchor ranges, evaluable across any region; returns a new representation, never mutates the source, never an automatic/opaque background — no LOWESS/spline/arPLS); `measure_peak` (**detection ≠ measurement**: locates the extremum on the *unsmoothed* signal, on the baseline-corrected curve when a baseline is given — `Epa`/`Epc` is the recorded potential there, no sub-sample fitting; returns both `i_peak_raw_a` and, only when a baseline was supplied, `i_peak_corrected_a` — without a baseline the value is explicitly a **raw extremum**, never presented as a baseline-corrected `Ipa`/`Ipc`); and `couple_metrics` (`ΔEp = |Epa − Epc|` and `E½ = (Epa + Epc)/2` in canonical volts, `E½` documented as the **midpoint potential** — an estimate of the formal potential only under reversibility, never called `E°'` here; peak-current ratios preserve electrochemical identity as explicitly-labelled `|Ipa|/|Ipc|` and its reciprocal `|Ipc|/|Ipa|` — never an anonymous forward/reverse — with a `ratio_basis` recording baseline-corrected vs raw-extremum).
-- `results.py` — `CVCycleAnalysisResult` (`AnalysisResult` kind `"cv_peaks"`, `@register_result_kind`), carrying sign convention, cycle index/confidence/completeness, the sweep segmentation, the measured `CVPeakResult`s (each with `CVBaselineInfo`), the couple metrics, and the `peak_id`s of the two candidates that form the couple (so Results can name *which* peak numbers ΔEp/E½/ratio belong to). Bounded `details()`, unbounded `detail_table()` (one row per peak, rendered in the wide bottom Results tab — the XRD layout lesson). `assign_couple` / `couple_from_peak_results` pick each process's couple member deterministically from the *enabled* candidates (`unassigned` and disabled peaks are never members): the largest-`prominence` candidate when any carries one (ties → earliest position), else — only manual candidates, or an automatic pass run with no prominence threshold — the candidate added last. Raw current magnitude is never used for ranking (it is dominated by the charging background and not comparable to a prominence). Registered in `core/project_io.py` with one import line; **no `PROJECT_FORMAT_VERSION` bump** (additive within the already-polymorphic `analysis_results` structure, same as `XRDAnalysisResult`; the two couple-member id fields are defaulted, so older `from_dict` calls are unaffected).
+### XRD (`modules/xrd/`)
 
-**Cyclic Voltammetry Analysis (GUI, CV-2A)** now exists on the Analysis page: `gui/widgets/cv_analysis_section.py`'s `CVAnalysisSection` is the third `CollapsibleSection` alongside Curve Fitting and XRD Peak Analysis, selected via `AnalysisPanel`'s flat "Analysis Tool" combo (`["Curve Fitting", "XRD Peak Analysis", "Cyclic Voltammetry"]`) — one Analysis destination, three workflows sharing one Analysis History. It operates on a normal 2D `PlotSeries` in the active panel (disabled, with a clear explanation, when the active panel is a `Panel3D`). Sidebar sections: **Source** (series + read-only potential/current columns + current sign convention + optional scan rate + a collapsed all-optional "Physical context" -> `ElectrodeContext`), **Cycle Selection** (source precedence: metadata column / auto-detect / manual row ranges; a status line showing "N sweeps -> M cycle(s), K complete" / an ambiguity warning / a graceful single-sweep message for monotonic data; the cycle picker defaults to the *last complete* cycle; a confidence chip), **Sweep Selection** (both / rising / falling + a rows+E-span readout, never "forward = anodic"), **Peak Detection** (a free-text prominence field with a data-scaled default — `cv.default_prominence`, ×3.5·MAD with a 2%-of-range floor, per sweep, PROVISIONAL pending human validation; minimum separation in mV converted via `cv.mv_to_sample_distance`; an optional width; **Find Peaks** -> a fresh `CVCycleAnalysisResult` -> new History entry; manual candidate Add (click graph, wrong-panel-guarded exactly like XRD) / Remove / Enable-Disable / Set Process, all acting on the bottom Results-tab table's row selection). The per-candidate table and the anodic/cathodic couple summary (ΔEp, E½ midpoint, `|Ipa|/|Ipc|` + its reciprocal with an explicit "raw extremum" / "baseline-corrected" basis, and which peak numbers form the couple) render in the bottom Results tab (`AnalysisResultView`, from `detail_table()`/`details()`), never the narrow sidebar. Graph aids — selected-cycle line split by sweep tint, switching-potential line, open-circle candidate markers, filled process-shaped enabled markers — are a **live-only overlay** via `PlotCanvas.set_cv_overlay` (payload from `CVAnalysisSection.overlay_payload`), reconstructed each render from the current result, gated on the active panel **and** the selected source series **and** the selected cycle (so a result computed on series A never floats its markers over series B or a different cycle), and stripped from every figure-to-disk path — GNOVI's Export dialog and Matplotlib's own navigation-toolbar Save — through the one shared `PlotCanvas.clear_gui_only_overlays` boundary (reference cursor + XRD overlay + CV overlay); headless `export_figure` builds a fresh figure and never sees them. A sign-convention change, manual candidate edit, enable/disable, process reassignment, or Remove edits the current result **in place** (`result_updated` -> dirty + redisplay, no new History entry, no figure-undo checkpoint — the XRD `_on_xrd_result_updated` contract); changing the cycle or sweep re-arms detection without a History entry until the next Find Peaks; changing the **source series** additionally detaches the working result and clears the overlay (`_invalidate_transient` — the persisted History entry is untouched and stays selectable, and `load_result` restores its own source series). Manual Add Peak snaps to the nearest point on the *selected cycle's* trace in normalised (potential, current) space — so the correct sweep is chosen by proximity to the curve, and a click that is not on that cycle's curve is rejected with a status message. `_apply_current_result` restores a selected CV history entry's source series / sign convention / cycle / sweep / detection settings via `load_result` without rerunning. Terminology is deliberate: "candidate" until enabled, "enabled candidate", "couple member" — never "accepted peak"; "E½ (midpoint potential)", never "formal potential"/"E°'" unqualified; raw current is never labelled "Ipa"/"Ipc". `AnalysisResultView`'s "Copy Fit Summary" button is now "Copy Summary" (it always used the generic base `report_text()`). `gui/widgets/dataset_panel.py` gains a **"CV (Potential vs Current)" plot preset** (axis labels "Potential (V)" / "Current (A)", forces a line plot, keeps "plot by cycles" available) with a small potential/current column-name matcher (`_match_cv_columns`, CHI/BioLogic/Autolab/plain names; silent fallback to X=col 0 / Y=col 1) applied only when that preset is chosen.
+The native numerical foundation:
 
-**Explicitly not implemented for Cyclic Voltammetry yet (CV-2B / CV-3 / later):** any interactive baseline anchoring (CV-2A baselines are "None (raw extremum)" only — the CV-1 `local_linear_baseline` primitive exists but has no UI), the raw↔corrected current workflow beyond what `detail_table()` already renders, derived-curve actions ("Add baseline-corrected trace" / "Add selected cycle"), CSV peak-table export, a smoothing workflow, the Nicholson switching-potential peak-current ratio (deferred rather than approximated — it needs interactive switching-potential context to do correctly), polynomial/arPLS/spline baselines, multi-scan-rate aggregation / `scan_rate.py` / `CVScanRateSeriesResult`, Randles–Ševčík (regression *or* diffusion-coefficient), reversibility classification, LSV/GCD/EIS, vendor import file parsers (CHI/BioLogic/Gamry/PalmSens/VersaStudio) / ixdat integration, current-density normalization, and reference-electrode potential conversion.
+- `radiation.py` — an explicit `Radiation` model, with presets for Cu/Co/Mo
+  K-alpha1 and their weighted K-alpha averages, kept distinct and never silently
+  assumed for a dataset.
+- `bragg.py` — first-order Bragg's-law d-spacing.
+- `preprocessing.py` — background correction (a low-order polynomial primitive
+  fit to caller-specified baseline points, and arPLS via the optional
+  `pybaselines` dependency, installed with `pip install "gnovi-plot[xrd]"`),
+  plus optional Savitzky–Golay smoothing (opt-in, never automatic). Without
+  `pybaselines`, arPLS raises a clear `PybaselinesNotAvailableError` at call
+  time and never breaks startup.
+- `peaks.py` — a small wrapper around `scipy.signal.find_peaks` returning
+  `XRDPeakSeed` candidates (automatic or manual, enabled or disabled). A
+  candidate is never a final measured position.
+
+None of this preprocessing mutates a `Dataset` in place; every function returns
+new arrays or results. Detection feeds `results.py`'s `XRDAnalysisResult`
+(`AnalysisResult` kind `"xrd_peaks"`).
+
+**XRD Peak Analysis (GUI).** `gui/widgets/xrd_analysis_section.py`'s
+`XRDAnalysisSection` is a `CollapsibleSection` on the Analysis page, selected via
+`AnalysisPanel`'s "Analysis Tool" combo — one Analysis destination, several
+workflows sharing one Analysis History. It operates on a 2D `PlotSeries` in the
+active panel (disabled, with an explanation, when the active panel is a
+`Panel3D`). It supports:
+
+- source-series and radiation selection
+- background/smoothing preview
+- an explicit detection-input chain (Raw / Background-corrected / Smoothed raw /
+  Smoothed background-corrected — only options actually available are offered)
+- `find_peaks`-based detection with a peak table (seed 2θ, observed intensity,
+  prominence, d-spacing, origin, enabled). There are no fitted-center/FWHM/area
+  columns, because profile fitting does not exist.
+- manual peak add/remove/enable-disable
+- CSV peak-table export
+
+Background and smoothing previews are transient — never registered as a
+`Dataset`/`PlotSeries` until explicitly accepted via "Add Corrected/Smoothed
+Curve to Plot", which follows the same derived-`Dataset` pattern as
+`FitResult`'s "Add Fit Curve to Plot". Peak markers and labels on the graph are
+a live-only overlay, reconstructed each redraw from the current
+`XRDAnalysisResult`; they are not part of the saved figure and do not appear in
+export. "Find Peaks" always creates a new Analysis History entry; manual peak
+edits mutate the current entry in place. `.xy`/`.xye` pattern files are handled
+by the existing text importer alongside `.csv`/`.txt`/`.tsv`/`.dat` — no
+dedicated diffraction parser was added.
+
+**Not implemented, anywhere in the app:** peak-profile fitting
+(Gaussian/Lorentzian/pseudo-Voigt), FWHM/integrated-area/uncertainty from a fit,
+Scherrer crystallite-size calculation, phase identification, Rietveld
+refinement, quantitative phase analysis, Raman analysis, and external
+scientific-engine integration (GSAS-II, pyFAI, Profex, BGMN). See "Roadmap".
+
+### Electrochemistry / Cyclic Voltammetry (`modules/electrochemistry/`)
+
+The package is named for the family — LSV, chronoamperometry, GCD, and EIS are
+intended later members — rather than `cv/`. There is deliberately no
+`ElectrochemicalExperiment`/`ElectrochemicalResult` base class and no plugin
+system: one technique does not justify an abstraction layer.
+
+The foundation is pure NumPy/SciPy (pandas only where the `Dataset` layer
+already uses it), with no Qt and no Matplotlib.
+
+**`common.py` — reusable primitives:**
+
+- Unit helpers (V/mV; A/mA/µA/nA; V/s ↔ mV/s; C/mC). Canonical internal units
+  are V, A, V/s, C. This is not a units framework.
+- `CurrentSignConvention` (`ANODIC_POSITIVE` default / `CATHODIC_POSITIVE`) — an
+  interpretation layer only. The imported `Dataset`/array current is never
+  modified or flipped, and the chosen convention is stored in every result.
+- `ElectrodeContext` — an all-optional dataclass
+  (`area_cm2`/`n`/`concentration_mol_cm3`/`temperature_k`/electrode
+  identities/electrolyte). None is required for basic peak analysis, none is
+  silently defaulted, and a supplied non-positive numeric value raises.
+- `segment_sweeps` — deterministic rising/falling segmentation, reusing
+  `analysis.cycles.carried_step_directions`. Tolerates noise, plateaus, and an
+  arbitrary initial direction. A monotonic LSV-like trace is one segment, not an
+  error. Incomplete first/last sweeps are allowed and never assumed anodic or
+  cathodic.
+- `integrate_current` — `Q = ∫ I dt` via `scipy.integrate.trapezoid`:
+  time-domain when a time array is given, else `Q = (1/|v|) ∫ I d|E−E₀|` for a
+  strictly monotonic constant-rate sweep. Rejects a zero or negative scan rate
+  and a non-monotonic potential (never integrates across a reversal). Sign is
+  preserved; inputs are never mutated.
+
+**`cv.py` — CV-specific:**
+
+- `pair_cycles` — 2-by-2 sweep pairing on top of `segment_sweeps`. A truncated
+  leading sweep is emitted alone as an incomplete cycle so it cannot misalign
+  later cycles. Incomplete cycles are flagged `complete=False`, never dropped or
+  mispaired.
+- `CVPeakSeed` — a candidate model mirroring `XRDPeakSeed`'s pattern (stable
+  `id`, automatic/manual `origin`, `enabled` soft-exclude), but not a subclass
+  and with no shared superclass. `process` (anodic/cathodic/unassigned) is
+  independent of `sweep` (rising/falling).
+- `detect_cv_peaks` — `scipy.signal.find_peaks` run per sweep, never on a
+  concatenated cycle. Sign-convention-aware (oxidative candidates in
+  `+I·oxidative_sign`, reductive in `−I·oxidative_sign`). `process` is assigned
+  from the current direction, not the sweep direction. Small parameter surface:
+  `prominence` primary, `distance`/`width` optional.
+- `local_linear_baseline` — a straight line through the recorded current at only
+  the caller-specified anchor ranges, evaluable across any region. Returns a new
+  representation, never mutates the source, and is never an automatic or opaque
+  background (no LOWESS/spline/arPLS).
+- `measure_peak` — **detection is not measurement.** Locates the extremum on the
+  *unsmoothed* signal, on the baseline-corrected curve when a baseline is given.
+  `Epa`/`Epc` is the recorded potential there, with no sub-sample fitting.
+  Returns `i_peak_raw_a` always, and `i_peak_corrected_a` only when a baseline
+  was supplied. Without a baseline the value is explicitly a raw extremum, never
+  presented as a baseline-corrected `Ipa`/`Ipc`.
+- `couple_metrics` — `ΔEp = |Epa − Epc|` and `E½ = (Epa + Epc)/2` in canonical
+  volts. `E½` is documented as the **midpoint potential** — an estimate of the
+  formal potential only under reversibility, never called `E°'` here.
+  Peak-current ratios are the explicitly labelled `|Ipa|/|Ipc|` and its
+  reciprocal `|Ipc|/|Ipa|`, never an anonymous forward/reverse ratio, with a
+  `ratio_basis` recording baseline-corrected vs raw-extremum.
+
+**`results.py`:** `CVCycleAnalysisResult` (`AnalysisResult` kind `"cv_peaks"`,
+`@register_result_kind`) carries the sign convention, the cycle
+index/confidence/completeness, the sweep segmentation, the measured
+`CVPeakResult`s (each with `CVBaselineInfo`), the couple metrics, and the
+`peak_id`s of the two candidates forming the couple. It has a bounded
+`details()` and an unbounded `detail_table()` (one row per peak, rendered in the
+wide bottom Results tab). `assign_couple` / `couple_from_peak_results` pick each
+process's couple member deterministically from the *enabled* candidates
+(`unassigned` and disabled peaks are never members): the largest-`prominence`
+candidate when any carries one (ties broken by earliest position), otherwise the
+candidate added last. Raw current magnitude is never used for ranking — it is
+dominated by the charging background. Registered in `core/project_io.py` with no
+`PROJECT_FORMAT_VERSION` bump (additive within the already-polymorphic
+`analysis_results` structure; the couple-member id fields are defaulted, so
+older `from_dict` calls are unaffected).
+
+**Cyclic Voltammetry Analysis (GUI).** `gui/widgets/cv_analysis_section.py`'s
+`CVAnalysisSection` is a `CollapsibleSection` on the Analysis page, selected via
+`AnalysisPanel`'s "Analysis Tool" combo (`["Curve Fitting", "XRD Peak
+Analysis", "Cyclic Voltammetry"]`) — one Analysis destination, three workflows
+sharing one Analysis History. It operates on a 2D `PlotSeries` in the active
+panel (disabled, with an explanation, when the active panel is a `Panel3D`).
+
+Sidebar sections:
+
+- **Source** — series, read-only potential/current columns, current sign
+  convention, optional scan rate, and a collapsed all-optional "Physical
+  context" (`ElectrodeContext`).
+- **Cycle Selection** — source precedence: metadata column, auto-detect, or
+  manual row ranges. A status line reports "N sweeps → M cycle(s), K complete",
+  an ambiguity warning, or a graceful single-sweep message for monotonic data.
+  The picker defaults to the last complete cycle and shows a confidence chip.
+- **Sweep Selection** — both / rising / falling, with a rows-and-E-span readout.
+  Never labelled "forward = anodic".
+- **Peak Detection** — a free-text prominence field with a data-scaled default
+  (`cv.default_prominence`: 3.5·MAD with a 2%-of-range floor, per sweep,
+  provisional pending human validation); a minimum separation in mV converted
+  via `cv.mv_to_sample_distance`; an optional width. **Find Peaks** produces a
+  fresh `CVCycleAnalysisResult` and a new History entry. Manual candidate Add
+  (click graph, wrong-panel-guarded like XRD), Remove, Enable/Disable, and Set
+  Process all act on the Results-tab table's row selection.
+
+The per-candidate table and the anodic/cathodic couple summary (ΔEp, E½
+midpoint, `|Ipa|/|Ipc|` and its reciprocal with an explicit "raw extremum" or
+"baseline-corrected" basis, and which peak numbers form the couple) render in
+the bottom Results tab (`AnalysisResultView`, from `detail_table()`/
+`details()`), never the narrow sidebar.
+
+Graph aids — a selected-cycle line split by sweep tint, a switching-potential
+line, open-circle candidate markers, and filled process-shaped enabled markers —
+are a live-only overlay via `PlotCanvas.set_cv_overlay` (payload from
+`CVAnalysisSection.overlay_payload`). The overlay is reconstructed each render
+from the current result and gated on the active panel, the selected source
+series, and the selected cycle, so a result computed on series A never floats
+its markers over series B or a different cycle. It is stripped from every
+figure-to-disk path — the Export dialog and Matplotlib's own toolbar Save —
+through the shared `PlotCanvas.clear_gui_only_overlays` boundary (reference
+cursor, XRD overlay, CV overlay); headless `export_figure` builds a fresh figure
+and never sees them.
+
+Editing behavior:
+
+- A sign-convention change, manual candidate edit, enable/disable, process
+  reassignment, or Remove edits the current result in place: the project is
+  marked dirty and the result redisplayed, with no new History entry and no
+  figure-undo checkpoint.
+- Changing the cycle or sweep re-arms detection but adds no History entry until
+  the next Find Peaks.
+- Changing the source series also detaches the working result and clears the
+  overlay; the persisted History entry is untouched and stays selectable.
+- Manual Add Peak snaps to the nearest point on the selected cycle's trace in
+  normalised (potential, current) space, so proximity to the curve chooses the
+  sweep; a click not on that cycle's curve is rejected with a status message.
+- Selecting a CV History entry restores its source series, sign convention,
+  cycle, sweep, and detection settings without rerunning detection.
+
+Terminology is deliberate: "candidate" until enabled, then "enabled candidate"
+and "couple member" — never "accepted peak"; "E½ (midpoint potential)", never
+an unqualified "formal potential" or "E°'"; raw current is never labelled
+"Ipa"/"Ipc". `AnalysisResultView`'s button is "Copy Summary" (it uses the
+generic base `report_text()`). `gui/widgets/dataset_panel.py` has a "CV
+(Potential vs Current)" plot preset (axis labels "Potential (V)" / "Current
+(A)", forces a line plot, keeps "plot by cycles" available) with a small
+potential/current column-name matcher (`_match_cv_columns`; CHI/BioLogic/Autolab
+and plain names; silent fallback to X = column 0 / Y = column 1) applied only
+when that preset is chosen.
+
+**Not implemented for Cyclic Voltammetry yet** (see "Roadmap" for phasing):
+interactive baseline anchoring (the `local_linear_baseline` primitive exists but
+has no UI; current baselines are "None (raw extremum)" only), the
+raw↔corrected current workflow beyond what `detail_table()` renders,
+derived-curve actions ("Add baseline-corrected trace" / "Add selected cycle"),
+CSV peak-table export, a smoothing workflow, the Nicholson switching-potential
+peak-current ratio (deferred, not approximated — it needs interactive
+switching-potential context), polynomial/arPLS/spline baselines,
+multi-scan-rate aggregation (`scan_rate.py` / `CVScanRateSeriesResult`),
+Randles–Ševčík (regression or diffusion coefficient), reversibility
+classification, LSV/GCD/EIS, vendor import parsers
+(CHI/BioLogic/Gamry/PalmSens/VersaStudio) and ixdat integration,
+current-density normalization, and reference-electrode potential conversion.
 
 ### Data model: current limitation and future direction
 
-`Dataset` (and every current series type) is strictly tabular/column-based: a pandas DataFrame plus metadata, addressed by column name and row position. There is **no** grid/matrix (structured 2D array/mesh) data abstraction anywhere in the codebase today — no `GridDataset` or equivalent exists.
+`Dataset` and every current series type are strictly tabular and column-based: a
+pandas DataFrame plus metadata, addressed by column name and row position. There
+is no grid/matrix (structured 2D array/mesh) data abstraction anywhere in the
+codebase — no `GridDataset` or equivalent.
 
-This matters architecturally because several likely future features are naturally grid-shaped rather than tabular-row-shaped: 2D heatmaps/image-style scientific plots, 3D surfaces, and 3D wireframes. A structured grid data model is expected to be a shared prerequisite for those features rather than something each reinvents independently — see "Roadmap" below. This document does not design that abstraction; it only records that current `Dataset` cannot represent gridded data and that this is a known, deliberate gap.
+This matters architecturally because several likely future features are
+naturally grid-shaped: 2D heatmaps and image-style plots, 3D surfaces, and 3D
+wireframes. A structured grid data model is expected to be a shared prerequisite
+for those, rather than something each feature reinvents. This document does not
+design that abstraction; it records that current `Dataset` cannot represent
+gridded data and that this is a known, deliberate gap.
 
 ## Roadmap
 
-This section records current near-term thinking, not a committed sequence or a v1.0 requirement list — items here are not all required to ship before any particular release, and priority may change as work proceeds.
+This section records current near-term thinking, not a committed sequence or a
+v1.0 requirement list. Priorities may change as work proceeds.
 
-Candidate near-term areas of work (not a strict order):
-
-- **XRD Phase 1** — the first domain-specific scientific workflow. Deliberately modest in scope, aimed at what's broadly useful to materials-science researchers rather than reproducing a commercial package (e.g. HighScore). Both the native numerical foundation (`modules/xrd/`) and a researcher-facing Analysis-page workspace (`XRDAnalysisSection`) now exist — radiation/wavelength selection, background/smoothing preview, peak detection with a peak table, manual peak editing, live graph overlays, derived corrected/smoothed curves, and CSV peak-table export; see "Analysis" above for exactly what's implemented and what isn't. Still to come, in this same Phase 1: peak-profile fitting (Gaussian/Lorentzian/pseudo-Voigt), FWHM/area/uncertainty, and Scherrer crystallite-size calculation. Explicitly **not** Phase 1: reference-database phase identification, Rietveld refinement, and automated quantitative phase analysis — those remain later, more involved work.
-- **Electrochemistry / Cyclic Voltammetry** — the second domain-specific family. CV-1 (the `modules/electrochemistry/` numerical foundation) and CV-2A (the researcher-facing "Cyclic Voltammetry" Analysis-Tool workspace — source/sign-convention/cycle/sweep selection, candidate peak detection with manual curation, the auto anodic/cathodic couple summary on the raw-extremum basis, transient graph overlays, and Analysis-History/persistence wiring) are done — see "Analysis" above. Still to come: **CV-2B** (interactive per-peak baseline anchoring — graph-click anchors on top of the existing `local_linear_baseline` primitive — the baseline-corrected current basis in the couple summary, derived-curve actions, and CSV peak-table export), then **CV-3** (multi-scan-rate grouping, Ip-vs-√v regression, Randles–Ševčík Level 1/2, charge-integration UI, reversibility diagnostics). LSV, GCD and EIS are later members of the same family, each in its own module file, only when taken on.
-- **Structured `GridDataset` foundation** — a minimal grid/matrix data abstraction (see "Data model" above). Expected to unblock both of the next two items rather than each building its own ad hoc grid representation.
-- **2D Heatmap / image-style scientific plotting** — depends on `GridDataset`.
-- **3D Surface / Wireframe** — extends `Panel3D`/the mplot3d backend with `plot_surface`/`plot_wireframe`; depends on `GridDataset` for real (non-toy) datasets.
-- **Documentation / examples / reference datasets** — usage docs and reproducible example projects, useful independent of which feature above lands next.
-- **Release / publication preparation** — keeping the release tag, `CITATION.cff`, and any manuscript work (e.g. a SoftwareX submission) in step with the actual shipped feature set.
+- **XRD Phase 1** — the first domain-specific workflow, deliberately modest in
+  scope: broadly useful analysis for materials-science researchers, not a
+  reimplementation of a full commercial diffraction-analysis package. The
+  numerical foundation (`modules/xrd/`) and the Analysis-page workspace
+  (`XRDAnalysisSection`) exist: radiation selection,
+  background/smoothing preview, peak detection with a peak table, manual peak
+  editing, live overlays, derived corrected/smoothed curves, and CSV export.
+  Still to come in Phase 1: peak-profile fitting
+  (Gaussian/Lorentzian/pseudo-Voigt), FWHM/area/uncertainty, and Scherrer
+  crystallite-size calculation. Not Phase 1: reference-database phase
+  identification, Rietveld refinement, and automated quantitative phase
+  analysis.
+- **Electrochemistry / Cyclic Voltammetry** — the second domain-specific family.
+  CV-1 (the `modules/electrochemistry/` numerical foundation) and CV-2A (the
+  "Cyclic Voltammetry" Analysis workspace: source/sign-convention/cycle/sweep
+  selection, candidate detection with manual curation, the auto anodic/cathodic
+  couple summary on the raw-extremum basis, transient overlays, and
+  History/persistence wiring) are done. Still to come: **CV-2B** (interactive
+  per-peak baseline anchoring via graph-click anchors on the existing
+  `local_linear_baseline` primitive, the baseline-corrected current basis in the
+  couple summary, derived-curve actions, and CSV export), then **CV-3**
+  (multi-scan-rate grouping, Ip-vs-√v regression, Randles–Ševčík, charge
+  integration UI, reversibility diagnostics). LSV, GCD, and EIS are later
+  members of the same family, each in its own module file.
+- **Structured `GridDataset` foundation** — a minimal grid/matrix data
+  abstraction (see "Data model"). Expected to unblock the next two items.
+- **2D heatmap / image-style plotting** — depends on `GridDataset`.
+- **3D surface / wireframe** — extends `Panel3D` and the mplot3d backend with
+  `plot_surface`/`plot_wireframe`; depends on `GridDataset` for real datasets.
+- **Documentation, examples, reference datasets** — usage docs and reproducible
+  example projects, useful independent of which feature lands next.
+- **Release / publication preparation** — keeping the release tag,
+  `CITATION.cff`, and any manuscript work in step with the shipped feature set.
 
 ## Testing and CI
 
-- `tests/` has 88 test files (1,789 tests passing as of this writing via a full `pytest` run; treat any exact count in this file as a snapshot, not a maintained invariant — prefer running pytest's own collection for a current number) covering datasets, transforms, 2D and 3D figures/panels/series, graph library (2D and 3D), workbenches/projects, project I/O (2D and 3D and XRD), equation evaluation, cycle detection, curve fitting/fit diagnostics/residual analysis, panel-scoped analysis history (including save/reopen persistence of history and the current-selection marker), XRD radiation/Bragg d-spacing/preprocessing/peak-detection (synthetic-pattern and independently-derived-analytical validation), the `modules/electrochemistry/` CV numerical foundation (unit conversion, sign convention, `ElectrodeContext`, sweep/cycle segmentation, candidate peak detection, local-linear baseline, peak measurement, couple metrics, charge integration, couple assignment, and `CVCycleAnalysisResult` serialization/history/project persistence — synthetic deterministic fixtures with independently-derived expected values plus a non-golden real-ferricyanide sanity check), the CV-2A GUI workspace (`test_cv_analysis_workspace_gui.py` — tool selector, Panel3D guard, sign-convention reinterpretation, cycle source precedence / last-complete default / monotonic + metadata + manual modes, sweep restriction, Find-Peaks-is-one-history-entry, manual-add wrong-panel guard, Results-selection-driven enable/disable/set-process/remove, `load_result` without rerun, overlay gating, MainWindow dirty + no-source-mutation + save/reopen) and the "CV" plot preset + column matcher, export (2D and 3D, including WYSIWYG/typography parity against the live canvas), and GUI behavior (responsiveness, aspect-ratio, legend fit, drawer/panel layout, sidebar navigation, theming, undo, focus/extract).
-- `.github/workflows/ci.yml`: on push/PR to `main`, runs the suite on a `[ubuntu-latest, windows-latest]` matrix (Python 3.12, Qt offscreen platform). Ubuntu run collects coverage (`pytest-cov`, uploaded to Codecov, non-blocking) and installs `libegl1`/`libgl1`/`libxkbcommon0`. Windows run currently also executes `scripts/_windows_qt_diagnostics.py` as a temporary, non-blocking diagnostic step left over from the PR #2 cross-platform layout investigation.
-- `.github/workflows/codeql.yml`: CodeQL static analysis for Python on push/PR to `main` plus a weekly schedule.
+`tests/` is the authoritative record of coverage, and `pytest` and CI report the
+current test count. The suite covers:
+
+- datasets, transforms, and numeric-validity helpers
+- 2D and 3D figures, panels, and series
+- Graph Library (2D and 3D) and project I/O (2D, 3D, and XRD), including
+  save/reopen persistence of analysis history and the current-selection marker
+- workbenches and projects
+- equation evaluation and cycle detection
+- curve fitting, fit diagnostics, and residual analysis
+- XRD radiation, Bragg d-spacing, preprocessing, and peak detection, validated
+  against synthetic patterns and independently derived analytical values
+- the `modules/electrochemistry/` CV numerical foundation — unit conversion,
+  sign convention, `ElectrodeContext`, sweep/cycle segmentation, candidate
+  detection, local-linear baseline, peak measurement, couple metrics, charge
+  integration, couple assignment, and `CVCycleAnalysisResult`
+  serialization/history/persistence — using synthetic deterministic fixtures
+  with independently derived expected values plus a non-golden real-ferricyanide
+  sanity check
+- the CV analysis GUI workspace (`test_cv_analysis_workspace_gui.py`) — tool
+  selector, `Panel3D` guard, sign-convention reinterpretation, cycle-source
+  precedence and the last-complete default, sweep restriction, one History entry
+  per Find Peaks, the manual-add wrong-panel guard, Results-driven
+  enable/disable/set-process/remove, restoring a History entry without rerunning,
+  overlay gating, and project dirty / no-source-mutation / save-reopen behavior —
+  plus the "CV" plot preset and column matcher
+- export (2D and 3D), including WYSIWYG and typography parity against the live
+  canvas
+- GUI behavior — responsiveness, aspect ratio, legend fit, drawer/panel layout,
+  sidebar navigation, theming, undo, and focus/extract
+
+Continuous integration:
+
+- `.github/workflows/ci.yml` — on push/PR to `main`, runs the full suite on a
+  `[ubuntu-latest, windows-latest]` matrix (Python 3.12, Qt offscreen platform).
+  The Ubuntu run collects coverage (`pytest-cov`, uploaded to Codecov,
+  non-blocking) and installs `libegl1`/`libgl1`/`libxkbcommon0`. The Windows run
+  also executes `scripts/_windows_qt_diagnostics.py` as a temporary, non-blocking
+  Qt/geometry diagnostic step.
+- `.github/workflows/codeql.yml` — CodeQL static analysis for Python on push/PR
+  to `main` plus a weekly schedule.
