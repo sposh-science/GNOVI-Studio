@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -25,7 +26,22 @@ from gnovi_plot.core.app_info import __version__ as _APP_VERSION
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
+from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.modules.xrd.bragg import InvalidBraggInputError, d_spacing
+from gnovi_plot.modules.xrd.fitting import (
+    BASELINE_CONSTANT,
+    BASELINE_LINEAR,
+    BASELINE_NONE,
+    GAUSSIAN,
+    LORENTZIAN,
+    PSEUDO_VOIGT,
+    XRDFitError,
+    XRDPeakFitResult,
+    evaluate_baseline,
+    fit_xrd_peak,
+    propose_fit_window,
+    sample_fit_curve,
+)
 from gnovi_plot.modules.xrd.peaks import (
     ORIGIN_AUTOMATIC,
     InvalidPeakDetectionError,
@@ -81,6 +97,36 @@ _LABEL_MODE_OFF = "Off"
 _LABEL_MODE_NUMBER = "Peak number"
 _LABEL_MODE_TWO_THETA = "2θ"
 _LABEL_MODE_D_SPACING = "d-spacing"
+
+# Peak Profile Fitting subsection -- display labels for the model/baseline
+# combos (their userData is the `modules.xrd.fitting` constant).
+_FIT_MODEL_LABELS: list[tuple[str, str]] = [
+    ("Gaussian", GAUSSIAN),
+    ("Lorentzian", LORENTZIAN),
+    ("pseudo-Voigt", PSEUDO_VOIGT),
+]
+_FIT_BASELINE_LABELS: list[tuple[str, str]] = [
+    ("Linear", BASELINE_LINEAR),
+    ("Constant", BASELINE_CONSTANT),
+    ("None", BASELINE_NONE),
+]
+_FIT_MODEL_TOOLTIP = (
+    "pseudo-Voigt: (1 − η)·Gaussian + η·Lorentzian, sharing one centre and one "
+    "FWHM, area-normalized. η is the Lorentzian fraction — η = 0 is a pure "
+    "Gaussian, η = 1 a pure Lorentzian. The saved result records the exact "
+    "convention. Area is the analytical integrated intensity above the local "
+    "baseline; for Lorentzian-type profiles part of it is inferred beyond the "
+    "fit window from the fitted model."
+)
+_FIT_BASELINE_TOOLTIP = (
+    "A 0–2 parameter baseline fitted locally under the selected peak. Distinct "
+    "from the whole-pattern Background correction above."
+)
+_FIT_MODEL_LABEL_BY_KEY = {
+    GAUSSIAN: "Gaussian",
+    LORENTZIAN: "Lorentzian",
+    PSEUDO_VOIGT: "pseudo-Voigt",
+}
 
 # A first-run Prominence of 0 is passed to `detect_peaks` as `None` (no
 # threshold at all -- see `_on_find_peaks_clicked`), which on real noisy
@@ -218,6 +264,7 @@ class XRDAnalysisSection(QWidget):
     analysis_result_ready = Signal(AnalysisResult)
     result_updated = Signal(AnalysisResult)
     add_to_plot_requested = Signal(list)  # list[PlotSeries]
+    remove_fit_curve_requested = Signal(list)  # list[str] of PlotSeries ids
     overlay_changed = Signal()
     manual_peak_mode_changed = Signal(bool)
     status_message = Signal(str)
@@ -245,6 +292,20 @@ class XRDAnalysisSection(QWidget):
         # so a freshly computed data-dependent default never silently
         # overwrites a deliberate choice.
         self._detection_defaults_touched = False
+
+        # --- Peak Profile Fitting subsection state ----------------------
+        # The current WORKING fit (drives the Add button + the transient
+        # total-fit/baseline overlay). `None` = no fit / stale fit. The
+        # already-emitted XRDPeakFitResult stays in `PanelResultHistory`
+        # regardless -- `_invalidate_fit` never touches it.
+        self._fit_result: XRDPeakFitResult | None = None
+        # `result_id` of the XRDAnalysisResult the peak dropdown was last
+        # built against -- a change means a genuinely new detection pass
+        # (fresh peak ids), so any working fit is stale.
+        self._fit_peak_combo_result_id: str | None = None
+        # ids of the PlotSeries currently on the active panel that trace
+        # back to `_fit_result` (0 or 1) -- see `_matching_fit_series`.
+        self._matched_fit_series_ids: list[str] = []
 
         # --- Source -----------------------------------------------------
         self.source_label = QLabel("Source series")
@@ -412,6 +473,61 @@ class XRDAnalysisSection(QWidget):
         results_layout.addWidget(self.label_mode_combo)
         results_layout.addWidget(self.export_table_button)
 
+        # --- Peak Profile Fitting (collapsed by default) ----------------
+        self.fit_peak_combo = QComboBox()
+        self.fit_min_spin = QDoubleSpinBox()
+        self.fit_max_spin = QDoubleSpinBox()
+        for spin in (self.fit_min_spin, self.fit_max_spin):
+            spin.setDecimals(4)
+            spin.setSuffix(" °2θ")
+            spin.setSingleStep(0.01)
+            spin.setRange(0.0, 180.0)
+        self.fit_model_combo = QComboBox()
+        for text, key in _FIT_MODEL_LABELS:
+            self.fit_model_combo.addItem(text, key)
+        self.fit_model_combo.setToolTip(_FIT_MODEL_TOOLTIP)
+        self.fit_baseline_combo = QComboBox()
+        for text, key in _FIT_BASELINE_LABELS:
+            self.fit_baseline_combo.addItem(text, key)
+        self.fit_baseline_combo.setToolTip(_FIT_BASELINE_TOOLTIP)
+        self.fit_peak_button = QPushButton("Fit Peak")
+        self.fit_peak_button.setProperty("primary", True)
+        self.add_fitted_curve_button = QPushButton("Add Fitted Curve to Plot")
+        self.add_fitted_curve_button.setEnabled(False)
+        self.remove_fitted_curve_button = QPushButton("Remove Fitted Curve from Plot")
+        self.remove_fitted_curve_button.setEnabled(False)
+        self.fit_status_label = QLabel("")
+        self.fit_status_label.setWordWrap(True)
+        self.fit_hint_label = QLabel(
+            "R² alone is not a profile-model choice — compare residual shape."
+        )
+        self.fit_hint_label.setWordWrap(True)
+        self.fit_hint_label.setEnabled(False)  # rendered greyed, purely informational
+
+        fitting_content = QWidget()
+        fitting_layout = QVBoxLayout(fitting_content)
+        fitting_layout.setContentsMargins(0, 0, 0, 0)
+        fitting_layout.addWidget(QLabel("Peak"))
+        fitting_layout.addWidget(self.fit_peak_combo)
+        fitting_layout.addWidget(QLabel("Fit range"))
+        fit_range_row = QHBoxLayout()
+        fit_range_row.addWidget(self.fit_min_spin)
+        fit_range_row.addWidget(QLabel("to"))
+        fit_range_row.addWidget(self.fit_max_spin)
+        fitting_layout.addLayout(fit_range_row)
+        fitting_layout.addWidget(QLabel("Profile model"))
+        fitting_layout.addWidget(self.fit_model_combo)
+        fitting_layout.addWidget(QLabel("Local baseline"))
+        fitting_layout.addWidget(self.fit_baseline_combo)
+        fitting_layout.addWidget(self.fit_peak_button)
+        fitting_layout.addWidget(self.add_fitted_curve_button)
+        fitting_layout.addWidget(self.remove_fitted_curve_button)
+        fitting_layout.addWidget(self.fit_status_label)
+        fitting_layout.addWidget(self.fit_hint_label)
+        self.fitting_section = CollapsibleSection(
+            "Peak Profile Fitting", fitting_content, expanded=False
+        )
+
         layout = QVBoxLayout(self)
         layout.addWidget(self.source_label)
         layout.addWidget(self.source_combo)
@@ -421,6 +537,7 @@ class XRDAnalysisSection(QWidget):
         layout.addWidget(smoothing_group)
         layout.addWidget(detection_group)
         layout.addWidget(results_group)
+        layout.addWidget(self.fitting_section)
         layout.addStretch(1)
 
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
@@ -446,6 +563,16 @@ class XRDAnalysisSection(QWidget):
             )
         )
 
+        self.fit_peak_combo.currentIndexChanged.connect(self._on_fit_peak_changed)
+        self.fit_min_spin.valueChanged.connect(self._on_fit_window_edited)
+        self.fit_max_spin.valueChanged.connect(self._on_fit_window_edited)
+        self.fit_model_combo.currentIndexChanged.connect(self._on_fit_defining_input_changed)
+        self.fit_baseline_combo.currentIndexChanged.connect(self._on_fit_defining_input_changed)
+        self.fit_peak_button.clicked.connect(self._on_fit_peak_clicked)
+        self.add_fitted_curve_button.clicked.connect(self._on_add_fitted_curve_clicked)
+        self.remove_fitted_curve_button.clicked.connect(self._on_remove_fitted_curve_clicked)
+        self.fitting_section.toggled.connect(lambda _e: self.overlay_changed.emit())
+
         self._on_background_method_changed()
         self._on_smoothing_toggled(False)
         self.refresh()
@@ -467,6 +594,8 @@ class XRDAnalysisSection(QWidget):
         self._figure = figure
         self._current_result = None
         self._results_selected_rows = []
+        self._fit_result = None
+        self._fit_peak_combo_result_id = None
         self._invalidate_previews()
         self._set_manual_peak_mode(False)
         self.refresh()
@@ -555,10 +684,16 @@ class XRDAnalysisSection(QWidget):
         else:
             self.status_label.setVisible(False)
 
+        self._rebuild_fit_peak_combo()
+        self._refresh_fitting_enabled()
+
     # --- state accessors used by AnalysisPanel/MainWindow -------------------
 
     def current_result(self) -> XRDAnalysisResult | None:
         return self._current_result
+
+    def current_fit_result(self) -> XRDPeakFitResult | None:
+        return self._fit_result
 
     def is_manual_peak_mode(self) -> bool:
         return self._manual_peak_mode
@@ -595,7 +730,76 @@ class XRDAnalysisSection(QWidget):
                 self.source_combo.setCurrentIndex(source_index)
             self._restore_detection_settings(self._current_result.parameters.get("detection", {}))
         self._results_selected_rows = []
+        # A detection result is now the current result -- any working peak
+        # fit belongs to a different (or the previous) result, so drop it
+        # (its own History entry, if it has one, is untouched).
+        self._invalidate_fit()
+        self._rebuild_fit_peak_combo()
+        self._refresh_fitting_enabled()
         self._refresh_detection_input_options()
+        self.overlay_changed.emit()
+
+    def load_fit_result(self, result: AnalysisResult | None) -> None:
+        """Called when the shared Analysis History selection lands on an
+        `XRDPeakFitResult` -- restore that fit into the Peak Profile
+        Fitting subsection (model / baseline / fit window / source peak
+        where still available), make it the current working fit, and show
+        its transient overlay. Never creates a new result. `None` (a
+        non-XRD-fit selection) just clears the working fit -- the emitted
+        History entry stays selectable."""
+        r = result if isinstance(result, XRDPeakFitResult) else None
+        # Clear first so the `_rebuild_fit_peak_combo` below can't invalidate
+        # a fit we're about to restore.
+        self._fit_result = None
+        if r is None:
+            self.fit_status_label.clear()
+            self._refresh_fitted_curve_buttons()
+            return
+
+        if r.radiation is not None:
+            self._radiation = r.radiation
+            self._sync_radiation_combo()
+        if r.source_series_id is not None:
+            idx = self.source_combo.findData(r.source_series_id)
+            if idx >= 0:
+                self.source_combo.blockSignals(True)
+                self.source_combo.setCurrentIndex(idx)
+                self.source_combo.blockSignals(False)
+
+        model_index = self.fit_model_combo.findData(r.model)
+        baseline_index = self.fit_baseline_combo.findData(r.baseline_model)
+        self.fit_model_combo.blockSignals(True)
+        self.fit_baseline_combo.blockSignals(True)
+        self.fit_min_spin.blockSignals(True)
+        self.fit_max_spin.blockSignals(True)
+        try:
+            if model_index >= 0:
+                self.fit_model_combo.setCurrentIndex(model_index)
+            if baseline_index >= 0:
+                self.fit_baseline_combo.setCurrentIndex(baseline_index)
+            self.fit_min_spin.setValue(r.fit_window[0])
+            self.fit_max_spin.setValue(r.fit_window[1])
+        finally:
+            self.fit_model_combo.blockSignals(False)
+            self.fit_baseline_combo.blockSignals(False)
+            self.fit_min_spin.blockSignals(False)
+            self.fit_max_spin.blockSignals(False)
+
+        self._rebuild_fit_peak_combo()
+        if r.source_peak_id is not None:
+            peak_index = self.fit_peak_combo.findData(r.source_peak_id)
+            if peak_index >= 0:
+                self.fit_peak_combo.blockSignals(True)
+                self.fit_peak_combo.setCurrentIndex(peak_index)
+                self.fit_peak_combo.blockSignals(False)
+
+        self._fit_result = r
+        self._fit_peak_combo_result_id = (
+            self._current_result.result_id if self._current_result is not None else None
+        )
+        self.fitting_section.set_expanded(True)
+        self.fit_status_label.setText("Loaded fit from history.")
+        self._refresh_fitting_enabled()
         self.overlay_changed.emit()
 
     def _restore_detection_settings(self, detection_params: dict) -> None:
@@ -669,6 +873,48 @@ class XRDAnalysisSection(QWidget):
             return self._background_preview.two_theta, self._background_preview.baseline
         return None
 
+    def fit_overlay(self) -> tuple:
+        """`(fit_window, fit_curves)` for `PlotCanvas.set_analysis_overlay`.
+
+        The fit-window span shows whenever the Peak Profile Fitting
+        subsection is expanded, a peak is selected, and the current
+        detection result belongs to the active panel -- so the researcher
+        sees which data will be fitted BEFORE pressing Fit Peak, and while
+        editing the range. The total-fit + local-baseline curves show only
+        while a current (non-stale) `_fit_result` exists for the active
+        panel and its still-selected source series. Both are transient
+        analysis aids -- never a `PlotSeries`, legend entry, or export
+        content (see `set_analysis_overlay`'s docstring)."""
+        none_none = (None, None)
+        if isinstance(self._figure.active_panel, Panel3D):
+            return none_none
+        if not self.fitting_section.is_expanded():
+            return none_none
+        active_panel_id = self._figure.active_panel.id
+
+        window = None
+        if (
+            self.fit_peak_combo.currentData() is not None
+            and self._fit_window_valid()
+            and self._current_result is not None
+            and self._current_result.source_panel_id == active_panel_id
+        ):
+            window = (self.fit_min_spin.value(), self.fit_max_spin.value())
+
+        curves = None
+        result = self._fit_result
+        if result is not None and result.source_panel_id == active_panel_id:
+            source = self._current_source_series()
+            if source is not None and source.id == result.source_series_id:
+                xs, ys = sample_fit_curve(result)
+                curves = {
+                    "total_xy": (xs, ys),
+                    "baseline_xy": (xs, evaluate_baseline(result, xs)),
+                }
+                if window is None:
+                    window = tuple(result.fit_window)
+        return window, curves
+
     # --- source / radiation --------------------------------------------------
 
     def _current_source_series(self) -> PlotSeries | None:
@@ -693,6 +939,11 @@ class XRDAnalysisSection(QWidget):
         # see `disarm_manual_peak_mode`'s own docstring.
         self.disarm_manual_peak_mode()
         self._invalidate_previews()
+        # A working peak fit was computed against the previous series --
+        # a different source series makes it stale (its History entry
+        # stays selectable).
+        self._invalidate_fit()
+        self._refresh_fitting_enabled()
         # A new source series is new DATA -- its own noise/intensity
         # scale deserves a freshly computed default (see `_detection_
         # defaults_touched`'s own docstring), not whatever was left over
@@ -773,6 +1024,11 @@ class XRDAnalysisSection(QWidget):
             self._current_result.radiation = self._radiation
             self.result_updated.emit(self._current_result)
             self.overlay_changed.emit()
+
+        # Radiation is a fit-defining input (d-spacing is baked into the
+        # result at fit time) -- a change makes the working fit stale.
+        self._invalidate_fit()
+        self._refresh_fitting_enabled()
 
     def _sync_radiation_combo(self) -> None:
         """Reflect `self._radiation` (e.g. restored via `load_result`)
@@ -1074,8 +1330,241 @@ class XRDAnalysisSection(QWidget):
         )
         self._current_result = result
         self._results_selected_rows = []
+        # A fresh detection pass -> fresh peak ids -> any working fit is
+        # stale; repopulate the fit peak dropdown from the new result.
+        self._invalidate_fit()
+        self._rebuild_fit_peak_combo()
+        self._refresh_fitting_enabled()
         self.overlay_changed.emit()
         self.analysis_result_ready.emit(result)
+
+    # --- peak profile fitting --------------------------------------------------
+
+    def _enabled_peaks(self) -> list[XRDPeakSeed]:
+        if self._current_result is None:
+            return []
+        return [peak for peak in self._current_result.peaks if peak.enabled]
+
+    def _selected_fit_seed(self) -> XRDPeakSeed | None:
+        peak_id = self.fit_peak_combo.currentData()
+        if peak_id is None or self._current_result is None:
+            return None
+        return next((peak for peak in self._current_result.peaks if peak.id == peak_id), None)
+
+    def _fit_window_valid(self) -> bool:
+        lo, hi = self.fit_min_spin.value(), self.fit_max_spin.value()
+        return np.isfinite(lo) and np.isfinite(hi) and hi > lo
+
+    def _rebuild_fit_peak_combo(self) -> None:
+        """Repopulate the Peak dropdown from the current detection
+        result's ENABLED peaks (position number matches the Results-tab
+        peak table). Preserve selection by `XRDPeakSeed.id`. When the
+        selection changes -- because the researcher picked a different
+        peak, a peak vanished/was disabled, or a fresh detection pass ran
+        -- re-propose the fit window and invalidate any working fit."""
+        previous_id = self.fit_peak_combo.currentData()
+        result_id = self._current_result.result_id if self._current_result is not None else None
+
+        self.fit_peak_combo.blockSignals(True)
+        self.fit_peak_combo.clear()
+        target = -1
+        peaks = self._current_result.peaks if self._current_result is not None else []
+        for position, peak in enumerate(peaks, start=1):
+            if not peak.enabled:
+                continue
+            self.fit_peak_combo.addItem(f"Peak {position} — {peak.two_theta:.2f}° 2θ", peak.id)
+            if peak.id == previous_id:
+                target = self.fit_peak_combo.count() - 1
+        if target >= 0:
+            self.fit_peak_combo.setCurrentIndex(target)
+        self.fit_peak_combo.blockSignals(False)
+
+        new_id = self.fit_peak_combo.currentData()
+        selection_changed = new_id != previous_id
+        result_changed = result_id != self._fit_peak_combo_result_id
+        self._fit_peak_combo_result_id = result_id
+        if selection_changed and new_id is not None:
+            self._propose_fit_window_for_selection()
+        if selection_changed or result_changed:
+            self._invalidate_fit()
+
+    def _propose_fit_window_for_selection(self) -> None:
+        seed = self._selected_fit_seed()
+        xy = self._raw_xy()
+        if seed is None or xy is None:
+            return
+        x, _y = xy
+        neighbours = tuple(
+            peak.two_theta for peak in self._enabled_peaks() if peak.id != seed.id
+        )
+        try:
+            window = propose_fit_window(x, seed, neighbor_two_thetas=neighbours)
+        except XRDFitError:
+            return
+        self.fit_min_spin.blockSignals(True)
+        self.fit_max_spin.blockSignals(True)
+        self.fit_min_spin.setValue(window.two_theta_min)
+        self.fit_max_spin.setValue(window.two_theta_max)
+        self.fit_min_spin.blockSignals(False)
+        self.fit_max_spin.blockSignals(False)
+        self.overlay_changed.emit()
+
+    def _on_fit_peak_changed(self, *_args) -> None:
+        if self._selected_fit_seed() is not None:
+            self._propose_fit_window_for_selection()
+        self._invalidate_fit()
+        self._refresh_fitting_enabled()
+
+    def _on_fit_window_edited(self, *_args) -> None:
+        self._invalidate_fit()
+        self._refresh_fitting_enabled()
+        self.overlay_changed.emit()
+
+    def _on_fit_defining_input_changed(self, *_args) -> None:
+        self._invalidate_fit()
+        self._refresh_fitting_enabled()
+
+    def _invalidate_fit(self) -> None:
+        """One coherent path for every fit-defining input change (peak /
+        window / model / baseline / source series / radiation): drop the
+        WORKING fit result, disable Add Fitted Curve, and remove the
+        transient total-fit + baseline curves (the fit-window span stays
+        while a valid peak/window remains). NEVER deletes the already
+        emitted History entry -- that stays selectable."""
+        had_fit = self._fit_result is not None
+        self._fit_result = None
+        if had_fit:
+            self.fit_status_label.clear()
+        self._refresh_fitted_curve_buttons()
+        if had_fit:
+            self.overlay_changed.emit()
+
+    def _refresh_fitting_enabled(self) -> None:
+        is_panel3d = isinstance(self._figure.active_panel, Panel3D)
+        source_ok = self._current_source_series() is not None and not is_panel3d
+        has_enabled_peaks = bool(self._enabled_peaks())
+        has_peak = self.fit_peak_combo.currentData() is not None
+        window_ok = self._fit_window_valid()
+
+        self.fit_peak_combo.setEnabled(source_ok and has_enabled_peaks)
+        for widget in (
+            self.fit_min_spin,
+            self.fit_max_spin,
+            self.fit_model_combo,
+            self.fit_baseline_combo,
+        ):
+            widget.setEnabled(source_ok and has_peak)
+        self.fit_peak_button.setEnabled(source_ok and has_peak and window_ok)
+
+        if source_ok and has_peak and not window_ok:
+            self.fit_status_label.setText("Fit range max must be greater than min.")
+        self._refresh_fitted_curve_buttons()
+
+    def _matching_fit_series(self, result: XRDPeakFitResult | None) -> list[PlotSeries]:
+        """Every `PlotSeries` in the active panel whose derived Dataset
+        traces back to `result` -- matched by the stable `result_id`
+        stored in `Dataset.metadata` (see `_on_add_fitted_curve_clicked`),
+        never by label."""
+        if result is None:
+            return []
+        return [
+            series
+            for series in self._figure.active_panel.series
+            if series.dataset.metadata.get("result_id") == result.result_id
+        ]
+
+    def _refresh_fitted_curve_buttons(self) -> None:
+        matches = self._matching_fit_series(self._fit_result)
+        self._matched_fit_series_ids = [series.id for series in matches]
+        self.add_fitted_curve_button.setEnabled(self._fit_result is not None and not matches)
+        self.remove_fitted_curve_button.setEnabled(bool(matches))
+
+    def _on_fit_peak_clicked(self) -> None:
+        series = self._current_source_series()
+        seed = self._selected_fit_seed()
+        if series is None or seed is None:
+            return
+        if not self._fit_window_valid():
+            self.fit_status_label.setText("Fit range max must be greater than min.")
+            return
+        try:
+            x, y = numeric_xy(series.dataframe, series.x_column, series.y_column)
+        except (KeyError, InsufficientNumericDataError) as exc:
+            self.fit_status_label.setText(f"Fit failed: {exc}")
+            return
+
+        neighbours = tuple(
+            peak.two_theta for peak in self._enabled_peaks() if peak.id != seed.id
+        )
+        try:
+            result = fit_xrd_peak(
+                x.to_numpy(),
+                y.to_numpy(),
+                self.fit_model_combo.currentData(),
+                fit_window=(self.fit_min_spin.value(), self.fit_max_spin.value()),
+                baseline=self.fit_baseline_combo.currentData(),
+                radiation=self._radiation,
+                source_dataset_id=series.dataset.id,
+                x_column=series.x_column,
+                y_column=series.y_column,
+                source_dataset_name=series.dataset.name,
+                source_series_id=series.id,
+                source_series_label=series.label,
+                row_range=series.row_range,
+                source_panel_id=self._figure.active_panel.id,
+                seed=seed,
+                source_peak_id=seed.id,
+                source_result_id=(
+                    self._current_result.result_id if self._current_result is not None else None
+                ),
+                neighbor_two_thetas=neighbours,
+            )
+        except XRDFitError as exc:
+            self.fit_status_label.setText(f"Fit failed: {exc}")
+            return
+
+        self._fit_result = result
+        count = len(result.warnings)
+        if count:
+            self.fit_status_label.setText(
+                f"Fit complete — {count} caution{'s' if count != 1 else ''} (see Results)."
+            )
+        else:
+            self.fit_status_label.setText("Fit complete.")
+        self._refresh_fitted_curve_buttons()
+        self.overlay_changed.emit()
+        self.analysis_result_ready.emit(result)
+
+    def _on_add_fitted_curve_clicked(self) -> None:
+        result = self._fit_result
+        if result is None or self._matching_fit_series(result):
+            return
+        series = self._current_source_series()
+        x, y = sample_fit_curve(result)
+        metadata = result.to_dict()
+        metadata["x_min"] = float(x[0])
+        metadata["x_max"] = float(x[-1])
+        metadata["num_points"] = len(x)
+
+        model_label = _FIT_MODEL_LABEL_BY_KEY.get(result.model, result.model)
+        dataset = Dataset(
+            name=f"Peak fit — {model_label} — {result.center_2theta:.2f}°",
+            dataframe=pd.DataFrame({result.x_column: x, result.y_column: y}),
+            metadata=metadata,
+        )
+        self._manager.add(dataset)
+        x_column = series.x_column if series is not None else result.x_column
+        y_column = series.y_column if series is not None else result.y_column
+        new_series = PlotSeries.line(dataset, x_column, y_column, label=dataset.name)
+        self.add_to_plot_requested.emit([new_series])
+        self.status_message.emit(f"Added to plot: {new_series.label}")
+        self._refresh_fitted_curve_buttons()
+
+    def _on_remove_fitted_curve_clicked(self) -> None:
+        if not self._matched_fit_series_ids:
+            return
+        self.remove_fit_curve_requested.emit(list(self._matched_fit_series_ids))
+        self._refresh_fitted_curve_buttons()
 
     # --- manual peak editing --------------------------------------------------
 
@@ -1135,11 +1624,16 @@ class XRDAnalysisSection(QWidget):
             )
             self._results_selected_rows = []
             self._current_result.peaks.append(XRDPeakSeed.manual(two_theta, intensity))
+            self._invalidate_fit()
+            self._rebuild_fit_peak_combo()
+            self._refresh_fitting_enabled()
             self.overlay_changed.emit()
             self.analysis_result_ready.emit(self._current_result)
             return
 
         self._current_result.peaks.append(XRDPeakSeed.manual(two_theta, intensity))
+        self._rebuild_fit_peak_combo()
+        self._refresh_fitting_enabled()
         self.overlay_changed.emit()
         self.result_updated.emit(self._current_result)
 
@@ -1169,6 +1663,8 @@ class XRDAnalysisSection(QWidget):
         for row in reversed(rows):
             del self._current_result.peaks[row]
         self._results_selected_rows = []
+        self._rebuild_fit_peak_combo()  # invalidates the working fit if its peak was removed
+        self._refresh_fitting_enabled()
         self.overlay_changed.emit()
         self.result_updated.emit(self._current_result)
 
@@ -1181,6 +1677,8 @@ class XRDAnalysisSection(QWidget):
         for row in rows:
             peak = self._current_result.peaks[row]
             peak.enabled = not peak.enabled
+        self._rebuild_fit_peak_combo()  # invalidates the working fit if its peak was disabled
+        self._refresh_fitting_enabled()
         self.overlay_changed.emit()
         self.result_updated.emit(self._current_result)
 

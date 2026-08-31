@@ -30,6 +30,16 @@ from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D
 _CURSOR_COLOR = "#8a8f99"
 _ACTIVE_PANEL_BADGE_MARGIN_PX = 6
 
+# XRD peak-fit transient overlay (see `set_analysis_overlay` / gui.widgets.
+# xrd_analysis_section's "Peak Profile Fitting" subsection). Same live-only,
+# never-in-export contract as the peak-marker overlay -- the artists all go
+# into `_analysis_overlay_artists`, which `clear_gui_only_overlays()` already
+# strips before any figure-to-disk path.
+_FIT_SPAN_COLOR = "#8a8f99"
+_FIT_SPAN_ALPHA = 0.12
+_FIT_TOTAL_COLOR = "#2e7d32"
+_FIT_BASELINE_COLOR = "#8a8f99"
+
 
 class ReferenceCursorMode(str, Enum):
     """On-screen-only crosshair/reference-line overlay that follows the
@@ -445,14 +455,27 @@ class PlotCanvas(FigureCanvasQTAgg):
         *,
         peak_points: list[tuple[float, float, str]] | None,
         preview_xy: tuple | None,
+        fit_window: tuple[float, float] | None = None,
+        fit_curves: dict | None = None,
     ) -> None:
         """Redraw the XRD peak-marker/label overlay (`peak_points`, each
-        `(two_theta, intensity, label)`) and/or the background/smoothing
-        preview curve (`preview_xy`, `(x_array, y_array)`) on the active
-        panel's Axes -- always a full clear-and-redraw of whatever this
-        canvas drew before, never an incremental diff. A no-op (after
-        clearing) when both are `None`/empty, or the active panel is a
-        `Panel3D` (XRD overlays never apply to 3D).
+        `(two_theta, intensity, label)`), the background/smoothing preview
+        curve (`preview_xy`, `(x_array, y_array)`), and/or the peak-profile
+        fitting aids on the active panel's Axes -- always a full
+        clear-and-redraw of whatever this canvas drew before, never an
+        incremental diff. A no-op (after clearing) when all inputs are
+        `None`/empty, or the active panel is a `Panel3D` (XRD overlays
+        never apply to 3D).
+
+        `fit_window` (a `(min, max)` 2theta pair) draws a translucent span
+        showing the region that will be / was fitted. `fit_curves` (a dict
+        with `"total_xy"` and/or `"baseline_xy"`, each `(x_array,
+        y_array)`) draws the fitted total profile and the fitted local
+        baseline. Both are transient analysis aids: their artists join
+        `_analysis_overlay_artists` (so `clear_gui_only_overlays()` removes
+        them before any export/save), they carry no legend label, and they
+        never become a `PlotSeries` or persisted figure content -- only an
+        explicit "Add Fitted Curve to Plot" does that.
 
         Resolves the target Axes itself rather than calling
         `active_axes()`: that method assumes `figure.active_panel_index`
@@ -470,7 +493,7 @@ class PlotCanvas(FigureCanvasQTAgg):
         self.clear_analysis_overlay()
         if isinstance(figure.active_panel, Panel3D):
             return
-        if not peak_points and preview_xy is None:
+        if not peak_points and preview_xy is None and fit_window is None and fit_curves is None:
             return
         if self.is_focused:
             ax = self.axes_list[0]
@@ -505,6 +528,27 @@ class PlotCanvas(FigureCanvasQTAgg):
                     zorder=1000,
                 )
                 self._analysis_overlay_artists.append(annotation)
+
+        if fit_window is not None:
+            lo, hi = fit_window
+            span = ax.axvspan(lo, hi, color=_FIT_SPAN_COLOR, alpha=_FIT_SPAN_ALPHA, zorder=0)
+            self._analysis_overlay_artists.append(span)
+
+        if fit_curves is not None:
+            baseline_xy = fit_curves.get("baseline_xy")
+            if baseline_xy is not None:
+                (line,) = ax.plot(
+                    baseline_xy[0], baseline_xy[1],
+                    linestyle=":", linewidth=1.1, color=_FIT_BASELINE_COLOR, zorder=1001,
+                )
+                self._analysis_overlay_artists.append(line)
+            total_xy = fit_curves.get("total_xy")
+            if total_xy is not None:
+                (line,) = ax.plot(
+                    total_xy[0], total_xy[1],
+                    linewidth=1.4, color=_FIT_TOTAL_COLOR, zorder=1002,
+                )
+                self._analysis_overlay_artists.append(line)
 
         self.draw_idle()
 

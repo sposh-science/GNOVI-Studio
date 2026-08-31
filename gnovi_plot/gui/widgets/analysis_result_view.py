@@ -421,9 +421,21 @@ class AnalysisResultView(QWidget):
                 self._residual_window.hide()
             return
 
-        self._residuals_unavailable_label.setVisible(False)
         x, y = xy
-        residual_data = result.compute_residuals(x.to_numpy(), y.to_numpy())
+        x_arr, y_arr = x.to_numpy(), y.to_numpy()
+        residual_range = result.residual_x_range()
+        if residual_range is not None:
+            lo, hi = residual_range
+            mask = (x_arr >= lo) & (x_arr <= hi)
+            x_arr, y_arr = x_arr[mask], y_arr[mask]
+            if x_arr.size == 0:
+                self._residuals_unavailable_label.setVisible(True)
+                if self._residual_window is not None:
+                    self._residual_window.hide()
+                return
+
+        self._residuals_unavailable_label.setVisible(False)
+        residual_data = result.compute_residuals(x_arr, y_arr)
         if self._residual_window is None:
             self._residual_window = ResidualWindow(self)
         self._residual_window.show_residuals(

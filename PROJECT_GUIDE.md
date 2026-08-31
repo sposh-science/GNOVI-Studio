@@ -532,11 +532,12 @@ active panel (disabled, with an explanation, when the active panel is a
 - an explicit detection-input chain (Raw / Background-corrected / Smoothed raw /
   Smoothed background-corrected — only options actually available are offered)
 - `find_peaks`-based detection with a peak table (seed 2θ, observed intensity,
-  prominence, d-spacing, origin, enabled). There are no fitted-center/FWHM/area
-  columns — the profile-fitting workspace that would surface those is not built
-  yet (see "Peak profile fitting" above for the numerical layer, and "Roadmap").
+  prominence, d-spacing, origin, enabled)
 - manual peak add/remove/enable-disable
 - CSV peak-table export
+- **Peak Profile Fitting** — a collapsible subsection (collapsed by default,
+  immediately after Detected Peaks) that drives `modules/xrd/fitting.py`. See
+  "Peak profile fitting workspace" below.
 
 Background and smoothing previews are transient — never registered as a
 `Dataset`/`PlotSeries` until explicitly accepted via "Add Corrected/Smoothed
@@ -549,10 +550,62 @@ edits mutate the current entry in place. `.xy`/`.xye` pattern files are handled
 by the existing text importer alongside `.csv`/`.txt`/`.tsv`/`.dat` — no
 dedicated diffraction parser was added.
 
-**Implemented numerically, no GUI yet:** single-peak profile fitting
-(`modules/xrd/fitting.py`, above) — the researcher-facing peak-fitting workspace
-that would drive it, show the fitted parameters in the Results tab, overlay the
-fitted curve, and offer "add fitted curve to plot" is not built.
+**Peak profile fitting workspace.** The Peak Profile Fitting subsection wraps
+the frozen XRD-3A numerical engine (`fit_xrd_peak`) in a researcher workflow:
+pick a detected peak, inspect/edit the fit window, choose a profile model and a
+local baseline, Fit Peak, inspect the result, then optionally add the fitted
+curve to the plot.
+
+- **Peak selection.** A dropdown of the current `XRDAnalysisResult`'s *enabled*
+  peaks (`Peak 3 — 36.24° 2θ`, keyed by `XRDPeakSeed.id`). The fit records
+  `source_peak_id` and `source_result_id` so the result traces back to the
+  detection pass.
+- **Fit window.** Two numeric °2θ fields, auto-filled from `propose_fit_window`
+  on peak selection and shown live as a translucent span on the plot. The
+  researcher edits either bound; `max ≤ min` disables Fit Peak with a note. The
+  point-count / scientific-validity check stays in `fit_xrd_peak`.
+- **Model** (Gaussian / Lorentzian / pseudo-Voigt) and **Local baseline**
+  (Linear default / Constant / None). "Local baseline" is deliberately not
+  called "Background" — it is a 0–2 parameter term fitted under this one peak,
+  distinct from the whole-pattern background correction. The pseudo-Voigt
+  convention (η = Lorentzian fraction; shared centre and FWHM; area-normalized)
+  is in the model-combo tooltip and recorded verbatim in the result.
+- **Strict stale invalidation.** After a successful fit, changing any
+  fit-defining input — peak, window min/max, model, baseline, source series,
+  radiation — clears the working fit, disables "Add Fitted Curve to Plot", and
+  removes the transient total-fit/baseline curves (the window span stays). The
+  already-emitted `XRDPeakFitResult` History entry is never touched.
+- **Transient overlay.** The window span, the total fitted profile, and the
+  fitted local baseline are drawn as GUI-only analysis-overlay artists (via
+  `PlotCanvas.set_analysis_overlay`, joining `_analysis_overlay_artists` so
+  `clear_gui_only_overlays()` strips them before any export/save). They carry no
+  legend label and never become a `PlotSeries` — only "Add Fitted Curve to
+  Plot" does that, and it adds the **total fit only**.
+- **Results / residuals.** The quantitative result renders through the existing
+  `AnalysisResultView` from `XRDPeakFitResult.details()` (a bounded block —
+  compact even when many peaks are fitted), with a "Standard errors — from fit
+  covariance; not measurement uncertainty" row and one "Caution" row per
+  warning. "View Residuals…" reuses the shared `ResidualWindow`; residuals are
+  computed over the fit window only (via the generic `AnalysisResult.
+  residual_x_range()` contract — `None` by default, `fit_window` for a peak
+  fit).
+- **Radiation is optional.** Without a radiation/wavelength the fit still
+  produces centre/FWHM/area/height; d-spacing shows as unavailable.
+- **Add / Remove Fitted Curve.** A strict per-`result_id` toggle, mirroring
+  generic curve fitting: "Add" builds a derived `Dataset` + `PlotSeries` (label
+  `Peak fit — pV — 36.24°`) through `add_to_plot_requested` (undo-covered,
+  dirty, normal export); "Remove" removes only that result's series.
+- **History / reopen.** Selecting an `xrd_peak_fit` History row switches to the
+  XRD tool and restores the model / baseline / window / source peak (where
+  still available) and the overlay — without creating a new result. On project
+  open, prior peak fits appear in Analysis History; the controls and overlays
+  do not auto-restore until the researcher selects the fit.
+
+The window `propose_fit_window` picks is only as good as the detection
+information behind it: `scipy.signal.find_peaks` reports a width only when a
+width filter is set, so for a bare detection pass the proposal falls back to a
+data-scaled estimate that is often wider than ideal — the researcher narrows it
+using the visible span.
 
 **Not implemented, anywhere in the app:** multi-peak / overlapping-peak
 deconvolution, Scherrer crystallite-size calculation, instrumental broadening
@@ -753,13 +806,13 @@ v1.0 requirement list. Priorities may change as work proceeds.
   preview, peak detection with a peak table, manual peak editing, live overlays,
   derived corrected/smoothed curves, and CSV export. Single-peak profile fitting
   (Gaussian/Lorentzian/pseudo-Voigt, area/FWHM/height/η, local baseline, fit
-  standard errors, propagated d-spacing error) is implemented as a numerical
-  layer (`modules/xrd/fitting.py`). Still to come in Phase 1: the
-  researcher-facing peak-fitting workspace over that layer, then Scherrer
+  standard errors, propagated d-spacing error) is implemented both as the
+  numerical layer (`modules/xrd/fitting.py`) and as the researcher-facing Peak
+  Profile Fitting subsection over it. Still to come in Phase 1: Scherrer
   crystallite-size calculation (which also needs instrumental broadening
-  correction). Not Phase 1: multi-peak deconvolution, reference-database phase
-  identification, Rietveld refinement, and automated quantitative phase
-  analysis.
+  correction). Not Phase 1: multi-peak deconvolution, model-comparison /
+  automatic profile selection, reference-database phase identification, Rietveld
+  refinement, and automated quantitative phase analysis.
 - **Electrochemistry / Cyclic Voltammetry** — the second domain-specific family.
   CV-1 (the `modules/electrochemistry/` numerical foundation) and CV-2A (the
   "Cyclic Voltammetry" Analysis workspace: source/sign-convention/cycle/sweep
@@ -811,6 +864,17 @@ current test count. The suite covers:
   peak at a time through a local window; a characterization that a wrong profile
   model can bias the fitted area while R² stays high; and an approximate
   standard-error calibration check
+- the XRD Peak Profile Fitting GUI subsection (`test_xrd_fit_workspace_gui.py`)
+  — initial disabled state, `Panel3D` guard, the peak dropdown from enabled
+  peaks, fit-window proposal + transient span, fit-range validity, model/baseline
+  reaching the engine, a successful fit's History entry / Results display /
+  transient total-fit + baseline overlay, strict stale invalidation for every
+  fit-defining input with the History entry preserved, Add/Remove Fitted Curve
+  (one total-fit series, undo path, strict per-`result_id` toggle, unrelated
+  series untouched), the windowed residual range (and generic `FitResult`
+  unchanged), history-row routing back to the XRD tool, project save/reopen,
+  non-modal `XRDFitError`, per-warning "Caution" rows, radiation-optional
+  d-spacing, and the GUI-only overlay / export boundary
 - the `modules/electrochemistry/` CV numerical foundation — unit conversion,
   sign convention, `ElectrodeContext`, sweep/cycle segmentation, candidate
   detection, local-linear baseline, peak measurement, couple metrics, charge

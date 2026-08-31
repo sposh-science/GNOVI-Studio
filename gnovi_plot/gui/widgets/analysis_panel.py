@@ -38,6 +38,7 @@ from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.gui.widgets.cv_analysis_section import CVAnalysisSection
 from gnovi_plot.gui.widgets.xrd_analysis_section import XRDAnalysisSection
 from gnovi_plot.modules.electrochemistry.results import CVCycleAnalysisResult
+from gnovi_plot.modules.xrd.fitting import XRDPeakFitResult
 from gnovi_plot.modules.xrd.results import XRDAnalysisResult
 from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.series import PlotSeries
@@ -45,6 +46,14 @@ from gnovi_plot.plotting.series import PlotSeries
 _TOOL_CURVE_FITTING = "Curve Fitting"
 _TOOL_XRD = "XRD Peak Analysis"
 _TOOL_CV = "Cyclic Voltammetry"
+
+# Compact history-list label for an `XRDPeakFitResult` (parallel to the
+# `"<Model> fit — <y column>"` label a generic `FitResult` gets).
+_XRD_FIT_MODEL_LABELS = {
+    "gaussian": "Gaussian",
+    "lorentzian": "Lorentzian",
+    "pseudo_voigt": "Pseudo-Voigt",
+}
 
 _HISTORY_EMPTY_TEXT = "No completed analysis results for this panel yet."
 
@@ -322,6 +331,7 @@ class AnalysisPanel(QWidget):
 
         self.xrd_section_widget.analysis_result_ready.connect(self.analysis_result_ready.emit)
         self.xrd_section_widget.add_to_plot_requested.connect(self.add_to_plot_requested.emit)
+        self.xrd_section_widget.remove_fit_curve_requested.connect(self.remove_fit_curve_requested.emit)
         self.xrd_section_widget.result_updated.connect(self._on_xrd_result_updated)
         self.xrd_section_widget.overlay_changed.connect(self.xrd_overlay_changed.emit)
         self.xrd_section_widget.manual_peak_mode_changed.connect(self.xrd_manual_peak_mode_changed.emit)
@@ -354,11 +364,13 @@ class AnalysisPanel(QWidget):
             self.xrd_section_widget.disarm_manual_peak_mode()
         if not is_cv:
             self.cv_section_widget.disarm_manual_peak_mode()
-        # The CV cycle/sweep overlay is only shown while CV is the current
-        # tool (see `cv_overlay_payload`) -- ask MainWindow to redraw so it
-        # appears/clears immediately on a tool switch, not just on the next
-        # figure re-render.
+        # The CV cycle/sweep overlay and the XRD fit overlay are only shown
+        # while their own tool is current (see `cv_overlay_payload` /
+        # `xrd_fit_overlay`) -- ask MainWindow to redraw so they appear/
+        # clear immediately on a tool switch, not just on the next figure
+        # re-render.
         self.cv_overlay_changed.emit()
+        self.xrd_overlay_changed.emit()
 
     def disarm_xrd_manual_peak_mode(self) -> None:
         """Called by `MainWindow` on an active-panel switch (see `_on_
@@ -412,6 +424,14 @@ class AnalysisPanel(QWidget):
 
     def xrd_preview_curve(self):
         return self.xrd_section_widget.preview_curve()
+
+    def xrd_fit_overlay(self):
+        """`(fit_window, fit_curves)` for the transient peak-fit overlay --
+        only while XRD Peak Analysis is the current tool, so a Curve
+        Fitting or CV result never leaves a stray fit span behind."""
+        if self.tool_combo.currentText() != _TOOL_XRD:
+            return None, None
+        return self.xrd_section_widget.fit_overlay()
 
     def xrd_is_manual_peak_mode(self) -> bool:
         return self.xrd_section_widget.is_manual_peak_mode()
@@ -665,6 +685,9 @@ class AnalysisPanel(QWidget):
         def base_label(result: AnalysisResult) -> str:
             if isinstance(result, FitResult):
                 return f"{result.model.capitalize()} fit — {result.y_column}"
+            if isinstance(result, XRDPeakFitResult):
+                model = _XRD_FIT_MODEL_LABELS.get(result.model, result.model)
+                return f"{model} fit — {result.center_2theta:.2f}°"
             return result.summary()
 
         seen: dict[str, int] = {}
@@ -732,11 +755,20 @@ class AnalysisPanel(QWidget):
         so "restore/display its result table and peak overlays" (an XRD
         result) or the Curve Fitting controls (a FitResult) is always
         what's actually on screen."""
+        is_xrd_fit = isinstance(current, XRDPeakFitResult)
         self._current_result = current if isinstance(current, FitResult) else None
         self._refresh_fit_curve_buttons()
-        self.xrd_section_widget.load_result(current if isinstance(current, XRDAnalysisResult) else None)
+        # For an XRDPeakFitResult, keep whatever detection result is
+        # loaded (the fitting subsection needs its peak list) and restore
+        # the fit itself; otherwise load/clear the detection result as
+        # before and clear any loaded fit.
+        if not is_xrd_fit:
+            self.xrd_section_widget.load_result(
+                current if isinstance(current, XRDAnalysisResult) else None
+            )
+        self.xrd_section_widget.load_fit_result(current if is_xrd_fit else None)
         self.cv_section_widget.load_result(current if isinstance(current, CVCycleAnalysisResult) else None)
-        if isinstance(current, XRDAnalysisResult):
+        if isinstance(current, (XRDAnalysisResult, XRDPeakFitResult)):
             self.tool_combo.setCurrentText(_TOOL_XRD)
         elif isinstance(current, CVCycleAnalysisResult):
             self.tool_combo.setCurrentText(_TOOL_CV)
