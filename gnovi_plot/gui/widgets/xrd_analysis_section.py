@@ -37,6 +37,7 @@ from gnovi_plot.modules.xrd.fitting import (
     PSEUDO_VOIGT,
     XRDFitError,
     XRDPeakFitResult,
+    estimate_local_peak_width,
     evaluate_baseline,
     fit_xrd_peak,
     propose_fit_window,
@@ -1393,12 +1394,18 @@ class XRDAnalysisSection(QWidget):
         xy = self._raw_xy()
         if seed is None or xy is None:
             return
-        x, _y = xy
+        x, y = xy
         neighbours = tuple(
             peak.two_theta for peak in self._enabled_peaks() if peak.id != seed.id
         )
         try:
-            window = propose_fit_window(x, seed, neighbor_two_thetas=neighbours)
+            # `intensity=y` lets propose_fit_window measure a local
+            # initialization width from the SAME arrays the fit will use
+            # (see `_on_fit_peak_clicked`), so the proposed window is
+            # peak-scaled rather than scan-span-scaled.
+            window = propose_fit_window(
+                x, seed, intensity=y, neighbor_two_thetas=neighbours
+            )
         except XRDFitError:
             return
         self.fit_min_spin.blockSignals(True)
@@ -1496,10 +1503,21 @@ class XRDAnalysisSection(QWidget):
         neighbours = tuple(
             peak.two_theta for peak in self._enabled_peaks() if peak.id != seed.id
         )
+        x_arr, y_arr = x.to_numpy(), y.to_numpy()
+        # Seed the optimizer's FWHM from a local width measured on the EXACT
+        # arrays being fitted -- the same estimator that peak-scaled the
+        # proposed window. When it is not defensibly resolvable, leave the
+        # engine's own initialization (and provenance) to take over.
+        init_estimate = estimate_local_peak_width(
+            x_arr, y_arr, seed.two_theta, neighbor_two_thetas=neighbours
+        )
+        init_params = (
+            {"fwhm": init_estimate.fwhm} if init_estimate is not None else None
+        )
         try:
             result = fit_xrd_peak(
-                x.to_numpy(),
-                y.to_numpy(),
+                x_arr,
+                y_arr,
                 self.fit_model_combo.currentData(),
                 fit_window=(self.fit_min_spin.value(), self.fit_max_spin.value()),
                 baseline=self.fit_baseline_combo.currentData(),
@@ -1517,6 +1535,8 @@ class XRDAnalysisSection(QWidget):
                 source_result_id=(
                     self._current_result.result_id if self._current_result is not None else None
                 ),
+                initial_params=init_params,
+                initial_width_method="local_halfmax" if init_params is not None else None,
                 neighbor_two_thetas=neighbours,
             )
         except XRDFitError as exc:

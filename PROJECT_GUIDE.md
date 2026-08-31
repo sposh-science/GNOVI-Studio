@@ -483,12 +483,32 @@ profile plus a local baseline and returns an `XRDPeakFitResult`.
 - **FWHM** is the fitted `Γ`, reported in degrees 2θ (`fwhm_units =
   "degrees_2theta"`) — never `find_peaks`' detection width, and never silently
   converted to radians.
+- **Three widths, kept distinct.** *Detection width* (`XRDPeakSeed.width_samples`)
+  is a `find_peaks` heuristic in array-index units, often absent, and never
+  feeds physical analysis. *Initialization width* (`estimate_local_peak_width` →
+  `LocalWidthEstimate`) is an observational half-height width, in degrees 2θ,
+  measured from the exact `(2θ, intensity)` arrays the fit will use; it exists
+  only to propose the fit window and seed the optimizer, and is also a
+  heuristic, not a result. *Fitted `Γ`* (`XRDPeakFitResult.fwhm`) is the
+  quantitative profile width. **Only fitted `Γ` may ever feed Scherrer /
+  Williamson–Hall** — neither the detection nor the initialization width.
 - **Fit window** is always explicit. `propose_fit_window(...)` derives an
-  initial `center ± 4·FWHM` window from a seed's detection width and the local x
-  spacing, then clips it to the data range and to the midpoints toward
-  neighbouring detected peaks. A fit needs `max(2·P, 10)` finite points for `P`
-  free parameters — a numerical minimum, not proof the fit is scientifically
-  sound.
+  initial `center ± 4·FWHM₀` window, where `FWHM₀` is, in priority order: a
+  precomputed/local `estimate_local_peak_width` on the fit arrays; an explicit
+  caller `fallback_fwhm`; the seed's detection `width_samples`; or a
+  conservative *local-sampling* fallback (`12 ×` the local median 2θ step —
+  independent of total scan range). It then clips to the data range and to the
+  midpoints toward neighbouring detected peaks. A fit needs `max(2·P, 10)`
+  finite points for `P` free parameters — a numerical minimum, not proof the
+  fit is scientifically sound.
+- **Optimizer initialization provenance.** `parameters["initial_width_2theta"]`
+  records the FWHM value the optimizer actually started from (the clamped `p0`,
+  == `parameters["initial_params"]["fwhm"]`) and `["initial_width_method"]` its
+  source (`local_halfmax`, `seed_width_samples`, `caller_initial_params`,
+  `heuristic_halfmax`). This is initialization only — it is not the fitted `Γ`,
+  and it did **not** necessarily set `fit_window` (the researcher may have
+  edited the proposed window; `fit_window` is the authoritative record of the
+  interval actually fitted).
 - **Standard errors** are covariance-derived (`sqrt(diag(pcov))`), reported as
   fit standard errors — not measurement uncertainties or confidence intervals.
   A parameter's standard error is `None` when the whole covariance is singular
@@ -562,8 +582,14 @@ curve to the plot.
   detection pass.
 - **Fit window.** Two numeric °2θ fields, auto-filled from `propose_fit_window`
   on peak selection and shown live as a translucent span on the plot. The
-  researcher edits either bound; `max ≤ min` disables Fit Peak with a note. The
-  point-count / scientific-validity check stays in `fit_xrd_peak`.
+  proposal is *peak-scaled*: `estimate_local_peak_width` measures a local
+  half-height width from the same series data the fit uses, so the window
+  tracks the peak (~`± 4·FWHM`) rather than the scan range. The researcher
+  edits either bound; `max ≤ min` disables Fit Peak with a note. The
+  point-count / scientific-validity check stays in `fit_xrd_peak`. On Fit Peak
+  the same local estimate seeds the optimizer's FWHM (recorded as
+  `initial_width_method = "local_halfmax"`); the edited window bounds — not the
+  estimate — remain the authoritative `fit_window`.
 - **Model** (Gaussian / Lorentzian / pseudo-Voigt) and **Local baseline**
   (Linear default / Constant / None). "Local baseline" is deliberately not
   called "Background" — it is a 0–2 parameter term fitted under this one peak,
@@ -601,11 +627,12 @@ curve to the plot.
   open, prior peak fits appear in Analysis History; the controls and overlays
   do not auto-restore until the researcher selects the fit.
 
-The window `propose_fit_window` picks is only as good as the detection
-information behind it: `scipy.signal.find_peaks` reports a width only when a
-width filter is set, so for a bare detection pass the proposal falls back to a
-data-scaled estimate that is often wider than ideal — the researcher narrows it
-using the visible span.
+The proposed window is measured from the peak, not the pattern: when
+`estimate_local_peak_width` cannot resolve a width (boundary peak, too few
+samples across the half-height, no clear peak above the local noise) the
+proposal falls back to a *local-sampling* estimate — a multiple of the local
+2θ step, independent of total scan range — and the researcher adjusts the
+visible span. It is a starting point, never a measurement; the fitted `Γ` is.
 
 **Not implemented, anywhere in the app:** multi-peak / overlapping-peak
 deconvolution, Scherrer crystallite-size calculation, instrumental broadening
@@ -808,9 +835,10 @@ v1.0 requirement list. Priorities may change as work proceeds.
   (Gaussian/Lorentzian/pseudo-Voigt, area/FWHM/height/η, local baseline, fit
   standard errors, propagated d-spacing error) is implemented both as the
   numerical layer (`modules/xrd/fitting.py`) and as the researcher-facing Peak
-  Profile Fitting subsection over it. Still to come in Phase 1: Scherrer
-  crystallite-size calculation (which also needs instrumental broadening
-  correction). Not Phase 1: multi-peak deconvolution, model-comparison /
+  Profile Fitting subsection over it, including a peak-scaled fit-window
+  proposal driven by a local initialization-width estimate. Still to come in
+  Phase 1: Scherrer crystallite-size calculation (which also needs instrumental
+  broadening correction, and consumes only the fitted `Γ`). Not Phase 1: multi-peak deconvolution, model-comparison /
   automatic profile selection, reference-database phase identification, Rietveld
   refinement, and automated quantitative phase analysis.
 - **Electrochemistry / Cyclic Voltammetry** — the second domain-specific family.
@@ -854,7 +882,13 @@ current test count. The suite covers:
   normalization and FWHM checked against closed-form values and `scipy.integrate`
   over the real line; parameter recovery (area, centre, FWHM, η, baseline) from
   deterministic synthetic Gaussian / Lorentzian / pseudo-Voigt data with and
-  without seeded noise; fit-window proposal, clipping, and ascending/descending
+  without seeded noise; the local initialization-width estimator (loose
+  tolerances) vs the fitted `Γ` (strict) across sloping background, noise,
+  irregular / descending 2θ, a close neighbour, and boundary / sampling-limited
+  / flat regions where it returns `None`; `propose_fit_window` priority order,
+  range-independent local-sampling fallback, and stale/absent `seed.index`;
+  optimizer-start invariance and the initialization-width-≠-fitted-`Γ`
+  invariant; fit-window proposal, clipping, and ascending/descending
   2θ equivalence; irregular x spacing; the failure and edge cases
   (reversed/empty window, too few points, flat or negative-only signal,
   non-finite data, parameter at a bound, low degrees of freedom, non-convergence,

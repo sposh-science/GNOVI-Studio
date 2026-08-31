@@ -19,6 +19,16 @@ Scientific conventions held here:
 * **FWHM is the fitted profile width**, in degrees 2theta
   (``fwhm_units = "degrees_2theta"``) -- never `scipy.signal.find_peaks`'
   detection width, and never silently converted to radians.
+* **Three widths, kept strictly distinct.** (1) *Detection width* --
+  `XRDPeakSeed.width_samples`, a `find_peaks` diagnostic/heuristic in
+  array-index units, often absent; never Scherrer-facing. (2)
+  *Initialization width* -- `estimate_local_peak_width` /
+  `LocalWidthEstimate`, an observational half-height width in degrees
+  2theta measured from the exact arrays the fit receives, used ONLY to
+  propose the fit window and seed the optimizer; also a heuristic, not a
+  result. (3) *Fitted FWHM* -- `XRDPeakFitResult.fwhm`, the quantitative
+  profile width from the fit. Only (3) may ever feed Scherrer /
+  Williamson-Hall.
 * **Local baseline is a fit term, not a background algorithm.** It is
   conceptually separate from `modules.xrd.preprocessing` (whole-pattern
   background/smoothing). The reported ``area`` never includes any
@@ -106,9 +116,37 @@ OPERATION_PEAK_FIT = "xrd_peak_fit"
 DEFAULT_CURVE_SAMPLES = 200
 
 #: Default half-width of an auto-proposed fit window, in units of the
-#: estimated FWHM: window = center +/- this * FWHM0 (approved XRD-3
+#: initialization FWHM: window = center +/- this * FWHM0 (approved XRD-3
 #: strategy).
 DEFAULT_WINDOW_FWHM_MULTIPLE = 4.0
+
+# --- local (initialization) width estimate -----------------------------
+#
+# These govern `estimate_local_peak_width` -- a heuristic, observational
+# half-height width measured from the SAME (two_theta, intensity) arrays a
+# subsequent `fit_xrd_peak` receives. It exists only to seed the proposed
+# fit window and the optimizer's FWHM start. It is NEVER a fitted result
+# and must never feed Scherrer / Williamson-Hall (those consume the
+# fitted `XRDPeakFitResult.fwhm` only). Each constant is an independent,
+# individually meaningful threshold -- not an interacting clamp system.
+
+#: Search-region half-width around the selected centre, in units of the
+#: LOCAL median 2theta step. Wide enough to bracket a broad powder
+#: reflection, still local within a typical multi-thousand-point pattern.
+_LOCAL_WIDTH_SEARCH_SAMPLES = 150
+#: Minimum finite samples inside the search region to attempt an estimate.
+_LOCAL_WIDTH_MIN_POINTS = 9
+#: The local peak must rise this many times the local noise (MAD of first
+#: differences) above the local baseline before a width is meaningful.
+_LOCAL_WIDTH_MIN_SNR = 3.0
+#: Minimum samples strictly above the half-height level -- fewer than this
+#: and the width is sampling-limited, not defensibly resolvable.
+_LOCAL_WIDTH_MIN_POINTS_ABOVE_HALF = 3
+
+#: Emergency proposed-window initialization FWHM, in units of the LOCAL
+#: median 2theta step (never the total scan span) -- used only when no
+#: width information of any kind is available.
+_WINDOW_FALLBACK_SPACING_MULTIPLE = 12.0
 
 # --- exact area-normalized profile shape constants -----------------------
 #
@@ -268,31 +306,210 @@ def estimate_seed_fwhm(two_theta, seed: XRDPeakSeed) -> float | None:
     return float(seed.width_samples) * spacing
 
 
+@dataclass(frozen=True)
+class LocalWidthEstimate:
+    """A local, observational half-height full width near a chosen centre,
+    in degrees 2theta, measured directly from the EXACT ``(two_theta,
+    intensity)`` arrays a subsequent `fit_xrd_peak` receives.
+
+    This is an INITIALIZATION quantity only: it seeds the proposed fit
+    window and the optimizer's FWHM start. It is NOT a fitted result, NOT
+    a measurement, and must never be used as `XRDPeakFitResult.fwhm` or
+    fed to Scherrer / Williamson-Hall. No Gaussian/Lorentzian shape
+    correction is applied -- it is a raw observational width, not a model
+    FWHM.
+    """
+
+    fwhm: float
+    left_2theta: float
+    right_2theta: float
+    local_max_2theta: float
+    local_max_intensity: float
+    baseline_level: float
+
+
+def _half_height_crossing(
+    x: np.ndarray, y: np.ndarray, peak_pos: int, y_half: float, *, direction: int
+) -> float | None:
+    """Linear-interpolated x at which ``y`` first falls to ``y_half`` when
+    walking from ``peak_pos`` in ``direction`` (-1 left, +1 right).
+    ``None`` if the region edge is reached with no sample at/below
+    ``y_half`` -- i.e. a one-sided / boundary peak, deliberately not
+    supported (the caller falls back instead)."""
+    i = int(peak_pos)
+    n = x.size
+    while 0 <= i + direction < n:
+        j = i + direction
+        if y[j] <= y_half:
+            y_i, y_j = float(y[i]), float(y[j])
+            if y_i == y_j:
+                return float(x[j])
+            t = (y_i - y_half) / (y_i - y_j)
+            return float(x[i] + t * (x[j] - x[i]))
+        i = j
+    return None
+
+
+def _centre_index(tt: np.ndarray, seed: XRDPeakSeed) -> int | None:
+    """``seed.index`` when it is a valid position into ``tt``; otherwise
+    the nearest finite sample to ``seed.two_theta`` (a manual seed, or a
+    seed detected against a different array). ``None`` only when ``tt``
+    has no finite sample."""
+    if seed.index is not None and 0 <= seed.index < tt.size:
+        return int(seed.index)
+    finite_mask = np.isfinite(tt)
+    if not np.any(finite_mask):
+        return None
+    idxs = np.where(finite_mask)[0]
+    return int(idxs[int(np.argmin(np.abs(tt[idxs] - float(seed.two_theta))))])
+
+
+def estimate_local_peak_width(
+    two_theta,
+    intensity,
+    center: float,
+    *,
+    neighbor_two_thetas: tuple[float, ...] | list[float] = (),
+) -> LocalWidthEstimate | None:
+    """Estimate a peak's half-height full width near ``center``, in degrees
+    2theta, directly from ``(two_theta, intensity)`` -- the SAME arrays a
+    subsequent `fit_xrd_peak` call receives.
+
+    Pure NumPy. Works for ascending or descending ``two_theta`` and for
+    irregular sampling (everything is done in physical 2theta space). A
+    neighbouring reflection in ``neighbor_two_thetas`` only limits the
+    local search region (midpoint clip) -- it never contributes to the
+    width. No profile-shape correction is applied.
+
+    Returns ``None`` (never raises) when the width is not defensibly
+    resolvable: too few local points, a peak that does not clear the local
+    noise, a half-height level the data never crosses on one side (a
+    boundary / one-sided case -- deliberately unsupported), or a
+    half-height span covered by too few samples. The caller then uses its
+    fallback path.
+    """
+    x = np.asarray(two_theta, dtype=float)
+    y = np.asarray(intensity, dtype=float)
+    if x.shape != y.shape or x.size < _LOCAL_WIDTH_MIN_POINTS:
+        return None
+    finite = np.isfinite(x) & np.isfinite(y)
+    x, y = x[finite], y[finite]
+    if x.size < _LOCAL_WIDTH_MIN_POINTS:
+        return None
+    order = np.argsort(x, kind="stable")
+    x, y = x[order], y[order]
+
+    center = float(center)
+    if not math.isfinite(center):
+        return None
+
+    nearest = int(np.argmin(np.abs(x - center)))
+    spacing = _local_step(x, nearest)
+    if spacing is None or spacing <= 0.0:
+        return None
+
+    half = _LOCAL_WIDTH_SEARCH_SAMPLES * spacing
+    region_lo, region_hi = center - half, center + half
+    for raw in neighbor_two_thetas:
+        n = float(raw)
+        if not math.isfinite(n) or n == center:
+            continue
+        if n < center:
+            region_lo = max(region_lo, 0.5 * (n + center))
+        else:
+            region_hi = min(region_hi, 0.5 * (center + n))
+    region_lo = max(region_lo, float(x[0]))
+    region_hi = min(region_hi, float(x[-1]))
+    if not (region_hi > region_lo):
+        return None
+
+    mask = (x >= region_lo) & (x <= region_hi)
+    xr, yr = x[mask], y[mask]
+    if xr.size < _LOCAL_WIDTH_MIN_POINTS:
+        return None
+
+    # Robust local baseline from the region wings (foot-to-foot). The LOWER
+    # wing is used, so a one-sided shoulder or a partial neighbour cannot
+    # inflate the baseline (and thus deflate the width) -- erring, if at
+    # all, toward a slightly WIDER proposed window, the safe direction.
+    q = max(3, xr.size // 6)
+    baseline = min(float(np.median(yr[:q])), float(np.median(yr[-q:])))
+
+    inner = np.abs(xr - center) <= 0.5 * (region_hi - region_lo)
+    if not np.any(inner):
+        return None
+    inner_idx = np.where(inner)[0]
+    peak_pos = int(inner_idx[int(np.argmax(yr[inner_idx] - baseline))])
+    height = float(yr[peak_pos] - baseline)
+    if height <= 0.0:
+        return None
+
+    if yr.size > 2:
+        d = np.diff(yr)
+        noise = 1.4826 * float(np.median(np.abs(d - np.median(d))))
+    else:
+        noise = 0.0
+    if noise > 0.0 and height < _LOCAL_WIDTH_MIN_SNR * noise:
+        return None
+
+    y_half = baseline + 0.5 * height
+    left = _half_height_crossing(xr, yr, peak_pos, y_half, direction=-1)
+    right = _half_height_crossing(xr, yr, peak_pos, y_half, direction=+1)
+    if left is None or right is None or not (right > left):
+        return None
+    if int(np.count_nonzero(yr > y_half)) < _LOCAL_WIDTH_MIN_POINTS_ABOVE_HALF:
+        return None
+
+    return LocalWidthEstimate(
+        fwhm=float(right - left),
+        left_2theta=float(left),
+        right_2theta=float(right),
+        local_max_2theta=float(xr[peak_pos]),
+        local_max_intensity=float(yr[peak_pos]),
+        baseline_level=float(baseline),
+    )
+
+
 def propose_fit_window(
     two_theta,
     seed: XRDPeakSeed,
     *,
+    intensity=None,
+    initial_fwhm: float | None = None,
     neighbor_two_thetas: tuple[float, ...] | list[float] = (),
     width_multiple: float = DEFAULT_WINDOW_FWHM_MULTIPLE,
     fallback_fwhm: float | None = None,
 ) -> FitWindow:
     """Propose an initial fit window ``center +/- width_multiple *
-    estimated_FWHM`` for ``seed``, then:
+    FWHM0`` for ``seed``, then:
 
     * clip to the data's [min, max] 2theta range;
     * clip each side at the midpoint toward the nearest neighbouring
       detected peak in ``neighbor_two_thetas`` (so a window never spans
-      two reflections);
-    * fall back to ``fallback_fwhm`` (then to a data-scaled estimate) when
-      the seed carries no usable width.
+      two reflections).
 
-    Irregular x spacing is handled -- the sample->x conversion uses the
-    local median spacing near the seed. Raises `XRDFitError` if the window
-    collapses to zero width after clipping (the caller should then specify
-    a window explicitly).
+    ``FWHM0`` is an INITIALIZATION width (never a fitted result), chosen in
+    priority order:
 
-    Note: ``seed.index`` is interpreted against ``two_theta`` as passed
-    here; supply the same pattern the seed was detected in.
+    1. ``initial_fwhm`` when the caller precomputed one; otherwise, when
+       ``intensity`` is supplied, a local `estimate_local_peak_width` on
+       the SAME arrays the fit will use;
+    2. an explicit caller ``fallback_fwhm``;
+    3. the detection ``seed.width_samples`` compatibility path
+       (`estimate_seed_fwhm`);
+    4. a conservative LOCAL-sampling fallback
+       (``_WINDOW_FALLBACK_SPACING_MULTIPLE`` * local median step) -- this
+       depends only on local sampling, never on the total scan span.
+
+    The proposal is profile-neutral. Irregular x spacing is handled
+    (physical-2theta throughout). Raises `XRDFitError` if the window
+    collapses to zero width after clipping, or if the local sampling
+    cannot be determined for the fallback -- the caller should then
+    specify a window explicitly.
+
+    ``seed.index`` is used for local spacing when it is a valid position
+    into ``two_theta``; otherwise the nearest sample to ``seed.two_theta``
+    is used.
     """
     tt = np.asarray(two_theta, dtype=float)
     finite = tt[np.isfinite(tt)]
@@ -300,13 +517,30 @@ def propose_fit_window(
         raise XRDFitError("two_theta must contain at least two finite values to propose a window.")
 
     center = float(seed.two_theta)
-    fwhm0 = estimate_seed_fwhm(tt, seed)
-    if (fwhm0 is None or fwhm0 <= 0) and fallback_fwhm is not None and fallback_fwhm > 0:
+
+    fwhm0: float | None = None
+    if initial_fwhm is not None and initial_fwhm > 0:
+        fwhm0 = float(initial_fwhm)
+    if fwhm0 is None and intensity is not None:
+        est = estimate_local_peak_width(
+            tt, intensity, center, neighbor_two_thetas=neighbor_two_thetas
+        )
+        if est is not None and est.fwhm > 0:
+            fwhm0 = float(est.fwhm)
+    if fwhm0 is None and fallback_fwhm is not None and fallback_fwhm > 0:
         fwhm0 = float(fallback_fwhm)
-    if fwhm0 is None or fwhm0 <= 0:
-        span = float(finite.max() - finite.min())
-        spacing = _local_step(tt, seed.index) or (span / max(finite.size - 1, 1))
-        fwhm0 = max(span / 100.0, 5.0 * spacing)
+    if fwhm0 is None:
+        seed_fwhm = estimate_seed_fwhm(tt, seed)
+        if seed_fwhm is not None and seed_fwhm > 0:
+            fwhm0 = float(seed_fwhm)
+    if fwhm0 is None:
+        spacing = _local_step(tt, _centre_index(tt, seed))
+        if spacing is None or spacing <= 0.0:
+            raise XRDFitError(
+                "Cannot determine the local 2theta sampling to propose a fit window; "
+                "specify a fit window explicitly."
+            )
+        fwhm0 = _WINDOW_FALLBACK_SPACING_MULTIPLE * spacing
 
     lo = center - width_multiple * fwhm0
     hi = center + width_multiple * fwhm0
@@ -840,6 +1074,15 @@ class XRDPeakFitResult(AnalysisResult):
             rows.append(("Source detection result", self.source_result_id))
         if self.source_peak_id is not None:
             rows.append(("Source detected peak", self.source_peak_id))
+        width0 = self.parameters.get("initial_width_2theta")
+        method0 = self.parameters.get("initial_width_method")
+        if width0 is not None and method0:
+            rows.append(
+                (
+                    "Optimizer FWHM initialization",
+                    f"{float(width0):.4f}°2θ ({method0}); seeded the fit, not the fitted result",
+                )
+            )
         convention = self.parameters.get("profile_convention")
         if convention:
             rows.append(("Profile convention", convention))
@@ -1045,6 +1288,7 @@ def fit_xrd_peak(
     source_peak_id: str | None = None,
     source_result_id: str | None = None,
     initial_params: dict[str, float] | None = None,
+    initial_width_method: str | None = None,
     param_bounds: dict[str, tuple[float, float]] | None = None,
     neighbor_two_thetas: tuple[float, ...] | list[float] = (),
     curve_num_points: int = DEFAULT_CURVE_SAMPLES,
@@ -1062,8 +1306,17 @@ def fit_xrd_peak(
     is always explicit (use `propose_fit_window` to derive one).
     ``initial_params`` / ``param_bounds`` override the deterministic
     defaults per key (``area`` / ``center`` / ``fwhm`` / ``eta`` /
-    ``baseline_c0`` / ``baseline_c1``). ``neighbor_two_thetas`` feeds the
-    conservative overlap warning only.
+    ``baseline_c0`` / ``baseline_c1``). ``initial_width_method`` is a free
+    label recorded verbatim in ``parameters["initial_width_method"]`` when
+    the caller supplied ``initial_params["fwhm"]`` (e.g. ``"local_halfmax"``
+    from `estimate_local_peak_width`); it is provenance only.
+    ``neighbor_two_thetas`` feeds the conservative overlap warning only.
+
+    ``parameters["initial_width_2theta"]`` / ``["initial_width_method"]``
+    record the FWHM value the optimizer actually started from and its
+    source. This is initialization provenance -- it is NOT the fitted
+    width (that is ``fwhm``) and it did NOT necessarily set ``fit_window``
+    (the researcher may have edited the proposed window).
 
     Raises `XRDFitError` for an unknown model/baseline, a
     reversed/zero-width/empty window, fewer than ``max(2*P, 10)`` finite
@@ -1143,6 +1396,23 @@ def fit_xrd_peak(
         bound_overrides=param_bounds,
     )
     warnings.extend(init_warnings)
+
+    # Truthful provenance of the FWHM value the optimizer actually started
+    # from. `initial_width_2theta` is the ACTUAL clamped p0 (== parameters
+    # ["initial_params"]["fwhm"]), not a raw upstream estimate -- if the
+    # window is narrow, `_initial_space` may clamp a supplied width and the
+    # optimizer genuinely starts from the clamped value. `initial_width_
+    # method` mirrors `_initial_space`'s own FWHM-source priority. Neither
+    # implies anything about how `fit_window` (which the researcher may
+    # have edited) was chosen.
+    _window_width = float(x_w[-1] - x_w[0])
+    if initial_params and "fwhm" in initial_params:
+        initial_width_method_resolved = initial_width_method or "caller_initial_params"
+    elif seed_fwhm is not None and 0.0 < seed_fwhm <= _window_width:
+        initial_width_method_resolved = "seed_width_samples"
+    else:
+        initial_width_method_resolved = "heuristic_halfmax"
+    initial_width_2theta = float(space.p0[space.names.index("fwhm")])
 
     dof = x_w.size - n_params
     if dof <= 0:
@@ -1277,6 +1547,11 @@ def fit_xrd_peak(
         # `converged` fields on the result itself carry that diagnostic.
         "solver": "scipy.optimize.curve_fit (trf)",
         "initial_params": {name: float(v) for name, v in zip(space.names, space.p0)},
+        # The FWHM value the optimizer actually started from (the clamped
+        # p0), and how it was obtained. Initialization only -- it did NOT
+        # necessarily determine `fit_window` (see `initial_params` above).
+        "initial_width_2theta": initial_width_2theta,
+        "initial_width_method": initial_width_method_resolved,
         "param_bounds": {
             name: [
                 (None if not math.isfinite(space.lower[i]) else float(space.lower[i])),
