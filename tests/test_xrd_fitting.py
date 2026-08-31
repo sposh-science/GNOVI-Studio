@@ -28,17 +28,21 @@ from gnovi_plot.modules.xrd.fitting import (
     BASELINE_CONSTANT,
     BASELINE_LINEAR,
     BASELINE_NONE,
+    DEFAULT_WINDOW_FWHM_MULTIPLE,
     FWHM_UNITS_TWO_THETA_DEG,
     GAUSSIAN,
     LORENTZIAN,
     OPERATION_PEAK_FIT,
     PSEUDO_VOIGT,
     FitWindow,
+    LocalWidthEstimate,
     XRDFitError,
     XRDPeakFitResult,
+    _WINDOW_FALLBACK_SPACING_MULTIPLE,
     _standard_errors,
     baseline_values,
     derived_height,
+    estimate_local_peak_width,
     estimate_seed_fwhm,
     evaluate_baseline,
     evaluate_peak_component,
@@ -792,3 +796,321 @@ def test_center_standard_error_is_approximately_calibrated():
     cov_2se = within_2se / n_used
     assert 0.55 <= cov_1se <= 0.82   # nominal 0.68
     assert 0.88 <= cov_2se <= 1.0    # nominal 0.95
+
+
+# =====================================================================
+# 12. XRD-3C -- local initialization-width estimator + peak-scaled window
+# =====================================================================
+#
+# Three widths are kept strictly distinct:
+#   * detection width  -> XRDPeakSeed.width_samples (heuristic; not tested for
+#     accuracy here, never Scherrer-facing);
+#   * initialization width -> estimate_local_peak_width / LocalWidthEstimate
+#     (a heuristic optimizer/window seed -- LOOSE tolerances on purpose);
+#   * fitted FWHM Gamma -> XRDPeakFitResult.fwhm (quantitative; keeps the
+#     stronger XRD-3A expectations).
+
+
+def _wide_peak(model, center, fwhm, *, span=80.0, n=4001, eta=None,
+               c0=0.0, c1=0.0, noise=0.0, seed=0, irregular=False, descending=False):
+    """One synthetic peak on a WIDE pattern (default ~80 deg) so a
+    scan-span-scaled window would be visibly wrong. Optional linear
+    background, noise, irregular sampling, descending x."""
+    lo, hi = center - 0.5 * span, center + 0.5 * span
+    x = np.linspace(lo, hi, n)
+    if irregular:
+        rng = np.random.default_rng(seed + 999)
+        step = np.diff(x)
+        step = step * rng.uniform(0.6, 1.4, size=step.shape)
+        x = lo + np.concatenate([[0.0], np.cumsum(step)])
+        x = lo + (x - x[0]) * (span / (x[-1] - x[0]))
+    x_ref = 0.5 * (x[0] + x[-1])
+    y = peak_component(x, model, 1000.0, center, fwhm, eta) + baseline_values(x, BASELINE_LINEAR, x_ref, c0, c1)
+    if noise > 0.0:
+        y = y + np.random.default_rng(seed).normal(0.0, noise, size=x.shape)
+    if descending:
+        x, y = x[::-1].copy(), y[::-1].copy()
+    return x, y
+
+
+def _seed_at(x, center, y=None):
+    idx = int(np.argmin(np.abs(np.asarray(x) - center)))
+    intensity = float(np.asarray(y)[idx]) if y is not None else 0.0
+    return XRDPeakSeed(two_theta=float(center), intensity=intensity, origin="automatic", index=idx)
+
+
+@pytest.mark.parametrize("model,fwhm,tol_gamma", [
+    (GAUSSIAN, 0.19, 0.02),
+    (LORENTZIAN, 0.24, 0.05),
+])
+def test_local_estimator_and_fit_recover_clean_isolated_peak(model, fwhm, tol_gamma):
+    x, y = _wide_peak(model, 45.0, fwhm, c0=20.0)
+    est = estimate_local_peak_width(x, y, 45.0)
+    assert isinstance(est, LocalWidthEstimate)
+    # initialization width: loose -- within a factor of 2 and same order
+    assert 0.5 * fwhm < est.fwhm < 2.0 * fwhm
+    assert est.left_2theta < 45.0 < est.right_2theta
+
+    seed = _seed_at(x, 45.0, y)
+    window = propose_fit_window(x, seed, intensity=y)
+    w = window.two_theta_max - window.two_theta_min
+    # peak-scaled, NOT scan-span-scaled (old bug gave ~6.4 deg for span 80)
+    assert w == pytest.approx(2 * DEFAULT_WINDOW_FWHM_MULTIPLE * est.fwhm, rel=1e-6)
+    assert w < 3.0
+
+    res = fit_xrd_peak(x, y, model, fit_window=window.as_tuple(),
+                       baseline=BASELINE_LINEAR, seed=seed, **_PROV)
+    assert res.fwhm == pytest.approx(fwhm, rel=tol_gamma)
+
+
+def test_pseudo_voigt_gamma_recovered_eta_not_asserted_tightly():
+    x, y = _wide_peak(PSEUDO_VOIGT, 40.0, 0.22, eta=0.5, c0=15.0)
+    est = estimate_local_peak_width(x, y, 40.0)
+    assert 0.4 * 0.22 < est.fwhm < 2.2 * 0.22
+    seed = _seed_at(x, 40.0, y)
+    window = propose_fit_window(x, seed, intensity=y)
+    res = fit_xrd_peak(x, y, PSEUDO_VOIGT, fit_window=window.as_tuple(),
+                       baseline=BASELINE_LINEAR, seed=seed, **_PROV)
+    assert res.fwhm == pytest.approx(0.22, rel=0.08)
+    assert 0.0 <= res.eta <= 1.0  # eta itself deliberately NOT pinned
+
+
+def test_local_estimator_survives_sloping_background_and_noise():
+    x, y = _wide_peak(GAUSSIAN, 50.0, 0.30, c0=200.0, c1=8.0, noise=6.0, seed=3)
+    est = estimate_local_peak_width(x, y, 50.0)
+    assert est is not None and 0.5 * 0.30 < est.fwhm < 2.0 * 0.30
+    seed = _seed_at(x, 50.0, y)
+    window = propose_fit_window(x, seed, intensity=y)
+    res = fit_xrd_peak(x, y, GAUSSIAN, fit_window=window.as_tuple(),
+                       baseline=BASELINE_LINEAR, seed=seed, **_PROV)
+    assert res.fwhm == pytest.approx(0.30, rel=0.06)
+    assert res.params["baseline_c1"] == pytest.approx(8.0, abs=5.0)  # noisy over a narrow window
+
+
+def test_local_estimator_is_orientation_independent():
+    x_asc, y_asc = _wide_peak(LORENTZIAN, 45.0, 0.26, c0=10.0)
+    x_desc, y_desc = _wide_peak(LORENTZIAN, 45.0, 0.26, c0=10.0, descending=True)
+    a = estimate_local_peak_width(x_asc, y_asc, 45.0)
+    d = estimate_local_peak_width(x_desc, y_desc, 45.0)
+    assert a is not None and d is not None
+    assert a.fwhm == pytest.approx(d.fwhm, rel=1e-9)
+
+
+def test_local_estimator_handles_irregular_sampling():
+    x, y = _wide_peak(GAUSSIAN, 45.0, 0.24, c0=12.0, irregular=True, seed=5)
+    est = estimate_local_peak_width(x, y, 45.0)
+    assert est is not None and 0.5 * 0.24 < est.fwhm < 2.0 * 0.24
+    seed = _seed_at(x, 45.0, y)
+    res = fit_xrd_peak(x, y, GAUSSIAN, fit_window=propose_fit_window(x, seed, intensity=y).as_tuple(),
+                       baseline=BASELINE_LINEAR, seed=seed, **_PROV)
+    assert res.fwhm == pytest.approx(0.24, rel=0.05)
+
+
+def test_local_estimator_ignores_close_neighbour_via_midpoint_clip():
+    x = np.linspace(20.0, 60.0, 5000)
+    x_ref = 0.5 * (x[0] + x[-1])
+    y = (10.0 + baseline_values(x, BASELINE_LINEAR, x_ref, 10.0, 0.0)
+         + peak_component(x, GAUSSIAN, 1500.0, 40.0, 0.22)     # target (strong)
+         + peak_component(x, GAUSSIAN, 500.0, 40.9, 0.22))     # close neighbour
+    est = estimate_local_peak_width(x, y, 40.0, neighbor_two_thetas=(40.9,))
+    assert est is not None
+    # the neighbour is clipped out -> the estimate is not blown up by the shoulder
+    assert est.fwhm < 1.6 * 0.22
+    seed = _seed_at(x, 40.0, y)
+    window = propose_fit_window(x, seed, intensity=y, neighbor_two_thetas=(40.9,))
+    assert window.two_theta_max <= 0.5 * (40.0 + 40.9) + 1e-9
+
+
+def test_local_estimator_returns_none_at_a_dataset_boundary():
+    # peak centre sits at the very start of the data -> no left half-height
+    # crossing exists; one-sided estimation is deliberately unsupported.
+    x = np.linspace(10.0, 50.0, 4000)
+    y = 5.0 + peak_component(x, GAUSSIAN, 1000.0, 10.0, 0.30)
+    assert estimate_local_peak_width(x, y, 10.0) is None
+
+
+def test_local_estimator_returns_none_for_sampling_limited_peak():
+    # ~2 samples across the FWHM
+    x = np.linspace(30.0, 90.0, 1500)          # step 0.04 deg
+    y = 5.0 + peak_component(x, GAUSSIAN, 200.0, 60.0, 0.06)
+    assert estimate_local_peak_width(x, y, 60.0) is None
+
+
+def test_local_estimator_returns_none_for_flat_region():
+    x = np.linspace(10.0, 90.0, 4001)
+    y = 100.0 + np.random.default_rng(0).normal(0.0, 1.0, size=x.shape)
+    assert estimate_local_peak_width(x, y, 45.0) is None
+
+
+def test_propose_fit_window_fallback_is_local_sampling_not_scan_span():
+    # No intensity, no width_samples, no fallback_fwhm -> priority-4 path.
+    # Same LOCAL sampling, very different total span -> same proposed width.
+    def width_for_span(span):
+        n = int(span / 0.02) + 1
+        x = np.linspace(45.0 - span / 2, 45.0 + span / 2, n)
+        w = propose_fit_window(x, _seed_at(x, 45.0))
+        return w.two_theta_max - w.two_theta_min
+
+    w_small, w_big = width_for_span(30.0), width_for_span(120.0)
+    assert w_small == pytest.approx(w_big, rel=1e-3)
+    # and it is the documented local-sampling multiple
+    assert w_small == pytest.approx(
+        2 * DEFAULT_WINDOW_FWHM_MULTIPLE * _WINDOW_FALLBACK_SPACING_MULTIPLE * 0.02, rel=1e-3
+    )
+
+
+def test_propose_fit_window_priority_order():
+    x, y = _wide_peak(GAUSSIAN, 45.0, 0.20, c0=10.0)
+    seed = _seed_at(x, 45.0, y)
+    seed_w = XRDPeakSeed(two_theta=45.0, intensity=float(y.max()), origin="automatic",
+                         index=seed.index, width_samples=25.0)  # 25 * 0.02 = 0.5 deg
+
+    # 1: explicit initial_fwhm wins over everything
+    w1 = propose_fit_window(x, seed_w, intensity=y, initial_fwhm=0.10, fallback_fwhm=0.7)
+    assert (w1.two_theta_max - w1.two_theta_min) == pytest.approx(2 * 4 * 0.10, rel=1e-6)
+
+    # 2: local estimate (via intensity) wins over fallback_fwhm and seed width
+    w2 = propose_fit_window(x, seed_w, intensity=y, fallback_fwhm=0.7)
+    est = estimate_local_peak_width(x, y, 45.0)
+    assert (w2.two_theta_max - w2.two_theta_min) == pytest.approx(2 * 4 * est.fwhm, rel=1e-6)
+
+    # 3: no intensity -> fallback_fwhm beats seed width
+    w3 = propose_fit_window(x, seed_w, fallback_fwhm=0.7)
+    assert (w3.two_theta_max - w3.two_theta_min) == pytest.approx(2 * 4 * 0.7, rel=1e-6)
+
+    # 4: no intensity, no fallback -> seed width_samples compat path
+    w4 = propose_fit_window(x, seed_w)
+    assert (w4.two_theta_max - w4.two_theta_min) == pytest.approx(2 * 4 * 0.5, rel=1e-6)
+
+
+def test_propose_fit_window_centre_fallback_for_absent_or_stale_seed_index():
+    x = np.linspace(10.0, 90.0, 4001)
+    manual = XRDPeakSeed.manual(45.0, 100.0)          # index is None
+    stale = XRDPeakSeed(two_theta=45.0, intensity=100.0, origin="automatic", index=999999)
+    for s in (manual, stale):
+        w = propose_fit_window(x, s)
+        assert w.two_theta_min < 45.0 < w.two_theta_max
+
+
+def test_old_seed_without_width_samples_still_proposes_a_finite_window():
+    x, y = _wide_peak(GAUSSIAN, 45.0, 0.2, c0=10.0)
+    old = XRDPeakSeed.from_dict({
+        "two_theta": 45.0, "intensity": 900.0, "origin": "automatic",
+        "index": int(np.argmin(np.abs(x - 45.0))), "prominence": 800.0,
+        "width_samples": None, "enabled": True, "id": "old-seed",
+    })
+    assert old.width_samples is None
+    w = propose_fit_window(x, old, intensity=y)
+    assert w.two_theta_max > w.two_theta_min
+
+
+# --- optimizer initialization + truthful provenance -------------------
+
+
+def test_fit_records_optimizer_initialization_provenance():
+    x, y = _wide_peak(GAUSSIAN, 45.0, 0.20, c0=10.0)
+    seed = _seed_at(x, 45.0, y)
+    est = estimate_local_peak_width(x, y, 45.0)
+    window = propose_fit_window(x, seed, intensity=y)
+    res = fit_xrd_peak(
+        x, y, GAUSSIAN, fit_window=window.as_tuple(), baseline=BASELINE_LINEAR,
+        seed=seed, initial_params={"fwhm": est.fwhm},
+        initial_width_method="local_halfmax", **_PROV,
+    )
+    p = res.parameters
+    assert p["initial_width_method"] == "local_halfmax"
+    # initial_width_2theta is the ACTUAL optimizer p0 for fwhm, not a raw upstream value
+    assert p["initial_width_2theta"] == pytest.approx(p["initial_params"]["fwhm"])
+    # for a wide-enough window the supplied estimate passes through unclamped
+    assert p["initial_width_2theta"] == pytest.approx(est.fwhm, rel=1e-9)
+    labels = [lab for lab, _ in res.provenance_details()]
+    assert any("Optimizer FWHM initialization" in lab for lab in labels)
+
+
+def test_fit_initialization_method_reflects_source_when_caller_supplies_nothing():
+    x, y = _wide_peak(GAUSSIAN, 45.0, 0.20, c0=10.0)
+    # no initial_params, no usable seed width -> heuristic half-max
+    res = fit_xrd_peak(x, y, GAUSSIAN, fit_window=(44.2, 45.8), baseline=BASELINE_LINEAR, **_PROV)
+    assert res.parameters["initial_width_method"] == "heuristic_halfmax"
+
+    seed_w = XRDPeakSeed(two_theta=45.0, intensity=float(y.max()), origin="automatic",
+                         index=int(np.argmin(np.abs(x - 45.0))), width_samples=12.0)
+    res2 = fit_xrd_peak(x, y, GAUSSIAN, fit_window=(44.2, 45.8), baseline=BASELINE_LINEAR,
+                        seed=seed_w, **_PROV)
+    assert res2.parameters["initial_width_method"] == "seed_width_samples"
+
+
+def test_optimizer_start_does_not_materially_move_the_converged_solution():
+    """Changing the FWHM p0 (XRD-3C) must not move the converged
+    centre/FWHM/area for a clean, well-conditioned peak."""
+    for model, fwhm in [(GAUSSIAN, 0.20), (LORENTZIAN, 0.24), (PSEUDO_VOIGT, 0.22)]:
+        x, y = _wide_peak(model, 45.0, fwhm, eta=(0.4 if model == PSEUDO_VOIGT else None), c0=15.0)
+        seed = _seed_at(x, 45.0, y)
+        window = propose_fit_window(x, seed, intensity=y).as_tuple()
+        base = fit_xrd_peak(x, y, model, fit_window=window, baseline=BASELINE_LINEAR, seed=seed, **_PROV)
+        est = estimate_local_peak_width(x, y, 45.0)
+        seeded = fit_xrd_peak(x, y, model, fit_window=window, baseline=BASELINE_LINEAR, seed=seed,
+                              initial_params={"fwhm": est.fwhm}, initial_width_method="local_halfmax", **_PROV)
+        assert seeded.center_2theta == pytest.approx(base.center_2theta, rel=5e-3, abs=1e-4)
+        assert seeded.fwhm == pytest.approx(base.fwhm, rel=5e-3)
+        assert seeded.area == pytest.approx(base.area, rel=5e-3)
+
+
+def test_initialization_width_is_not_the_fitted_gamma():
+    """Architectural invariant: the heuristic initialization width and the
+    fitted FWHM are distinct quantities. `result.fwhm` is the fitted
+    profile width; `parameters['initial_width_2theta']` is only an
+    optimizer seed and must never be substituted for it."""
+    # deliberately mis-seed the optimizer with a wrong width
+    x, y = _wide_peak(GAUSSIAN, 45.0, 0.20, c0=10.0)
+    seed = _seed_at(x, 45.0, y)
+    res = fit_xrd_peak(x, y, GAUSSIAN, fit_window=(44.0, 46.0), baseline=BASELINE_LINEAR, seed=seed,
+                       initial_params={"fwhm": 0.9}, initial_width_method="local_halfmax", **_PROV)
+    assert res.parameters["initial_width_2theta"] == pytest.approx(0.9, rel=0.2)  # ~the (clamped) seed
+    assert res.fwhm == pytest.approx(0.20, rel=0.05)                              # the fit still finds the truth
+    assert abs(res.fwhm - res.parameters["initial_width_2theta"]) > 0.3
+
+
+def test_optimizer_fwhm_p0_provenance_records_the_clamped_start_not_the_request():
+    """A supplied initialization FWHM outside the permitted p0 range is
+    clamped by `_initial_space` to sit strictly inside the parameter
+    bounds. `parameters['initial_width_2theta']` must then record the
+    ACTUAL post-clamp FWHM the optimizer started from (identical to
+    `parameters['initial_params']['fwhm']`) -- never the raw request --
+    while `result.fwhm` stays the independently fitted Gamma."""
+    x, y = _wide_peak(GAUSSIAN, 45.0, 0.20, c0=10.0)
+    seed = _seed_at(x, 45.0, y)
+    window = (44.0, 46.0)          # 2 deg wide -> fwhm upper bound is ~2 deg
+    requested_fwhm = 5.0           # far outside [fwhm_lo*1.5, fwhm_hi*0.9]
+
+    res = fit_xrd_peak(
+        x, y, GAUSSIAN, fit_window=window, baseline=BASELINE_LINEAR, seed=seed,
+        initial_params={"fwhm": requested_fwhm},
+        initial_width_method="local_halfmax", **_PROV,
+    )
+    p = res.parameters
+    p0_fwhm = p["initial_params"]["fwhm"]
+
+    # _initial_space actually clamped the request down into the bounds
+    assert p0_fwhm < requested_fwhm
+    assert 0.0 < p0_fwhm <= (window[1] - window[0])
+    # provenance records the post-clamp p0, and the two agree exactly
+    assert p["initial_width_2theta"] == pytest.approx(p0_fwhm)
+    assert p["initial_width_2theta"] != pytest.approx(requested_fwhm)
+    assert p["initial_width_method"] == "local_halfmax"
+    # the fitted Gamma is its own quantity -- unchanged XRD-3A tolerance
+    assert res.fwhm == pytest.approx(0.20, rel=0.05)
+    assert res.fwhm != pytest.approx(p["initial_width_2theta"], rel=1e-6)
+
+
+def test_no_scherrer_or_broadening_code_exists_yet():
+    """XRD-3C introduces no crystallite-size / instrumental-broadening /
+    Williamson-Hall code (those may consume only the fitted FWHM Gamma when
+    they are eventually added -- never a detection/initialization width)."""
+    import gnovi_plot.modules.xrd as xrd_pkg
+    import gnovi_plot.modules.xrd.fitting as fitting_mod
+
+    banned = ("scherrer", "williamson", "crystallite", "broadening", "microstrain")
+    for mod in (xrd_pkg, fitting_mod):
+        names = [n for n in dir(mod) if any(b in n.lower() for b in banned)]
+        assert names == []

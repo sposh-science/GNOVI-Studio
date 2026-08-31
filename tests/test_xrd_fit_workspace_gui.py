@@ -157,6 +157,43 @@ def test_selecting_a_peak_proposes_a_visible_fit_window(qapp):
     assert curves is None  # no fit yet
 
 
+def test_proposed_window_is_peak_scaled_not_scan_span_scaled(qapp):
+    # pattern spans 80 deg; peaks have FWHM ~0.24 deg. XRD-3C must propose a
+    # window scaled to the local peak (~+/- 4 FWHM ~ 2 deg), not to the scan
+    # span (the old span/100 fallback gave ~+/- 3.2 deg -> 6.4 deg wide).
+    _figure, section = _bare_section()
+    section.fit_peak_combo.setCurrentIndex(0)
+    span = section.fit_max_spin.value() - section.fit_min_spin.value()
+    assert 0.3 < span < 3.0
+
+
+def test_fit_records_local_halfmax_initialization_provenance(qapp):
+    _figure, section = _bare_section()
+    result = _select_first_peak_and_fit(section)
+    p = result.parameters
+    assert p["initial_width_method"] == "local_halfmax"
+    assert p["initial_width_2theta"] == pytest.approx(p["initial_params"]["fwhm"])
+    # heuristic initializer is close to, but distinct from, the fitted Gamma
+    assert p["initial_width_2theta"] != pytest.approx(result.fwhm, rel=1e-9)
+    assert result.fwhm == pytest.approx(0.2355, rel=0.15)  # sigma 0.10 -> FWHM
+
+
+def test_manually_widened_window_is_the_authoritative_fit_window(qapp):
+    # provenance must not imply the initialization width set the window
+    _figure, section = _bare_section()
+    section.fit_peak_combo.setCurrentIndex(0)
+    section.fit_model_combo.setCurrentIndex(section.fit_model_combo.findData(GAUSSIAN))
+    section.fit_min_spin.setValue(section.fit_min_spin.value() - 0.5)
+    section.fit_max_spin.setValue(section.fit_max_spin.value() + 0.5)
+    edited = (section.fit_min_spin.value(), section.fit_max_spin.value())
+    produced = []
+    section.analysis_result_ready.connect(produced.append)
+    section._on_fit_peak_clicked()
+    result = produced[-1]
+    assert tuple(result.fit_window) == pytest.approx(edited)
+    assert result.parameters["fit_window"] == pytest.approx(list(edited))
+
+
 def test_editing_the_window_updates_the_span_and_invalidates_the_fit(qapp):
     _figure, section = _bare_section()
     _select_first_peak_and_fit(section)
