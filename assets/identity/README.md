@@ -1,0 +1,1 @@
+GNOVI-Studio Visual Identity
