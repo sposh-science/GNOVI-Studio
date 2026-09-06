@@ -1,4 +1,8 @@
-# GNOVI Studio
+<p align="center">
+  <img src="assets/identity/gnovi-studio-logo.svg"
+       alt="GNOVI Studio"
+       width="420">
+</p>
 
 [![CI](https://github.com/sposh-science/GNOVI-Studio/actions/workflows/ci.yml/badge.svg)](https://github.com/sposh-science/GNOVI-Studio/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/sposh-science/GNOVI-Studio/actions/workflows/codeql.yml/badge.svg)](https://github.com/sposh-science/GNOVI-Studio/actions/workflows/codeql.yml)
