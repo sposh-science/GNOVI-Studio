@@ -12,10 +12,15 @@ env:
 
 jobs:
   test:
+    name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            name: Linux — PyPI Stack (Ubuntu)
+          - os: windows-latest
+            name: Windows — PyPI Stack
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -54,6 +59,7 @@ jobs:
         # the external setup step this needs.
 
   test-fedora:
+    name: Linux — PyPI Stack (Fedora Container)
     runs-on: ubuntu-latest
     container:
       image: fedora:44
@@ -86,6 +92,7 @@ jobs:
         run: python3.12 -m pytest
 
   test-debian:
+    name: Linux — Debian System Stack
     # Upstream compatibility check against Debian's OWN packaged Python /
     # scientific / Qt stack -- NOT PyPI wheels. The other jobs `pip install`
     # NumPy/SciPy/Matplotlib/PySide6, whose wheels bundle their own FreeType,

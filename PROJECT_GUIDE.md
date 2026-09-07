@@ -931,23 +931,27 @@ current test count. The suite covers:
 Continuous integration — three workflows run on every push/PR to `main`, all on
 the Qt `offscreen` platform:
 
-- `.github/workflows/ci.yml` (`CI`) runs the full suite four ways:
-  - **`test (ubuntu-latest)`** — PyPI wheels, Python 3.12; also collects
+- `.github/workflows/ci.yml` (`CI`) runs the full suite four ways (job id
+  `test` is a 2-leg matrix; `test-fedora` and `test-debian` are their own jobs):
+  - **Linux — PyPI Stack (Ubuntu)** — PyPI wheels, Python 3.12; also collects
     coverage (`pytest-cov`, uploaded to Codecov, non-blocking).
-  - **`test (windows-latest)`** — PyPI wheels, Python 3.12.
-  - **`test-fedora`** — PyPI wheels inside a `fedora:44` container on a
-    dnf-provided Python 3.12: a second Linux userland, *not* an RPM
-    dependency stack.
-  - **`test-debian`** — Debian's own apt-packaged NumPy / SciPy / pandas /
-    Matplotlib / SymPy / Pillow / PySide6 on `debian:trixie-slim` (Python
-    3.13, no PyPI wheels, no `pybaselines`); the only distro/system-stack job.
-- `.github/workflows/codeql.yml` (`CodeQL`, check `analyze`) — CodeQL static
-  analysis for Python, plus a weekly schedule.
-- `.github/workflows/authorship-integrity.yml` (check `authorship`) — checks
-  every commit's author / committer / co-author against
-  `githooks/authorized-contributors`.
+  - **Windows — PyPI Stack** — PyPI wheels, Python 3.12.
+  - **Linux — PyPI Stack (Fedora Container)** — PyPI wheels inside a
+    `fedora:44` container on a dnf-provided Python 3.12: a second Linux
+    userland, *not* an RPM dependency stack.
+  - **Linux — Debian System Stack** — Debian's own apt-packaged NumPy / SciPy
+    / pandas / Matplotlib / SymPy / Pillow / PySide6 on `debian:trixie-slim`
+    (Python 3.13, no PyPI wheels, no `pybaselines`); the only distro/system-
+    stack job.
+- `.github/workflows/codeql.yml` (`CodeQL`) — job `analyze`, check **CodeQL
+  Security Analysis** — CodeQL static analysis for Python, plus a weekly
+  schedule.
+- `.github/workflows/authorship-integrity.yml` — job `authorship`, check
+  **Authorship Integrity** — checks every commit's author / committer /
+  co-author against `githooks/authorized-contributors`.
 
 Canonical visible check names — external tooling and any future
 branch-protection rule match on these strings, so do not rename them casually:
-`test (ubuntu-latest)`, `test (windows-latest)`, `test-fedora`, `test-debian`,
-`analyze`, `authorship`.
+`Linux — PyPI Stack (Ubuntu)`, `Windows — PyPI Stack`,
+`Linux — PyPI Stack (Fedora Container)`, `Linux — Debian System Stack`,
+`CodeQL Security Analysis`, `Authorship Integrity`.
