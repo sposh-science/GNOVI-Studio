@@ -1040,7 +1040,12 @@ def test_detection_input_options_invalidated_on_active_panel_switch(qapp):
     manager.add(ds2)
 
     section = XRDAnalysisSection(figure, manager)
-    section.background_method_combo.setCurrentText("arPLS")
+    # A dependency-free background method: this test is about invalidating a
+    # transient preview on a source-context change, not about arPLS -- and
+    # arPLS would need the optional `pybaselines` package (absent on Debian,
+    # in minimal installs), where the missing-dependency QMessageBox blocks.
+    section.background_method_combo.setCurrentText("Polynomial")
+    section.baseline_points_edit.setText("0-30, 1970-1999")
     section._on_preview_background_clicked()
     assert section._background_preview is not None
     options = [section.detection_input_combo.itemData(i) for i in range(section.detection_input_combo.count())]
@@ -1066,7 +1071,10 @@ def test_detection_input_options_invalidated_when_refresh_resolves_a_different_s
     manager.add(ds2)
 
     section = XRDAnalysisSection(figure, manager)
-    section.background_method_combo.setCurrentText("arPLS")
+    # Dependency-free background method -- see the note in
+    # test_detection_input_options_invalidated_on_active_panel_switch.
+    section.background_method_combo.setCurrentText("Polynomial")
+    section.baseline_points_edit.setText("0-30, 1970-1999")
     section._on_preview_background_clicked()
     assert section._background_preview is not None
 
@@ -1090,7 +1098,10 @@ def test_detection_input_options_survive_an_unrelated_refresh_of_the_same_series
     manager.add(ds)
 
     section = XRDAnalysisSection(figure, manager)
-    section.background_method_combo.setCurrentText("arPLS")
+    # Dependency-free background method -- see the note in
+    # test_detection_input_options_invalidated_on_active_panel_switch.
+    section.background_method_combo.setCurrentText("Polynomial")
+    section.baseline_points_edit.setText("0-30, 1970-1999")
     section._on_preview_background_clicked()
     assert section._background_preview is not None
 
