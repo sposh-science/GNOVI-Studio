@@ -14,15 +14,15 @@ def _residual_data():
     return ResidualData(x=x, observed=observed, fitted=fitted, residuals=observed - fitted)
 
 
-def test_window_constructs_as_a_non_modal_top_level_window(qapp):
-    window = ResidualWindow()
+def test_window_constructs_as_a_non_modal_top_level_window(qapp, gui_widget):
+    window = gui_widget(ResidualWindow())
 
     assert window.isWindow()
     assert window.windowModality() == Qt.NonModal
 
 
-def test_window_is_independently_resizable_with_a_sensible_initial_size(qapp):
-    window = ResidualWindow()
+def test_window_is_independently_resizable_with_a_sensible_initial_size(qapp, gui_widget):
+    window = gui_widget(ResidualWindow())
 
     assert window.width() > 100
     assert window.height() > 100
@@ -32,8 +32,8 @@ def test_window_is_independently_resizable_with_a_sensible_initial_size(qapp):
     assert window.size().height() == 600
 
 
-def test_show_residuals_sets_title_and_forwards_data_to_the_plot(qapp):
-    window = ResidualWindow()
+def test_show_residuals_sets_title_and_forwards_data_to_the_plot(qapp, gui_widget):
+    window = gui_widget(ResidualWindow())
     data = _residual_data()
 
     window.show_residuals(
@@ -51,18 +51,18 @@ def test_show_residuals_sets_title_and_forwards_data_to_the_plot(qapp):
     assert collections[0].get_offsets().shape[0] == len(data.x)
 
 
-def test_show_residuals_makes_the_window_visible(qapp):
-    window = ResidualWindow()
+def test_show_residuals_makes_the_window_visible(qapp, gui_widget):
+    window = gui_widget(ResidualWindow())
     window.show_residuals(_residual_data(), x_label="x", y_label="Residual", title="Residuals")
 
     assert window.isVisible()
 
 
-def test_closing_does_not_destroy_the_window_so_it_can_be_reshown(qapp):
+def test_closing_does_not_destroy_the_window_so_it_can_be_reshown(qapp, gui_widget):
     """WA_DeleteOnClose must be left unset -- closing (the platform close
     button, or `.close()`) hides a plain top-level QWidget rather than
     destroying it, so the same instance can be reused."""
-    window = ResidualWindow()
+    window = gui_widget(ResidualWindow())
     window.show_residuals(_residual_data(), x_label="x", y_label="Residual", title="Residuals")
     assert window.isVisible()
 
@@ -76,8 +76,8 @@ def test_closing_does_not_destroy_the_window_so_it_can_be_reshown(qapp):
     assert window.windowTitle() == "Residuals again"
 
 
-def test_repeated_show_residuals_calls_do_not_accumulate_plot_artists(qapp):
-    window = ResidualWindow()
+def test_repeated_show_residuals_calls_do_not_accumulate_plot_artists(qapp, gui_widget):
+    window = gui_widget(ResidualWindow())
     window.show_residuals(_residual_data(), x_label="x", y_label="Residual", title="a")
     window.show_residuals(_residual_data(), x_label="x", y_label="Residual", title="b")
 

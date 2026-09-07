@@ -250,14 +250,14 @@ def test_provenance_section_is_collapsed_by_default(qapp):
 # --- Residuals ---------------------------------------------------------------
 
 
-def _view_with_resolvable_fit(model=LINEAR):
+def _view_with_resolvable_fit(gui_widget, model=LINEAR):
     ds = _make_dataset()
     series = PlotSeries.line(ds, "x", "y", label="my series")
     figure = GnoviFigure()
     figure.add_series(series)
     manager = DatasetManager()
     manager.add(ds)
-    view = _make_view(figure=figure, manager=manager)
+    view = gui_widget(_make_view(figure=figure, manager=manager))
 
     result = fit_curve(
         ds.dataframe["x"].to_numpy(),
@@ -285,8 +285,8 @@ def test_analysis_result_view_no_longer_embeds_a_residual_canvas(qapp):
     assert not hasattr(view, "_residual_plot")
 
 
-def test_view_residuals_click_opens_window_with_correct_data_and_title(qapp):
-    view, result = _view_with_resolvable_fit()
+def test_view_residuals_click_opens_window_with_correct_data_and_title(qapp, gui_widget):
+    view, result = _view_with_resolvable_fit(gui_widget)
     view.show_result(result)
     assert view._view_residuals_button.isVisibleTo(view)
     assert view._residual_window is None  # not created until first click
@@ -300,8 +300,8 @@ def test_view_residuals_click_opens_window_with_correct_data_and_title(qapp):
     assert window.windowTitle() == "Residuals — linear fit — my series"
 
 
-def test_repeated_clicks_reuse_the_same_residual_window_instance(qapp):
-    view, result = _view_with_resolvable_fit()
+def test_repeated_clicks_reuse_the_same_residual_window_instance(qapp, gui_widget):
+    view, result = _view_with_resolvable_fit(gui_widget)
     view.show_result(result)
 
     view._view_residuals_button.click()
@@ -312,8 +312,8 @@ def test_repeated_clicks_reuse_the_same_residual_window_instance(qapp):
     assert view._residual_window is first_window
 
 
-def test_closing_and_reopening_the_residual_window_reuses_the_instance(qapp):
-    view, result = _view_with_resolvable_fit()
+def test_closing_and_reopening_the_residual_window_reuses_the_instance(qapp, gui_widget):
+    view, result = _view_with_resolvable_fit(gui_widget)
     view.show_result(result)
 
     view._view_residuals_button.click()
@@ -338,8 +338,8 @@ def test_show_residuals_reports_unavailable_when_source_cannot_be_resolved(qapp)
     assert view._residuals_unavailable_label.isVisibleTo(view)
 
 
-def test_open_residual_window_updates_in_place_for_a_new_valid_fit(qapp):
-    view, result = _view_with_resolvable_fit()
+def test_open_residual_window_updates_in_place_for_a_new_valid_fit(qapp, gui_widget):
+    view, result = _view_with_resolvable_fit(gui_widget)
     view.show_result(result)
     view._view_residuals_button.click()
     window = view._residual_window
@@ -367,8 +367,8 @@ def test_open_residual_window_updates_in_place_for_a_new_valid_fit(qapp):
     assert window.windowTitle() == "Residuals — linear fit — second series"
 
 
-def test_open_residual_window_hides_when_new_result_does_not_support_residuals(qapp):
-    view, result = _view_with_resolvable_fit()
+def test_open_residual_window_hides_when_new_result_does_not_support_residuals(qapp, gui_widget):
+    view, result = _view_with_resolvable_fit(gui_widget)
     view.show_result(result)
     view._view_residuals_button.click()
     window = view._residual_window
@@ -380,8 +380,8 @@ def test_open_residual_window_hides_when_new_result_does_not_support_residuals(q
     assert not window.isVisible()
 
 
-def test_open_residual_window_hides_when_new_result_source_cannot_resolve(qapp):
-    view, result = _view_with_resolvable_fit()
+def test_open_residual_window_hides_when_new_result_source_cannot_resolve(qapp, gui_widget):
+    view, result = _view_with_resolvable_fit(gui_widget)
     view.show_result(result)
     view._view_residuals_button.click()
     window = view._residual_window
@@ -395,8 +395,8 @@ def test_open_residual_window_hides_when_new_result_source_cannot_resolve(qapp):
     assert view._residuals_unavailable_label.isVisibleTo(view)
 
 
-def test_residual_window_hidden_on_clear(qapp):
-    view, result = _view_with_resolvable_fit()
+def test_residual_window_hidden_on_clear(qapp, gui_widget):
+    view, result = _view_with_resolvable_fit(gui_widget)
     view.show_result(result)
     view._view_residuals_button.click()
     window = view._residual_window
