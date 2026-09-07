@@ -29,3 +29,5 @@ CLAUDE.md
 *.gnovi
 *.png
 !docs/**/*.png
+# Shipped application icon resources (see packaging/linux/README.md)
+!gnovi_plot/resources/icons/*.png
