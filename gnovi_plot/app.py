@@ -3,6 +3,8 @@ import sys
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from gnovi_plot.core.app_info import APP_NAME
+from gnovi_plot.gui.app_icon import ICON_NAME, app_icon
 from gnovi_plot.gui.main_window import MainWindow
 
 _logger = logging.getLogger("gnovi_plot")
@@ -32,6 +34,13 @@ def _install_excepthook() -> None:
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(APP_NAME)
+    # Associates the running process with packaging/linux/gnovi-studio.desktop
+    # (Wayland app_id / X11 WM_CLASS), so the desktop environment shows the
+    # installed launcher's name and icon for GNOVI's windows.
+    app.setDesktopFileName(ICON_NAME)
+    app.setWindowIcon(app_icon())
     _install_excepthook()
     window = MainWindow()
     window.show()

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=GNOVI Studio
+GenericName=Scientific Plotting and Analysis
+Comment=Scientific plotting, data analysis, and publication-quality figures
+Comment[fr]=Tracé scientifique, analyse de données et figures de qualité publication
+Exec=gnovi-studio
+Icon=gnovi-studio
+Terminal=false
+Categories=Science;Education;DataVisualization;
+Keywords=plotting;graphing;curve-fitting;data-analysis;visualization;figures;matplotlib;XRD;voltammetry;science;
+StartupNotify=true
+StartupWMClass=gnovi-studio
