@@ -12,10 +12,15 @@ env:
 
 jobs:
   test:
+    name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            name: Linux — PyPI Stack (Ubuntu)
+          - os: windows-latest
+            name: Windows — PyPI Stack
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -38,18 +43,6 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: pytest --cov=gnovi_plot --cov-report=term-missing --cov-report=xml
 
-      - name: Windows Qt/geometry diagnostics (temporary, PR #2 investigation)
-        if: matrix.os == 'windows-latest'
-        continue-on-error: true
-        run: python scripts/_windows_qt_diagnostics.py
-
-      - name: Windows Qt/geometry diagnostics with offscreen size= override (temporary)
-        if: matrix.os == 'windows-latest'
-        continue-on-error: true
-        env:
-          QT_QPA_PLATFORM: offscreen:size=1920x1080
-        run: python scripts/_windows_qt_diagnostics.py
-
       - name: Run tests (Windows)
         if: matrix.os == 'windows-latest'
         run: pytest
@@ -66,6 +59,7 @@ jobs:
         # the external setup step this needs.
 
   test-fedora:
+    name: Linux — PyPI Stack (Fedora Container)
     runs-on: ubuntu-latest
     container:
       image: fedora:44
@@ -98,6 +92,7 @@ jobs:
         run: python3.12 -m pytest
 
   test-debian:
+    name: Linux — Debian System Stack
     # Upstream compatibility check against Debian's OWN packaged Python /
     # scientific / Qt stack -- NOT PyPI wheels. The other jobs `pip install`
     # NumPy/SciPy/Matplotlib/PySide6, whose wheels bundle their own FreeType,
