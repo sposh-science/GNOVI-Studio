@@ -13,14 +13,14 @@ def _residual_data():
     return ResidualData(x=x, observed=observed, fitted=fitted, residuals=observed - fitted)
 
 
-def test_widget_constructs_and_draws_without_error(qapp):
-    widget = ResidualPlotWidget()
+def test_widget_constructs_and_draws_without_error(qapp, gui_widget):
+    widget = gui_widget(ResidualPlotWidget())
     widget.plot_residuals(_residual_data())
     # No exception -- the offscreen canvas rendered something.
 
 
-def test_plot_uses_discrete_points_not_a_connected_line(qapp):
-    widget = ResidualPlotWidget()
+def test_plot_uses_discrete_points_not_a_connected_line(qapp, gui_widget):
+    widget = gui_widget(ResidualPlotWidget())
     data = _residual_data()
     widget.plot_residuals(data)
 
@@ -34,8 +34,8 @@ def test_plot_uses_discrete_points_not_a_connected_line(qapp):
     assert len(lines) == 1
 
 
-def test_zero_reference_line_is_present_at_y_equals_zero(qapp):
-    widget = ResidualPlotWidget()
+def test_zero_reference_line_is_present_at_y_equals_zero(qapp, gui_widget):
+    widget = gui_widget(ResidualPlotWidget())
     widget.plot_residuals(_residual_data())
 
     lines = widget._axes.get_lines()
@@ -44,24 +44,24 @@ def test_zero_reference_line_is_present_at_y_equals_zero(qapp):
     assert all(y == 0 for y in y_data)
 
 
-def test_axis_labels_use_the_supplied_column_names(qapp):
-    widget = ResidualPlotWidget()
+def test_axis_labels_use_the_supplied_column_names(qapp, gui_widget):
+    widget = gui_widget(ResidualPlotWidget())
     widget.plot_residuals(_residual_data(), x_label="Potential (V)", y_label="Residual (Current)")
 
     assert widget._axes.get_xlabel() == "Potential (V)"
     assert widget._axes.get_ylabel() == "Residual (Current)"
 
 
-def test_plot_residuals_can_be_called_repeatedly(qapp):
-    widget = ResidualPlotWidget()
+def test_plot_residuals_can_be_called_repeatedly(qapp, gui_widget):
+    widget = gui_widget(ResidualPlotWidget())
     widget.plot_residuals(_residual_data())
     widget.plot_residuals(_residual_data())  # must not accumulate/crash
 
     assert len(widget._axes.collections) == 1
 
 
-def test_clear_removes_drawn_artists(qapp):
-    widget = ResidualPlotWidget()
+def test_clear_removes_drawn_artists(qapp, gui_widget):
+    widget = gui_widget(ResidualPlotWidget())
     widget.plot_residuals(_residual_data())
     widget.clear()
 

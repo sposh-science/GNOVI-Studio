@@ -14,6 +14,36 @@ def qapp():
     yield app
 
 
+@pytest.fixture
+def gui_widget(qapp):
+    """Own the transient top-level widgets a test builds, so their Qt (C++)
+    lifetime ends at this fixture's teardown -- the test's own ownership
+    boundary -- rather than whenever the test function's local reference
+    happens to be released.
+
+    Matplotlib's Qt backend arms a one-shot `FigureCanvasQTAgg._draw_idle`
+    timer on every draw. If the widget (and thus its canvas) is freed before
+    the event loop next spins, that callback fires against an already-deleted
+    C++ object: a `RuntimeError` that Python 3.13 escalates to a fatal
+    `SystemError` in whichever test next pumps the loop. Spinning the loop
+    once here while the canvas is still alive lets the pending draw finish;
+    `deleteLater()` then tears the widget down deterministically.
+
+    Usage: `widget = gui_widget(ResidualPlotWidget())`.
+    """
+    owned = []
+
+    def own(widget):
+        owned.append(widget)
+        return widget
+
+    yield own
+    qapp.processEvents()
+    for widget in owned:
+        widget.deleteLater()
+    qapp.processEvents()
+
+
 @pytest.fixture(autouse=True)
 def _auto_discard_unsaved_project(monkeypatch):
     """MainWindow.closeEvent shows a modal Save/Discard/Cancel QMessageBox
