@@ -931,18 +931,21 @@ current test count. The suite covers:
 Continuous integration — three workflows run on every push/PR to `main`, all on
 the Qt `offscreen` platform:
 
-- `.github/workflows/ci.yml` (`CI`) runs the full suite four ways (job id
-  `test` is a 2-leg matrix; `test-fedora` and `test-debian` are their own jobs):
-  - **Linux — PyPI Stack (Ubuntu)** — PyPI wheels, Python 3.12; also collects
-    coverage (`pytest-cov`, uploaded to Codecov, non-blocking).
-  - **Windows — PyPI Stack** — PyPI wheels, Python 3.12.
-  - **Linux — PyPI Stack (Fedora Container)** — PyPI wheels inside a
-    `fedora:44` container on a dnf-provided Python 3.12: a second Linux
-    userland, *not* an RPM dependency stack.
+- `.github/workflows/ci.yml` (`CI`) runs the full suite four ways, all in
+  parallel (job id `test` is a 2-leg matrix; `test-fedora` and `test-debian`
+  are separate jobs). Listed system-stack first, then the PyPI stacks — GitHub's
+  Checks UI does not preserve any declared order, so this is a reading order
+  only:
   - **Linux — Debian System Stack** — Debian's own apt-packaged NumPy / SciPy
     / pandas / Matplotlib / SymPy / Pillow / PySide6 on `debian:trixie-slim`
     (Python 3.13, no PyPI wheels, no `pybaselines`); the only distro/system-
     stack job.
+  - **Linux — PyPI Stack (Ubuntu)** — PyPI wheels, Python 3.12; also collects
+    coverage (`pytest-cov`, uploaded to Codecov, non-blocking).
+  - **Linux — PyPI Stack (Fedora Container)** — PyPI wheels inside a
+    `fedora:44` container on a dnf-provided Python 3.12: a second Linux
+    userland, *not* an RPM dependency stack.
+  - **Windows — PyPI Stack** — PyPI wheels, Python 3.12.
 - `.github/workflows/codeql.yml` (`CodeQL`) — job `analyze`, check **CodeQL
   Security Analysis** — CodeQL static analysis for Python, plus a weekly
   schedule.
@@ -952,6 +955,6 @@ the Qt `offscreen` platform:
 
 Canonical visible check names — external tooling and any future
 branch-protection rule match on these strings, so do not rename them casually:
-`Linux — PyPI Stack (Ubuntu)`, `Windows — PyPI Stack`,
-`Linux — PyPI Stack (Fedora Container)`, `Linux — Debian System Stack`,
+`Linux — Debian System Stack`, `Linux — PyPI Stack (Ubuntu)`,
+`Linux — PyPI Stack (Fedora Container)`, `Windows — PyPI Stack`,
 `CodeQL Security Analysis`, `Authorship Integrity`.
