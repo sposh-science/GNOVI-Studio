@@ -10,6 +10,19 @@ readme = "README.md"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 requires-python = ">=3.9"
+authors = [
+    { name = "Praveen Patil" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
 dependencies = [
     "PySide6",
     "matplotlib",
@@ -28,6 +41,17 @@ build = ["pyinstaller"]
 # GNOVI install stays lightweight; its absence is detected at call time
 # and raises a clear PybaselinesNotAvailableError, never breaks startup.
 xrd = ["pybaselines"]
+
+[project.urls]
+Homepage = "https://github.com/sposh-science/GNOVI-Studio"
+Repository = "https://github.com/sposh-science/GNOVI-Studio"
+Issues = "https://github.com/sposh-science/GNOVI-Studio/issues"
+
+# GUI launcher: `gnovi-studio` starts the desktop application
+# (gnovi_plot.app.main). Uses gui-scripts so the Windows wrapper is a
+# windowed executable with no console; on Linux/macOS it is a plain script.
+[project.gui-scripts]
+gnovi-studio = "gnovi_plot.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["gnovi_plot"]
