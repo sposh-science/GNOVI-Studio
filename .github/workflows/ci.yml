@@ -117,8 +117,7 @@ jobs:
     # drop `continue-on-error` to make it a normal blocking job.
     runs-on: ubuntu-latest
     continue-on-error: true
-    # Safety net while the job is still being characterised: a hung test
-    # must not wedge the runner for the 6 h GitHub default.
+    # A hung test must not wedge the runner for the 6 h GitHub default.
     timeout-minutes: 35
     container:
       image: debian:trixie-slim
@@ -184,12 +183,8 @@ jobs:
       - name: Run the test suite against the Debian stack
         env:
           PYTHONPATH: ${{ github.workspace }}
-          PYTHONUNBUFFERED: "1"
-        # Diagnostic settings while the job is being characterised:
-        #  -v / unbuffered  -> the running test name is live in the log
-        #  -rA              -> full outcome + failure-reason summary
-        #  --timeout=300    -> a wedged test (e.g. an unstubbed modal
-        #                      dialog under the offscreen platform) is
-        #                      turned into a failure with a traceback
-        #                      instead of hanging the job
-        run: python3 -m pytest -v -rA --timeout=300
+        # `--timeout` turns a wedged test (e.g. an unstubbed modal dialog
+        # under the offscreen platform) into a failure with a traceback
+        # instead of letting it hang the job; `-rs` lists the skip reasons
+        # (the pybaselines skips are part of what this job checks).
+        run: python3 -m pytest -q -rs --timeout=300
