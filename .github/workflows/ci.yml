@@ -116,7 +116,6 @@ jobs:
     # green (it could not be validated in a container locally). Once green,
     # drop `continue-on-error` to make it a normal blocking job.
     runs-on: ubuntu-latest
-    continue-on-error: true
     # A hung test must not wedge the runner for the 6 h GitHub default.
     timeout-minutes: 35
     container:
