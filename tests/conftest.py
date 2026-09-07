@@ -1,9 +1,10 @@
+import gc
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QCoreApplication, QEvent, QSettings
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 
@@ -39,3 +40,39 @@ def _isolated_qsettings(tmp_path):
     QSettings.setDefaultFormat(QSettings.IniFormat)
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _drain_qt_between_tests():
+    """Keep asynchronous Qt/Matplotlib work from one test out of the next.
+
+    The `qapp` QApplication is session-scoped, so anything queued on its
+    event loop outlives the test that queued it. In particular Matplotlib's
+    Qt backend schedules a one-shot `FigureCanvasQTAgg._draw_idle()` timer,
+    which keeps its (now unreferenced) canvas alive; if that callback later
+    fires against a canvas whose C++ half has been torn down it raises
+    `RuntimeError`. Python 3.12 masks it (Matplotlib swallows it); Python
+    3.13 re-raises it as an uncatchable `SystemError` inside whichever test
+    happens to pump the loop next.
+
+    A closed `QMainWindow` / bare `QWidget` also stays owned by the
+    QApplication (it is not a Python reference, so `gc` cannot reclaim it):
+    over a full run the session would otherwise hold thousands of hidden
+    windows, which both leaks memory and slows every later Qt call.
+
+    So after every test: pump the loop (fire queued callbacks while their
+    objects are still alive), schedule every leftover top-level widget for
+    deletion, run those deletions, then collect -- leaving the next test an
+    empty event loop and no lingering widgets. `deleteLater()` (not
+    `close()`) is used so no `closeEvent` handler runs here.
+    """
+    yield
+    app = QApplication.instance()
+    if app is None:
+        return
+    app.processEvents()
+    app.processEvents()
+    for widget in app.topLevelWidgets():
+        widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    gc.collect()
