@@ -172,24 +172,55 @@ def test_scientific_offset_text_size_is_dpi_invariant():
 # --- DPI changes resolution only, never composition --------------------------------
 
 
-def test_legend_to_axes_ratio_is_identical_across_dpi():
-    def _legend_ratio(dpi: int) -> float:
+def test_legend_and_axes_heights_scale_linearly_with_dpi():
+    """DPI changes resolution only, never composition: raising the export
+    DPI must scale the axes box and the legend box by the *same* factor, so
+    the legend's share of the panel -- and the whole figure's composition --
+    is unchanged.
+
+    A real regression here is layout that tracks DPI *non-linearly* -- e.g.
+    a legend whose size is computed in device pixels and ends up ~DPI x too
+    large, or one that is pinned in points and does not scale at all. Either
+    shows up as a 50-100 %+ deviation from linear scaling.
+
+    The axes box is pure layout arithmetic (a fixed figure-fraction times
+    the figure's pixel size) and scales linearly to floating point. The
+    legend box is sized from rendered glyph metrics, which hint to the pixel
+    grid differently across Matplotlib/FreeType builds and across DPIs; that
+    is normal cross-toolchain variation -- measured here at up to ~3 %
+    against Matplotlib 3.10 + FreeType 2.6.1 -- not a composition change, so
+    the legend check carries a correspondingly wider tolerance.
+
+    Georges Khaznadar's Debian packaging surfaced this: a distro Matplotlib
+    linked against the system FreeType (rather than the wheel's bundled
+    copy) drifts ~1-3 %, which the previous exact-ratio ``rel=0.01``
+    assertion wrongly rejected as a layout bug (GitHub issue #30).
+    """
+
+    def _heights(dpi: int) -> tuple[float, float]:
         figure = GnoviFigure()
         figure.add_series(PlotSeries.line(_dataset(), "x", "y", label="Series A very long label"))
         figure.active_panel.legend_visible = True
         mpl_figure, axes_list = _rendered(figure, dpi=dpi)
         ax = axes_list[0]
         renderer = mpl_figure.canvas.get_renderer()
-        ax_h = ax.get_window_extent(renderer=renderer).height
-        legend_h = ax.get_legend().get_window_extent(renderer=renderer).height
-        return legend_h / ax_h
+        return (
+            ax.get_legend().get_window_extent(renderer=renderer).height,
+            ax.get_window_extent(renderer=renderer).height,
+        )
 
-    ratio_150 = _legend_ratio(150)
+    legend_150, axes_150 = _heights(150)
     for dpi in (300, 600):
-        # A small tolerance for per-DPI text-rasterization pixel rounding
-        # (font hinting snaps glyph metrics to whole pixels differently at
-        # different resolutions) -- not a sign of proportional scaling.
-        assert _legend_ratio(dpi) == pytest.approx(ratio_150, rel=0.01)
+        legend_h, axes_h = _heights(dpi)
+        scale = dpi / 150.0
+        # Axes box: pure layout arithmetic -- must scale exactly linearly.
+        assert axes_h == pytest.approx(axes_150 * scale, rel=1e-6)
+        # Legend box: text-metric driven -- linear within cross-toolchain
+        # Matplotlib/FreeType glyph-hinting variation, never proportional
+        # to DPI (a real regression is a 50 %+ deviation, not ~3 %).
+        assert legend_h == pytest.approx(legend_150 * scale, rel=0.05)
+        # Stated directly: the legend's share of the panel is DPI-stable.
+        assert (legend_h / axes_h) == pytest.approx(legend_150 / axes_150, rel=0.05)
 
 
 def test_300_vs_600_dpi_axes_frame_fraction_is_identical():
