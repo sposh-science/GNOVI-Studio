@@ -111,10 +111,6 @@ jobs:
     # lintian / sbuild / autopkgtest / piuparts. The Debian Science Team
     # maintains the actual packaging on Salsa; this only tests the same
     # upstream source tree the other jobs test, against apt-provided libs.
-    #
-    # `continue-on-error` until the first GitHub Actions run is confirmed
-    # green (it could not be validated in a container locally). Once green,
-    # drop `continue-on-error` to make it a normal blocking job.
     runs-on: ubuntu-latest
     # A hung test must not wedge the runner for the 6 h GitHub default.
     timeout-minutes: 35
