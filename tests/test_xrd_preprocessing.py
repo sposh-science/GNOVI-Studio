@@ -20,6 +20,22 @@ def _gaussian(x: np.ndarray, center: float, amplitude: float, sigma: float) -> n
     return amplitude * np.exp(-((x - center) ** 2) / (2 * sigma**2))
 
 
+#: `pybaselines` is an OPTIONAL dependency (the ``xrd`` extra); it is absent
+#: in minimal installs and in every current distro package (Debian ships no
+#: `python3-pybaselines`). Tests that actually exercise the arPLS algorithm
+#: are skipped when it is missing -- reusing `preprocessing`'s own runtime
+#: detection so there is a single source of truth. GNOVI's *missing-
+#: dependency* behaviour (a clear `PybaselinesNotAvailableError`, never an
+#: import-time failure) is verified separately and always runs, via
+#: `test_arpls_baseline_raises_a_clear_error_without_pybaselines` (which
+#: monkeypatches the flag) and `test_arpls_baseline_rejects_shape_mismatch`
+#: (input validation happens before the availability check).
+requires_pybaselines = pytest.mark.skipif(
+    not xrd_preprocessing._PYBASELINES_AVAILABLE,
+    reason="requires the optional 'pybaselines' package (install the 'xrd' extra)",
+)
+
+
 # --- polynomial_baseline -------------------------------------------------
 
 
@@ -104,6 +120,7 @@ def test_polynomial_baseline_rejects_negative_degree():
 # --- arpls_baseline --------------------------------------------------------
 
 
+@requires_pybaselines
 def test_arpls_baseline_estimates_a_curved_background_within_tolerance():
     """arPLS is not exact-pointwise like the polynomial primitive (that's
     the whole point of a data-driven baseline) -- so this validates a
@@ -126,6 +143,7 @@ def test_arpls_baseline_estimates_a_curved_background_within_tolerance():
     assert result.method == "arpls"
 
 
+@requires_pybaselines
 def test_arpls_baseline_does_not_mutate_inputs():
     two_theta = np.linspace(10.0, 90.0, 300)
     intensity = 20.0 + 0.05 * two_theta + _gaussian(two_theta, 50.0, 300.0, 0.2)
@@ -136,6 +154,7 @@ def test_arpls_baseline_does_not_mutate_inputs():
     np.testing.assert_array_equal(intensity, original)
 
 
+@requires_pybaselines
 def test_arpls_baseline_is_deterministic():
     two_theta = np.linspace(10.0, 90.0, 300)
     intensity = 20.0 + 0.05 * two_theta + _gaussian(two_theta, 50.0, 300.0, 0.2)
@@ -146,6 +165,7 @@ def test_arpls_baseline_is_deterministic():
     np.testing.assert_array_equal(first.baseline, second.baseline)
 
 
+@requires_pybaselines
 def test_arpls_baseline_broad_hump_limitation():
     """Documents a real scientific limitation rather than just coverage: a
     BROAD hump (e.g. an amorphous halo) with SHARP peaks on top is a case
