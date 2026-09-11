@@ -78,8 +78,9 @@ Linux environment.
 
 Continuous integration currently validates:
 
-- Ubuntu
+- Debian
 - Fedora
+- Ubuntu
 - Windows
 
 macOS is not currently CI-validated.
