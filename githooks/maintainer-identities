@@ -1,0 +1,22 @@
+# Approved GNOVI Studio maintainer identities.
+#
+# Used two ways by githooks/authorship-check.sh:
+#
+#   * A commit whose Author, Committer, or co-author identity exactly
+#     matches a line below is classified MAINTAINER.
+#   * A commit whose Author/Committer/co-author *name* matches one of
+#     these display names but whose full "Name <email>" does NOT match
+#     any line below is classified as a maintainer-identity mismatch
+#     (a hard failure) -- it is claiming to be the maintainer under an
+#     identity this file doesn't recognize.
+#
+# This file is NOT a contributor allowlist. External contributors do
+# not need to be listed here to contribute under their own identity --
+# see githooks/prohibited-attribution for the separate, narrow list
+# that actually gates commits.
+#
+# To add a genuine additional maintainer identity, append it here in an
+# ordinary reviewed commit.
+
+wavicles <praveenkumar103@gmail.com>
+Praveen (Gnovi) <wavicles@users.noreply.github.com>

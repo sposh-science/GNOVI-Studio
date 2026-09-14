@@ -1,0 +1,33 @@
+# Prohibited AI / tool / model / automated-service attribution identities
+# for GNOVI Studio, used by githooks/authorship-check.sh.
+#
+# This is NOT a contributor allowlist. Ordinary human contributors --
+# known or unknown -- are welcome and are never rejected merely for being
+# unrecognized. A commit is rejected only if one of its identities
+# (Author, Committer, or any "...-by" trailer such as Co-authored-by)
+# exactly matches an entry below.
+#
+# Two matching modes, one identity per line:
+#
+#   * A line containing "<...>" is matched as an EXACT "Name <email>"
+#     string against the full identity.
+#   * A line with no "<...>" is matched, case-insensitively, as an EXACT
+#     whole Name -- never a substring -- against the *name* part only of
+#     an identity.
+#
+# Deliberately NOT included: bare model/company names ("Claude", "Gemini",
+# "OpenAI", "Anthropic", "Google", ...) or email-domain patterns
+# (e.g. "*@anthropic.com"). Those can be genuine human names, or genuine
+# human contributors employed by those companies -- see
+# githooks/README.md. Only identities that are themselves the name of an
+# AI/tool/service, never a plausible human name, belong here.
+#
+# To add a newly-observed AI/tool identity, append it here in an ordinary
+# reviewed commit.
+
+Claude Code
+ChatGPT
+GitHub Copilot
+Gemini CLI
+AI Assistant
+Claude <noreply@anthropic.com>
