@@ -11,8 +11,84 @@ env:
   QT_QPA_PLATFORM: offscreen
 
 jobs:
+  # Detects, for pull_request events only, whether every changed file
+  # belongs to a category that cannot affect application behaviour (docs,
+  # githooks/, LICENSE, CITATION.cff, the Authorship Review workflow
+  # itself). If so, the expensive platform test matrix below is skipped
+  # for THIS PR -- push-to-main and workflow_dispatch are always left at
+  # matrix_required=true, so `main` always gets full validation regardless
+  # of what any individual PR's CI ran. Deliberately conservative: any
+  # file outside the safe list, any unknown/new path, and any mixed PR
+  # containing even one non-safe file all resolve to matrix_required=true.
+  #
+  # Reads the PR's changed-file list from the GitHub API (gh, preinstalled
+  # on hosted runners) rather than a local `git diff`, so the result does
+  # not depend on checkout depth. No checkout is performed by this job.
+  changes:
+    name: Detect changed files
+    runs-on: ubuntu-latest
+    outputs:
+      matrix_required: ${{ steps.classify.outputs.matrix_required }}
+    steps:
+      - name: Classify this PR's changed files
+        id: classify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Safe-to-skip: docs, githooks/, repo metadata, and the
+          # Authorship Review workflow itself. Everything else defaults to
+          # requiring the matrix -- this is an allowlist of what may be
+          # skipped, never a list of what must run.
+          is_safe_path() {
+            case "$1" in
+              *.md) return 0 ;;
+              docs/*) return 0 ;;
+              githooks/*) return 0 ;;
+              LICENSE) return 0 ;;
+              CITATION.cff) return 0 ;;
+              .github/workflows/authorship-integrity.yml) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "not a pull_request event (${{ github.event_name }}) -- full matrix"
+            echo "matrix_required=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --paginate --jq '.[] | .filename, (.previous_filename // empty)')
+
+          if [ -z "$files" ]; then
+            echo "no changed-file data returned -- failing safe to full matrix"
+            echo "matrix_required=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          required=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if is_safe_path "$f"; then
+              echo "  safe:   $f"
+            else
+              echo "  unsafe: $f"
+              required=true
+            fi
+          done <<< "$files"
+
+          echo "matrix_required=$required" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Changed-file classification"
+            echo ""
+            echo "\`matrix_required=$required\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   test:
     name: ${{ matrix.name }}
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
@@ -23,32 +99,49 @@ jobs:
             name: Windows — PyPI Stack
     runs-on: ${{ matrix.os }}
     steps:
+      # Every step below is individually gated on matrix_required, rather
+      # than putting `if:` on the job itself. A job-level `if:` on a
+      # matrix job whose `name:` interpolates ${{ matrix.* }} has
+      # documented, inconsistent GitHub Actions behaviour for the
+      # per-leg check names when skipped (the matrix may not expand, or
+      # may not carry its intended name) -- see actions/runner#952 and
+      # actions/runner#2675. Gating every step instead leaves the job
+      # itself, and its matrix expansion into the two named checks below,
+      # completely unaffected: both legs always run, always keep their
+      # usual name, and resolve in a few seconds with every step showing
+      # "skipped" and the job showing success when the matrix isn't
+      # required. test-fedora/test-debian have static names and no
+      # matrix, so they use a plain job-level `if:` instead (see below).
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.matrix_required == 'true'
 
       - uses: actions/setup-python@v5
+        if: needs.changes.outputs.matrix_required == 'true'
         with:
           python-version: "3.12"
 
       - name: Upgrade pip
+        if: needs.changes.outputs.matrix_required == 'true'
         run: python -m pip install --upgrade pip
 
       - name: Install GNOVI + test dependencies
+        if: needs.changes.outputs.matrix_required == 'true'
         run: pip install -e ".[test,xrd]"
 
       - name: Install Qt runtime libraries (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
+        if: needs.changes.outputs.matrix_required == 'true' && matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0
 
       - name: Run tests (Ubuntu, with coverage)
-        if: matrix.os == 'ubuntu-latest'
+        if: needs.changes.outputs.matrix_required == 'true' && matrix.os == 'ubuntu-latest'
         run: pytest --cov=gnovi_plot --cov-report=term-missing --cov-report=xml
 
       - name: Run tests (Windows)
-        if: matrix.os == 'windows-latest'
+        if: needs.changes.outputs.matrix_required == 'true' && matrix.os == 'windows-latest'
         run: pytest
 
       - name: Upload coverage to Codecov
-        if: matrix.os == 'ubuntu-latest'
+        if: needs.changes.outputs.matrix_required == 'true' && matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v4
         with:
           files: ./coverage.xml
@@ -60,6 +153,8 @@ jobs:
 
   test-fedora:
     name: Linux — PyPI Stack (Fedora Container)
+    needs: changes
+    if: needs.changes.outputs.matrix_required == 'true'
     runs-on: ubuntu-latest
     container:
       image: fedora:44
@@ -93,6 +188,8 @@ jobs:
 
   test-debian:
     name: Linux — Debian System Stack
+    needs: changes
+    if: needs.changes.outputs.matrix_required == 'true'
     # Upstream compatibility check against Debian's OWN packaged Python /
     # scientific / Qt stack -- NOT PyPI wheels. The other jobs `pip install`
     # NumPy/SciPy/Matplotlib/PySide6, whose wheels bundle their own FreeType,
