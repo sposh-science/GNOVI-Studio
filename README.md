@@ -181,5 +181,6 @@ GNOVI Studio is licensed under the [GPL-3.0-or-later](LICENSE).
 Bug reports, feature requests, and contributions are welcome. Please open an
 issue at [github.com/sposh-science/GNOVI-Studio/issues](https://github.com/sposh-science/GNOVI-Studio/issues).
 
-For development setup, architecture, and contribution conventions, see
-[PROJECT_GUIDE.md](PROJECT_GUIDE.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute, and
+[PROJECT_GUIDE.md](PROJECT_GUIDE.md) for development setup and
+architecture.
