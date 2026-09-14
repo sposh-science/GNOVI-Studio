@@ -35,10 +35,13 @@ original v0.9.0 release on every project path.
 
 ## Authorship integrity
 
-`githooks/` and `.github/workflows/authorship-integrity.yml` implement an
-authorized-contributor allowlist: only identities listed in
-`githooks/authorized-contributors` (plus the platform merge identity) may
-appear as a commit Author, Committer or `Co-authored-by` trailer. The
-check inspects commit metadata only. These files were added during the
-migration and are the only files in this repository that did not exist in
-the pre-migration history.
+`githooks/` and `.github/workflows/authorship-integrity.yml` implement
+Authorship Review: every commit's Author, Committer, and attribution
+trailers (`Co-authored-by` and similar) are reported, and the check fails
+only for an explicit AI/tool/model/assistant identity, or a commit
+claiming the maintainer's identity under an email that doesn't match
+(see `githooks/README.md`). Ordinary human contributors -- known or
+unknown -- are never rejected for being unrecognized. The check inspects
+commit metadata only. These files were added during the migration and
+are the only files in this repository that did not exist in the
+pre-migration history.

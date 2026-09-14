@@ -950,8 +950,10 @@ the Qt `offscreen` platform:
   Security Analysis** — CodeQL static analysis for Python, plus a weekly
   schedule.
 - `.github/workflows/authorship-integrity.yml` — job `authorship`, check
-  **Authorship Integrity** — checks every commit's author / committer /
-  co-author against `githooks/authorized-contributors`.
+  **Authorship Integrity** — an Authorship Review: reports every commit's
+  author / committer / co-authors (Job Summary table), failing only for
+  an explicit AI/tool identity or a mismatched maintainer-identity claim
+  (see `githooks/README.md`); unrecognized human contributors pass.
 
 Canonical visible check names — external tooling and any future
 branch-protection rule match on these strings, so do not rename them casually:

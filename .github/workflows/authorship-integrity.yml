@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Check commit authorship against the authorized-contributor allowlist
+      - name: Authorship Review -- report attribution, fail only on prohibited identities
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
