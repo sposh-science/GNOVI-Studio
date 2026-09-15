@@ -33,6 +33,27 @@ class _DummyResult(AnalysisResult):
         return [("Note", self.note), ("Extra", "42")]
 
 
+@dataclass
+class _TableResult(_DummyResult):
+    """A `_DummyResult` that also provides `detail_table()` -- a generic
+    stand-in for any result with a row-per-record table (XRD's detected-
+    peaks table is the current real example), so the detail table's own
+    layout behaviour can be tested without depending on a concrete XRD
+    result. `row_count` rows are just enough to exercise "many rows,
+    scrolls internally" without needing XRD-specific data."""
+
+    kind: ClassVar[str] = "table-dummy"
+    row_count: int = 30
+
+    def detail_table(self) -> tuple[list[str], list[list[str]]]:
+        columns = ["#", "Value"]
+        rows = [[str(i), str(i * 1.5)] for i in range(self.row_count)]
+        return columns, rows
+
+    def detail_table_title(self) -> str:
+        return "Rows"
+
+
 def _make_dummy(**overrides) -> _DummyResult:
     defaults = dict(
         source_dataset_id="dataset-1",
@@ -52,6 +73,28 @@ def _make_dummy(**overrides) -> _DummyResult:
     )
     defaults.update(overrides)
     return _DummyResult(**defaults)
+
+
+def _make_table_result(**overrides) -> _TableResult:
+    defaults = dict(
+        source_dataset_id="dataset-1",
+        source_dataset_name=None,
+        source_series_id=None,
+        source_series_label=None,
+        x_column="x",
+        y_column="y",
+        row_range=None,
+        source_panel_id=None,
+        result_id="table-result-1",
+        engine=ENGINE_GNOVI,
+        engine_version=None,
+        operation="test",
+        parameters={},
+        note="hello",
+        row_count=30,
+    )
+    defaults.update(overrides)
+    return _TableResult(**defaults)
 
 
 def _make_dataset(name="d", x=None, y=None):
@@ -468,3 +511,83 @@ def test_copy_fit_summary_omits_name_lines_when_nothing_resolves(qapp, monkeypat
     assert "Dataset:" not in captured[0]
     assert "Series:" not in captured[0]
     assert "gone" not in captured[0]
+
+
+# --- detail table: vertical sizing ------------------------------------------
+#
+# The detail table used to carry a hard `setMaximumHeight(260)`, so it
+# never grew even when the Results pane (the central splitter's bottom
+# half) had substantial genuinely-unused vertical space -- see
+# AnalysisResultView's own construction of `_detail_table`/`content_layout`.
+# `QTableWidget` already scrolls its own rows internally regardless of its
+# height, and `bottom_panel.py`'s `QScrollArea` wrapper independently keeps
+# a large result from ever forcing the central splitter open -- neither of
+# those depends on this widget's own maximum height, which is why removing
+# it is safe.
+
+
+def test_detail_table_grows_into_a_tall_container(qapp):
+    view = _make_view()
+    view.show_result(_make_table_result())
+    table = view._detail_table
+
+    view.resize(400, 200)
+    view.show()
+    QGuiApplication.processEvents()
+    short_height = table.height()
+
+    view.resize(400, 1200)
+    QGuiApplication.processEvents()
+    tall_height = table.height()
+
+    # The historical cap: growth must clear it by a wide margin, not just
+    # nudge past it.
+    assert tall_height > 260
+    assert tall_height > short_height
+
+
+def test_detail_table_respects_its_minimum_height_in_a_short_container(qapp):
+    view = _make_view()
+    view.show_result(_make_table_result())
+    table = view._detail_table
+
+    view.resize(400, 150)
+    view.show()
+    QGuiApplication.processEvents()
+
+    assert table.height() >= table.minimumHeight()
+
+
+def test_detail_table_scrolls_rather_than_shows_every_row_when_space_is_limited(qapp):
+    view = _make_view()
+    view.show_result(_make_table_result(row_count=200))
+    table = view._detail_table
+
+    view.resize(400, 500)
+    view.show()
+    QGuiApplication.processEvents()
+
+    assert table.rowCount() == 200
+    # 200 rows at any reasonable row height would need far more than 500px
+    # of container -- if the table were still trying to show every row
+    # without scrolling, it would report that (or more) as its height.
+    assert table.height() < 500
+
+
+def test_provenance_remains_below_the_table_in_a_tall_container(qapp):
+    view = _make_view()
+    view.show_result(_make_table_result())
+
+    view.resize(400, 1200)
+    view.show()
+    QGuiApplication.processEvents()
+
+    assert view._provenance_section.y() > view._detail_table.y()
+    # content_layout's own widget order (table, then Provenance, then the
+    # button row) is unchanged by the stretch-factor fix -- the button row
+    # stays right after Provenance regardless of container height.
+    content_layout = view._content.layout()
+    widgets_in_order = [content_layout.itemAt(i).widget() for i in range(content_layout.count())]
+    table_index = widgets_in_order.index(view._detail_table)
+    provenance_index = widgets_in_order.index(view._provenance_section)
+    assert table_index < provenance_index
