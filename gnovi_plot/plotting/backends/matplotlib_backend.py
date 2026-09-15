@@ -10,7 +10,7 @@ from matplotlib.ticker import MultipleLocator
 
 from gnovi_plot.data.numeric import numeric_column, numeric_xy, numeric_xyz
 from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D
-from gnovi_plot.plotting.series import PlotSeries, PlotType
+from gnovi_plot.plotting.series import PlotSeries, PlotType, display_y
 from gnovi_plot.plotting.series3d import Plot3DType, Series3D
 from gnovi_plot.plotting.units import panel_box_aspect
 
@@ -789,14 +789,16 @@ def _shrink_panel_legend_to_fit(ax: Axes, panel: Panel, figure: GnoviFigure, can
 def _series_xy(series: PlotSeries):
     """(x, y) with plotting-only transforms (normalize-to-max, vertical
     offset) applied -- `series.dataframe`/`series.dataset.dataframe` are
-    never mutated; only the values handed to Matplotlib are adjusted."""
+    never mutated; only the values handed to Matplotlib are adjusted.
+
+    The transform itself lives in `display_y()` (see plotting.series) so
+    anything else that needs the same presentation-only Y values -- e.g.
+    stacking.suggest_offset_step() sizing an auto-stack step to the
+    displayed curve rather than the raw data -- reuses this exact math
+    instead of duplicating it.
+    """
     x, y = numeric_xy(series.dataframe, series.x_column, series.y_column)
-    if series.normalize_to_max:
-        peak = y.abs().max()
-        if peak:
-            y = y / peak
-    if series.y_offset:
-        y = y + series.y_offset
+    y = display_y(series, y)
     return x, y
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
 from gnovi_plot.plotting.figure import Panel
-from gnovi_plot.plotting.series import PlotSeries, PlotType
+from gnovi_plot.plotting.series import PlotSeries, PlotType, display_y
 
 _STACKABLE_TYPES = (PlotType.LINE, PlotType.SCATTER)
 
@@ -19,6 +19,14 @@ def suggest_offset_step(panel: Panel) -> float:
     """A step large enough that stacked curves in `panel` won't visually
     overlap: the largest single series' y-range, so worst case neighbours
     just touch. Returns 1.0 if there is no numeric data to measure yet.
+
+    Measures each series' *displayed* range -- i.e. after normalize-to-max,
+    same as `_series_xy()` renders it -- rather than the raw dataframe
+    range, so a step computed for normalized curves is sized to what's
+    actually on screen instead of the original data's scale. The series'
+    own (possibly stale, pre-existing) y_offset is excluded from the
+    measurement, since that's the value this function is being asked to
+    recompute.
     """
     max_range = 0.0
     for series in stackable_series(panel):
@@ -27,6 +35,7 @@ def suggest_offset_step(panel: Panel) -> float:
         except (InsufficientNumericDataError, KeyError):
             continue
         if len(y):
+            y = display_y(series, y, include_offset=False)
             max_range = max(max_range, float(y.max() - y.min()))
     return max_range or 1.0
 
