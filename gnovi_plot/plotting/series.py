@@ -233,3 +233,23 @@ class PlotSeries:
             bins=bins,
             **overrides,
         )
+
+
+def display_y(series: PlotSeries, y: pd.Series, *, include_offset: bool = True) -> pd.Series:
+    """Presentation-only Y transform (normalize-to-max, then vertical
+    offset) for `series` -- never touches `series.dataframe`/
+    `series.dataset.dataframe`; only ever applied to a value already pulled
+    out for drawing or measurement.
+
+    `include_offset=False` yields the value the curve is actually
+    displayed at *before* its own `y_offset` is added -- e.g. what an
+    automatic-stacking step should be measured against, so the step is
+    sized to the currently visible curve rather than the raw data.
+    """
+    if series.normalize_to_max:
+        peak = y.abs().max()
+        if peak:
+            y = y / peak
+    if include_offset and series.y_offset:
+        y = y + series.y_offset
+    return y
