@@ -339,9 +339,15 @@ def test_results_tab_peak_table_bounded_and_scrolling_at_various_row_counts(qapp
     table = view._detail_table
     assert table.rowCount() == n_peaks
     assert table.isVisibleTo(view)  # shown in the Results tab whenever there's a table
-    # Bounded height + its own internal row scrolling with the header
-    # pinned, regardless of row count.
-    assert table.maximumHeight() <= 260
+    # No maximum height (see AnalysisResultView's own construction of
+    # _detail_table): the table is free to grow into whatever space the
+    # Results pane/splitter actually gives it. It stays safe regardless
+    # of n_peaks purely because it's a QAbstractScrollArea -- its own
+    # rows scroll internally with the header pinned once it runs out of
+    # allotted space, and its sizeHint/minimumSizeHint never scale with
+    # row count -- not because of a fixed cap on this widget, and not
+    # because of anything this test needs to size/lay out to observe.
+    assert table.minimumHeight() == 120
     headers = [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())]
     assert headers == [
         "Peak #",

@@ -30,15 +30,6 @@ _EMPTY_STATE_TEXT = (
 
 _RESIDUALS_UNAVAILABLE_TEXT = "Residuals unavailable -- the source dataset/series no longer exists."
 
-# A bounded height for the detail table (see `AnalysisResult.detail_table`).
-# `QTableWidget` (a `QAbstractScrollArea`) already scrolls its rows
-# internally with the header pinned, and its own `sizeHint`/
-# `minimumSizeHint` do NOT scale with row count -- this cap only keeps a
-# large result (thousands of XRD peak candidates) from making the table
-# tall enough to crowd the compact `details()` summary above it or the
-# central splitter around it. Row count never drives layout here.
-_DETAIL_TABLE_MAX_HEIGHT = 260
-
 
 def resolve_live_xy(figure: GnoviFigure | None, manager: DatasetManager | None, result: AnalysisResult):
     """The source series'/dataset's *current* numeric (x, y) data for
@@ -166,9 +157,15 @@ class AnalysisResultView(QWidget):
         self._detail_table.verticalHeader().setVisible(False)
         self._detail_table.horizontalHeader().setStretchLastSection(True)
         self._detail_table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        # Bounded height + its own internal row scrolling with the header
-        # pinned -- see `_DETAIL_TABLE_MAX_HEIGHT`.
-        self._detail_table.setMaximumHeight(_DETAIL_TABLE_MAX_HEIGHT)
+        # No maximum height: `QTableWidget` (a `QAbstractScrollArea`)
+        # already scrolls its own rows internally with the header pinned
+        # once it runs out of the vertical space it's actually been given
+        # -- row count never drives layout here, regardless of how many
+        # rows a result has. The floor keeps it from being squeezed to
+        # nothing by its neighbours in a short container; growth into
+        # genuinely available space is via `content_layout`'s stretch
+        # factor below, not this widget's own size policy (`QTableWidget`
+        # already defaults to Expanding on both axes).
         self._detail_table.setMinimumHeight(120)
         self._detail_table.itemSelectionChanged.connect(self._on_detail_selection_changed)
 
@@ -197,11 +194,15 @@ class AnalysisResultView(QWidget):
         content_layout.addWidget(self._summary_label)
         content_layout.addWidget(self._details_widget)
         content_layout.addWidget(self._detail_table_label)
-        content_layout.addWidget(self._detail_table)
+        # Stretch 1: the one item in this layout that claims any leftover
+        # vertical space the Results pane/splitter actually gives it (see
+        # the table's own construction above) -- everything else here
+        # (labels, the Provenance section, the button row) sizes to its
+        # natural height regardless of how much space is available.
+        content_layout.addWidget(self._detail_table, 1)
         content_layout.addWidget(self._provenance_section)
         content_layout.addLayout(button_row)
         content_layout.addWidget(self._residuals_unavailable_label)
-        content_layout.addStretch(1)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._empty_label)
