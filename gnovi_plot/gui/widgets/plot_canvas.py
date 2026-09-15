@@ -489,7 +489,27 @@ class PlotCanvas(FigureCanvasQTAgg):
         deliberately fail-safe: an out-of-range index means no overlay
         drawn, never a crash or a wrong-panel overlay. Focus mode is
         still resolved exactly like `active_axes()` does (the one Axes
-        this canvas actually owns while focused)."""
+        this canvas actually owns while focused).
+
+        Viewport-neutral by construction: every artist below is added via
+        `ax.plot()`/`ax.scatter()`/`ax.axvspan()`, which -- on an Axes with
+        autoscaling on, the normal state whenever the Panel doesn't pin an
+        explicit xlim/ylim (see `plotting.backends.matplotlib_backend.
+        render_panel`) -- each independently request an autoscale-view
+        update against `ax.dataLim`. `clear_analysis_overlay()`'s
+        `artist.remove()` does not retract a removed artist's earlier
+        contribution to `dataLim` (ordinary Matplotlib behaviour, not a
+        bug in this canvas), so left alone that accumulates across
+        repeated preview/overlay refreshes and can visibly nudge the
+        viewport even when the same, unchanged overlay is redrawn --
+        exactly the drift this canvas must not cause. So the view limits
+        are captured before any transient artist is added and restored
+        (via the public `auto=None`, "leave autoscaling as it is" -- see
+        `Axes.set_xlim`) right after, regardless of how many/which kinds
+        of overlay artists were drawn. This only wraps the transient-
+        overlay artists added here; it never touches `render_panel`'s own
+        legitimate autoscale-on-genuine-data-change behaviour, which runs
+        through a full `Axes.cla()` and is unaffected by anything below."""
         self.clear_analysis_overlay()
         if isinstance(figure.active_panel, Panel3D):
             return
@@ -503,6 +523,8 @@ class PlotCanvas(FigureCanvasQTAgg):
             ax = None
         if ax is None:
             return
+
+        xlim, ylim = ax.get_xlim(), ax.get_ylim()
 
         if preview_xy is not None:
             x, y = preview_xy
@@ -550,6 +572,12 @@ class PlotCanvas(FigureCanvasQTAgg):
                 )
                 self._analysis_overlay_artists.append(line)
 
+        # Restore the pre-overlay view: `auto=None` leaves the Axes'
+        # autoscale-enabled state exactly as it was (see this method's own
+        # docstring) -- only the numeric limits are pinned back, so a
+        # later genuine `render_panel()` autoscale is unaffected.
+        ax.set_xlim(*xlim, auto=None)
+        ax.set_ylim(*ylim, auto=None)
         self.draw_idle()
 
     # --- CV analysis overlay (selected-cycle / sweep tint, switching-

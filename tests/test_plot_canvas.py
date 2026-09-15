@@ -187,3 +187,119 @@ def test_set_analysis_overlay_in_focus_mode_matches_active_axes(qapp):
     (artist,) = canvas._analysis_overlay_artists
     assert artist.axes is canvas.active_axes(figure)
     assert canvas.active_axes(figure) is canvas.axes_list[0]
+
+
+# --- set_analysis_overlay: viewport stability -------------------------------
+#
+# Transient overlay artists (background/smoothing preview, peak markers,
+# fit-window span, fit curves) must never move the viewport the researcher
+# is currently looking at -- see set_analysis_overlay's own docstring for
+# why: Matplotlib's autoscale participates in every ax.plot()/scatter()/
+# axvspan() call by default, and clear_analysis_overlay()'s artist.remove()
+# does not retract a removed artist's earlier ax.dataLim contribution, so
+# left alone that accumulates across repeated refreshes. Every scenario
+# below intentionally uses overlay data OUTSIDE the rendered series' own
+# range, so a regression (the fix silently dropped) would show up as a
+# genuine limit change here, not pass by coincidence.
+
+
+def _one_panel_figure_and_canvas():
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+    canvas = PlotCanvas()
+    canvas.render(figure)
+    return figure, canvas
+
+
+def test_background_preview_overlay_does_not_change_the_viewport(qapp):
+    figure, canvas = _one_panel_figure_and_canvas()
+    xlim, ylim = canvas.axes.get_xlim(), canvas.axes.get_ylim()
+
+    # Well outside _make_dataset()'s x in [1, 4] / y in [1, 16].
+    preview_xy = ([-50.0, 50.0], [-500.0, -500.0])
+    canvas.set_analysis_overlay(figure, peak_points=None, preview_xy=preview_xy)
+
+    assert canvas.axes.get_xlim() == xlim
+    assert canvas.axes.get_ylim() == ylim
+
+
+def test_peak_marker_overlay_does_not_change_the_viewport(qapp):
+    figure, canvas = _one_panel_figure_and_canvas()
+    xlim, ylim = canvas.axes.get_xlim(), canvas.axes.get_ylim()
+
+    canvas.set_analysis_overlay(
+        figure, peak_points=[(-50.0, 500.0, "far outside")], preview_xy=None
+    )
+
+    assert canvas.axes.get_xlim() == xlim
+    assert canvas.axes.get_ylim() == ylim
+
+
+def test_fit_window_and_fit_curve_overlays_do_not_change_the_viewport(qapp):
+    figure, canvas = _one_panel_figure_and_canvas()
+    xlim, ylim = canvas.axes.get_xlim(), canvas.axes.get_ylim()
+
+    canvas.set_analysis_overlay(
+        figure,
+        peak_points=None,
+        preview_xy=None,
+        fit_window=(-40.0, -30.0),
+        fit_curves={
+            "baseline_xy": ([-40.0, -30.0], [-200.0, -200.0]),
+            "total_xy": ([-40.0, -30.0], [300.0, 300.0]),
+        },
+    )
+
+    assert canvas.axes.get_xlim() == xlim
+    assert canvas.axes.get_ylim() == ylim
+
+
+def test_repeated_identical_overlay_is_idempotent_on_the_viewport(qapp):
+    figure, canvas = _one_panel_figure_and_canvas()
+    xlim, ylim = canvas.axes.get_xlim(), canvas.axes.get_ylim()
+    preview_xy = ([-50.0, 50.0], [-500.0, -500.0])
+
+    for _ in range(5):
+        canvas.set_analysis_overlay(figure, peak_points=None, preview_xy=preview_xy)
+        assert canvas.axes.get_xlim() == xlim
+        assert canvas.axes.get_ylim() == ylim
+        assert len(canvas._analysis_overlay_artists) == 1
+
+
+def test_changed_overlay_replaces_rather_than_accumulates(qapp):
+    figure, canvas = _one_panel_figure_and_canvas()
+
+    canvas.set_analysis_overlay(
+        figure, peak_points=None, preview_xy=([1.0, 2.0], [3.0, 4.0])
+    )
+    assert len(canvas._analysis_overlay_artists) == 1
+    (first_line,) = canvas._analysis_overlay_artists
+
+    canvas.set_analysis_overlay(
+        figure, peak_points=None, preview_xy=([5.0, 6.0], [7.0, 8.0])
+    )
+    assert len(canvas._analysis_overlay_artists) == 1
+    (second_line,) = canvas._analysis_overlay_artists
+    assert second_line is not first_line
+    assert list(second_line.get_ydata()) == [7.0, 8.0]
+
+
+def test_genuine_render_still_autoscales_normally(qapp):
+    """The viewport-preservation fix must be scoped to the transient-
+    overlay path only -- a real render() with new/wider data must still
+    autoscale exactly as before."""
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+    canvas = PlotCanvas()
+    canvas.render(figure)
+    narrow_xlim = canvas.axes.get_xlim()
+
+    wide_dataset = Dataset(
+        name="wide", dataframe=pd.DataFrame({"x": [-100.0, 100.0], "y": [-100.0, 100.0]})
+    )
+    figure.add_series(PlotSeries.line(wide_dataset, "x", "y"))
+    canvas.render(figure)
+
+    assert canvas.axes.get_xlim() != narrow_xlim
+    assert canvas.axes.get_xlim()[0] < -50
+    assert canvas.axes.get_xlim()[1] > 50
