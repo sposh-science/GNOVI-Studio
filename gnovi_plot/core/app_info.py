@@ -10,8 +10,8 @@ from __future__ import annotations
 APP_NAME = "GNOVI Studio"
 APP_TAGLINE = "Scientific Plotting & Visualization"
 
-__version__ = "0.9.0"
-VERSION_LABEL = "v0.9.0 Beta"
+__version__ = "1.0.0"
+VERSION_LABEL = "v1.0.0"
 
 REPO_URL = "https://github.com/sposh-science/GNOVI-Studio"
 ISSUES_URL = f"{REPO_URL}/issues"
