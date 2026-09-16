@@ -65,6 +65,52 @@ def test_tool_selector_shows_cv_and_hides_the_others(qapp):
     assert not panel.xrd_section.isVisibleTo(panel)
 
 
+def test_cv_sign_combo_ignores_an_unfocused_wheel_scroll(qapp):
+    # Issue #56: a real CV control, not just the shared ScrollSafeComboBox
+    # class in isolation (see test_scroll_safe_controls.py).
+    from PySide6.QtCore import QCoreApplication, QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+
+    panel, cv, _ds = _make_panel()
+    panel.show()
+    QCoreApplication.processEvents()
+    assert cv.sign_combo.hasFocus() is False
+    index_before = cv.sign_combo.currentIndex()
+
+    event = QWheelEvent(
+        QPointF(cv.sign_combo.rect().center()), QPointF(cv.sign_combo.mapToGlobal(cv.sign_combo.rect().center())),
+        QPoint(0, 0), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False,
+    )
+    QApplication.sendEvent(cv.sign_combo, event)
+    QCoreApplication.processEvents()
+
+    assert cv.sign_combo.currentIndex() == index_before
+    assert event.isAccepted() is False
+
+
+def test_cv_source_combo_width_does_not_grow_with_a_long_series_label(qapp):
+    # Issue #56: source_combo used Qt's default AdjustToContentsOnFirstShow,
+    # unbounded for an arbitrary, import-derived series label -- confirmed to
+    # force CVAnalysisSection wider than the drawer's workflow viewport at
+    # realistic dataset-name lengths. Verify it's now bounded.
+    empty_panel = AnalysisPanel(GnoviFigure(), DatasetManager())
+    empty_panel.tool_combo.setCurrentText("Cyclic Voltammetry")
+    baseline_section_width = empty_panel.cv_section_widget.minimumSizeHint().width()
+
+    long_name = "CV_Electrode_Batch3_2026-09-16_ScanRate100mVs_ExtraLongRunName"
+    figure = GnoviFigure()
+    dataset = _cv_dataset(name=long_name)
+    series = _panel_with_cv_series(figure, dataset)
+    panel = AnalysisPanel(figure, DatasetManager())
+    panel.tool_combo.setCurrentText("Cyclic Voltammetry")
+
+    cv = panel.cv_section_widget
+    assert cv.minimumSizeHint().width() < baseline_section_width + 250
+    assert cv.source_combo.currentText() == series.label
+    assert cv.source_combo.currentData() == series.id
+
+
 def test_panel3d_disables_the_cv_section(qapp):
     figure = GnoviFigure()
     figure.panels[0] = Panel3D(panel_label="3D")

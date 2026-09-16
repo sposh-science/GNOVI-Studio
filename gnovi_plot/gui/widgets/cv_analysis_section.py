@@ -32,7 +32,6 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -53,6 +52,7 @@ from gnovi_plot.analysis.segments import (
 from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
+from gnovi_plot.gui.widgets.scroll_safe_controls import ScrollSafeComboBox, ScrollSafeDoubleSpinBox
 from gnovi_plot.modules.electrochemistry.common import (
     SWEEP_FALLING,
     SWEEP_RISING,
@@ -168,13 +168,28 @@ class CVAnalysisSection(QWidget):
         self._cycles: list[Cycle] = []
 
         # --- Source ----------------------------------------------------------
-        self.source_combo = QComboBox()
+        self.source_combo = ScrollSafeComboBox()
+        # Populated from arbitrary dataset/series labels (see refresh()) --
+        # left at Qt's default AdjustToContentsOnFirstShow, a long imported
+        # name would force this combo (and the whole sidebar section) wider
+        # than the drawer, and the width would stick even after a shorter
+        # name replaced it (AdjustToContentsOnFirstShow only measures once,
+        # the first time the combo becomes visible). Bounded here the same
+        # way sign_combo already is below -- 20 characters shows a
+        # meaningfully differentiating prefix of a real dataset name while
+        # keeping this section's minimum width comfortably under the
+        # workflow viewport; Qt elides the displayed text, currentData()/
+        # currentText() still return the full label/id.
+        self.source_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.source_combo.setMinimumContentsLength(20)
         self.columns_label = QLabel("")
         self.columns_label.setWordWrap(True)
         self.status_label = QLabel(_NO_SOURCE_TEXT)
         self.status_label.setWordWrap(True)
 
-        self.sign_combo = QComboBox()
+        self.sign_combo = ScrollSafeComboBox()
         for convention, text in _SIGN_LABELS.items():
             self.sign_combo.addItem(text, convention.value)
         self.sign_combo.setToolTip(_SIGN_HELP)
@@ -188,11 +203,11 @@ class CVAnalysisSection(QWidget):
         self.sign_help_label.setWordWrap(True)
         self.sign_help_label.setStyleSheet("color: palette(mid);")
 
-        self.scan_rate_spin = QDoubleSpinBox()
+        self.scan_rate_spin = ScrollSafeDoubleSpinBox()
         self.scan_rate_spin.setDecimals(4)
         self.scan_rate_spin.setRange(0.0, 1e6)
         self.scan_rate_spin.setSpecialValueText("(not set)")
-        self.scan_rate_unit_combo = QComboBox()
+        self.scan_rate_unit_combo = ScrollSafeComboBox()
         self.scan_rate_unit_combo.addItems(_SCAN_RATE_UNITS)
         scan_rate_row = QHBoxLayout()
         scan_rate_row.addWidget(self.scan_rate_spin)
@@ -241,16 +256,16 @@ class CVAnalysisSection(QWidget):
         source_layout.addWidget(self.physical_section)
 
         # --- Cycle Selection ----------------------------------------------
-        self.cycle_source_combo = QComboBox()
+        self.cycle_source_combo = ScrollSafeComboBox()
         self.cycle_source_combo.addItem("Auto-detect", _CYCLE_SOURCE_AUTO)
         self.cycle_source_combo.addItem("Metadata column…", _CYCLE_SOURCE_METADATA)
         self.cycle_source_combo.addItem("Manual (row ranges)", _CYCLE_SOURCE_MANUAL)
-        self.metadata_column_combo = QComboBox()
+        self.metadata_column_combo = ScrollSafeComboBox()
         self.manual_ranges_edit = QLineEdit()
         self.manual_ranges_edit.setPlaceholderText("e.g. 0-1600, 1600-3200")
         self.cycle_status_label = QLabel("")
         self.cycle_status_label.setWordWrap(True)
-        self.cycle_combo = QComboBox()
+        self.cycle_combo = ScrollSafeComboBox()
         self.cycle_prev_button = QPushButton("◀")
         self.cycle_next_button = QPushButton("▶")
         self.cycle_prev_button.setMaximumWidth(32)
@@ -272,7 +287,7 @@ class CVAnalysisSection(QWidget):
         cycle_layout.addWidget(self.cycle_confidence_label)
 
         # --- Sweep Selection --------------------------------------------
-        self.sweep_combo = QComboBox()
+        self.sweep_combo = ScrollSafeComboBox()
         self.sweep_combo.addItem("Both sweeps", _SWEEP_BOTH)
         self.sweep_combo.addItem("Rising sweep only", _SWEEP_RISING_ONLY)
         self.sweep_combo.addItem("Falling sweep only", _SWEEP_FALLING_ONLY)
@@ -291,12 +306,12 @@ class CVAnalysisSection(QWidget):
         # spinbox. Blank / unparseable means "no prominence threshold".
         self.prominence_edit = QLineEdit()
         self.prominence_edit.setPlaceholderText("(auto)")
-        self.min_sep_spin = QDoubleSpinBox()
+        self.min_sep_spin = ScrollSafeDoubleSpinBox()
         self.min_sep_spin.setDecimals(1)
         self.min_sep_spin.setRange(0.0, 1e6)
         self.min_sep_spin.setSuffix(" mV")
         self.width_check = QCheckBox("Use minimum width")
-        self.width_spin = QDoubleSpinBox()
+        self.width_spin = ScrollSafeDoubleSpinBox()
         self.width_spin.setDecimals(1)
         self.width_spin.setRange(0.0, 1e6)
         self.width_spin.setSuffix(" mV")
@@ -378,8 +393,8 @@ class CVAnalysisSection(QWidget):
     # --- construction helper ---------------------------------------------
 
     @staticmethod
-    def _optional_spin(suffix: str, *, decimals: int, maximum: float = 1e9) -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
+    def _optional_spin(suffix: str, *, decimals: int, maximum: float = 1e9) -> ScrollSafeDoubleSpinBox:
+        spin = ScrollSafeDoubleSpinBox()
         spin.setDecimals(decimals)
         spin.setRange(0.0, maximum)
         spin.setSuffix(suffix)
@@ -669,7 +684,7 @@ class CVAnalysisSection(QWidget):
         self.overlay_changed.emit()
 
     def _electrode_context(self) -> ElectrodeContext:
-        def opt(spin: QDoubleSpinBox) -> float | None:
+        def opt(spin: ScrollSafeDoubleSpinBox) -> float | None:
             return spin.value() if spin.value() > 0 else None
 
         conc_mm = opt(self.conc_spin)
