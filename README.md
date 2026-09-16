@@ -41,8 +41,10 @@ tool rather than assembling one from scripts and notebooks each time.
 **Plotting & figures**
 - Multi-series plotting
 - Multi-panel figures
+- 3D plotting with camera, grid, and legend controls for publication-ready figures
 - Workbenches for organizing related plots and datasets
 - Graph Library for saving and reusing graph definitions
+- Focus/Extract for isolating or splitting a panel out into its own view
 - Panel/layout and figure customization
 
 **Analysis**
@@ -58,6 +60,8 @@ tool rather than assembling one from scripts and notebooks each time.
 
 ## Scientific Analysis
 
+**Curve fitting**
+
 GNOVI Studio's curve fitting is built around a small, well-tested set of
 models:
 
@@ -70,6 +74,19 @@ For each fit, GNOVI reports R², adjusted R², and parameter uncertainty
 estimates, and provides residual diagnostics to help assess fit quality.
 Analysis results are kept in a persistent, panel-scoped history, and fitted
 curves can be added to or removed from a figure directly.
+
+**XRD analysis**
+
+- Background and smoothing preprocessing
+- Peak detection with an editable peak table
+- Single-peak profile fitting (Gaussian, Lorentzian, and pseudo-Voigt),
+  reporting centre, FWHM, area, height, and d-spacing
+
+**Cyclic Voltammetry (CV) analysis**
+
+- Cycle and sweep selection
+- Anodic/cathodic peak detection with manual curation
+- Couple summary (ΔEp, E½) computed from the raw peak extrema
 
 ## Platform Support
 
@@ -125,18 +142,18 @@ pytest
 
 ## Development Status
 
-GNOVI Studio is under active development and is currently in Beta. The
-application identifies itself internally as `v0.9.0 Beta`.
-
-A corresponding `v0.9.0` release has not yet been published on GitHub; that
-release is being prepared separately.
+GNOVI Studio 1.0.0 is the current stable release, covering 2D and 3D
+plotting, general curve fitting, and the XRD and Cyclic Voltammetry
+analysis workspaces described above. Development continues on further
+scientific analysis modules and plotting capabilities — see
+[PROJECT_GUIDE.md](PROJECT_GUIDE.md) for the current roadmap.
 
 ## Testing & Quality
 
 GNOVI Studio is developed with an automated pytest test suite covering data
 import, plotting, analysis, project persistence, and the GUI. Continuous
-integration runs on Ubuntu, Fedora, and Windows on every push and pull
-request, alongside CodeQL static analysis.
+integration runs on Debian, Fedora, Ubuntu, and Windows on every push and
+pull request, alongside CodeQL static analysis.
 
 ## Project Philosophy
 
