@@ -228,6 +228,32 @@ class Panel:
                 return s
         return None
 
+    def move_series(self, series_id: str, delta: int) -> bool:
+        """Shift the series identified by `series_id` by `delta` logical
+        positions (-1 = up/earlier, +1 = down/later) within `self.series`.
+
+        Purely a list-position change -- swaps two elements in place, never
+        touching any `PlotSeries` field (zorder, y_offset, normalize_to_max,
+        visibility, color/style, ...) and never touching `dataset`/
+        `dataframe` content. Every consumer that already iterates
+        `Panel.series` in order (rendering, legend, Auto-Stack, export,
+        project serialization, analysis source selectors) picks up the new
+        order for free -- there is no separate order-tracking structure to
+        keep in sync.
+
+        Returns True only when a move actually happened: False if
+        `series_id` isn't found, or the move would cross a boundary (first
+        series moving up, last series moving down).
+        """
+        index = next((i for i, s in enumerate(self.series) if s.id == series_id), None)
+        if index is None:
+            return False
+        target = index + delta
+        if not 0 <= target < len(self.series):
+            return False
+        self.series[index], self.series[target] = self.series[target], self.series[index]
+        return True
+
     def reset_limits(self) -> None:
         self.xlim = None
         self.ylim = None

@@ -106,6 +106,82 @@ def test_clear_series_empties_the_list_and_resets_color_cycle():
     assert fresh.color is not None
 
 
+def test_move_series_swaps_with_previous_position():
+    figure = GnoviFigure()
+    a = PlotSeries.line(_make_dataset("a"), "x", "y")
+    b = PlotSeries.line(_make_dataset("b"), "x", "y")
+    c = PlotSeries.line(_make_dataset("c"), "x", "y")
+    figure.add_series(a)
+    figure.add_series(b)
+    figure.add_series(c)
+
+    moved = figure.active_panel.move_series(b.id, -1)
+
+    assert moved is True
+    assert [s.id for s in figure.series] == [b.id, a.id, c.id]
+
+
+def test_move_series_swaps_with_next_position():
+    figure = GnoviFigure()
+    a = PlotSeries.line(_make_dataset("a"), "x", "y")
+    b = PlotSeries.line(_make_dataset("b"), "x", "y")
+    c = PlotSeries.line(_make_dataset("c"), "x", "y")
+    figure.add_series(a)
+    figure.add_series(b)
+    figure.add_series(c)
+
+    moved = figure.active_panel.move_series(b.id, 1)
+
+    assert moved is True
+    assert [s.id for s in figure.series] == [a.id, c.id, b.id]
+
+
+def test_move_series_first_item_cannot_move_further_up():
+    figure = GnoviFigure()
+    a = PlotSeries.line(_make_dataset("a"), "x", "y")
+    b = PlotSeries.line(_make_dataset("b"), "x", "y")
+    figure.add_series(a)
+    figure.add_series(b)
+
+    moved = figure.active_panel.move_series(a.id, -1)
+
+    assert moved is False
+    assert [s.id for s in figure.series] == [a.id, b.id]
+
+
+def test_move_series_last_item_cannot_move_further_down():
+    figure = GnoviFigure()
+    a = PlotSeries.line(_make_dataset("a"), "x", "y")
+    b = PlotSeries.line(_make_dataset("b"), "x", "y")
+    figure.add_series(a)
+    figure.add_series(b)
+
+    moved = figure.active_panel.move_series(b.id, 1)
+
+    assert moved is False
+    assert [s.id for s in figure.series] == [a.id, b.id]
+
+
+def test_move_series_unknown_id_returns_false():
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(_make_dataset("a"), "x", "y"))
+
+    assert figure.active_panel.move_series("does-not-exist", -1) is False
+
+
+def test_move_series_never_changes_zorder():
+    figure = GnoviFigure()
+    a = PlotSeries.line(_make_dataset("a"), "x", "y", zorder=5.0)
+    b = PlotSeries.line(_make_dataset("b"), "x", "y", zorder=9.0)
+    figure.add_series(a)
+    figure.add_series(b)
+
+    figure.active_panel.move_series(b.id, -1)
+
+    assert a.zorder == 5.0
+    assert b.zorder == 9.0
+
+
 def test_reset_limits_clears_manual_xlim_and_ylim():
     figure = GnoviFigure(xlim=(0, 1), ylim=(0, 1))
     figure.reset_limits()
