@@ -210,9 +210,23 @@ class PlotSeriesPanel(QWidget):
         list_group = QGroupBox("2D Series")
         list_layout = QVBoxLayout(list_group)
         list_layout.addWidget(self.series_list)
+        # Move Up/Down on their own row, above Remove/Clear -- keeps the
+        # drawer's minimum-content-width contribution from this panel the
+        # same as before these two buttons existed (see
+        # `main_window._side_drawer_min_width`, which sizes the left
+        # drawer off each page's `minimumSizeHint().width()`): four
+        # buttons across one row measurably widens that hint on Windows'
+        # native button/font metrics versus Linux's offscreen-platform
+        # metrics for the same labels, enough to tip the FORMAT drawer's
+        # startup auto-collapse decision on Windows only. Two rows of two
+        # keeps the row width (and therefore this panel's contribution to
+        # that shared decision) unchanged; only the panel's height grows,
+        # which `_side_drawer_min_width` never measures.
+        move_buttons = QHBoxLayout()
+        move_buttons.addWidget(self.move_up_button)
+        move_buttons.addWidget(self.move_down_button)
+        list_layout.addLayout(move_buttons)
         buttons = QHBoxLayout()
-        buttons.addWidget(self.move_up_button)
-        buttons.addWidget(self.move_down_button)
         buttons.addWidget(self.remove_button)
         buttons.addWidget(self.clear_button)
         list_layout.addLayout(buttons)
