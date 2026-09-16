@@ -114,6 +114,31 @@ def test_legend_columns_and_frame_are_applied():
     assert legend.get_frame_on() is False
 
 
+def test_legend_order_follows_reordered_logical_series_order():
+    # Issue #51: legend order has no state of its own -- it's read back
+    # from whatever order series were drawn into the Axes in, which
+    # follows Panel.series directly (see render_panel's draw loop). A
+    # logical reorder should therefore be reflected in the legend with no
+    # extra synchronization code.
+    figure = GnoviFigure()
+    a = PlotSeries.line(_make_dataset("a"), "x", "y", label="a")
+    b = PlotSeries.line(_make_dataset("b"), "x", "y", label="b")
+    c = PlotSeries.line(_make_dataset("c"), "x", "y", label="c")
+    figure.add_series(a)
+    figure.add_series(b)
+    figure.add_series(c)
+    figure.active_panel.move_series(c.id, -1)
+    figure.active_panel.move_series(c.id, -1)
+    assert [s.label for s in figure.series] == ["c", "a", "b"]
+
+    _mpl_figure, axes_list = _axes_for(figure)
+    render_figure(axes_list, figure)
+    ax = axes_list[0]
+
+    _handles, labels = ax.get_legend_handles_labels()
+    assert labels == ["c", "a", "b"]
+
+
 def test_normalize_to_max_does_not_mutate_source_dataframe():
     dataset = _make_dataset(y=(1.0, 4.0, 9.0, 16.0))
     original = dataset.dataframe.copy(deep=True)

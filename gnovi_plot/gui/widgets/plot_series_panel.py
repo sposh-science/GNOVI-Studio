@@ -132,6 +132,8 @@ class PlotSeriesPanel(QWidget):
 
     def _build_2d_page(self) -> QWidget:
         self.series_list = QListWidget()
+        self.move_up_button = QPushButton("Move Up")
+        self.move_down_button = QPushButton("Move Down")
         self.remove_button = QPushButton("Remove Series")
         self.clear_button = QPushButton("Clear All")
 
@@ -208,6 +210,22 @@ class PlotSeriesPanel(QWidget):
         list_group = QGroupBox("2D Series")
         list_layout = QVBoxLayout(list_group)
         list_layout.addWidget(self.series_list)
+        # Move Up/Down on their own row, above Remove/Clear -- keeps the
+        # drawer's minimum-content-width contribution from this panel the
+        # same as before these two buttons existed (see
+        # `main_window._side_drawer_min_width`, which sizes the left
+        # drawer off each page's `minimumSizeHint().width()`): four
+        # buttons across one row measurably widens that hint on Windows'
+        # native button/font metrics versus Linux's offscreen-platform
+        # metrics for the same labels, enough to tip the FORMAT drawer's
+        # startup auto-collapse decision on Windows only. Two rows of two
+        # keeps the row width (and therefore this panel's contribution to
+        # that shared decision) unchanged; only the panel's height grows,
+        # which `_side_drawer_min_width` never measures.
+        move_buttons = QHBoxLayout()
+        move_buttons.addWidget(self.move_up_button)
+        move_buttons.addWidget(self.move_down_button)
+        list_layout.addLayout(move_buttons)
         buttons = QHBoxLayout()
         buttons.addWidget(self.remove_button)
         buttons.addWidget(self.clear_button)
@@ -265,6 +283,8 @@ class PlotSeriesPanel(QWidget):
         page_layout.addStretch(1)
 
         self.series_list.currentRowChanged.connect(self._on_selection_changed)
+        self.move_up_button.clicked.connect(self._on_move_up_clicked)
+        self.move_down_button.clicked.connect(self._on_move_down_clicked)
         self.remove_button.clicked.connect(self._on_remove_clicked)
         self.clear_button.clicked.connect(self._on_clear_clicked)
         self.label_edit.editingFinished.connect(self._apply_label)
@@ -478,9 +498,18 @@ class PlotSeriesPanel(QWidget):
     def _set_color_swatch(self, button: QPushButton, color: str | None) -> None:
         button.setStyleSheet(f"background-color: {color or _DEFAULT_COLOR};")
 
+    def _update_move_button_state(self, row: int) -> None:
+        """Move Up/Down enabled state from `row`'s position alone -- no
+        selection (-1) or a single-series list disables both; the first
+        row disables Move Up, the last disables Move Down."""
+        count = self.series_list.count()
+        self.move_up_button.setEnabled(row > 0)
+        self.move_down_button.setEnabled(0 <= row < count - 1)
+
     def _on_selection_changed(self, row: int) -> None:
         series = self._current_series()
         self._set_editors_enabled(series is not None)
+        self._update_move_button_state(row)
         if series is None:
             return
 
@@ -634,6 +663,29 @@ class PlotSeriesPanel(QWidget):
         if series is None or self._updating:
             return
         series.hist_mode = self.hist_mode_combo.currentData()
+        self.changed.emit()
+
+    def _on_move_up_clicked(self) -> None:
+        self._move_selected_series(-1)
+
+    def _on_move_down_clicked(self) -> None:
+        self._move_selected_series(1)
+
+    def _move_selected_series(self, delta: int) -> None:
+        """Shift the selected series one logical position (-1 up, +1 down)
+        within the active panel -- a pure list-position change (see
+        `Panel.move_series`), never touching Z-order or any other series
+        property. A boundary/no-op move (nothing selected, or already at
+        the first/last position) returns False from the model and this
+        deliberately skips both refresh() and changed.emit() -- the UI
+        buttons are already disabled at a boundary (`_update_move_button_
+        state`), so this only matters as a safety net."""
+        series = self._current_series()
+        if series is None:
+            return
+        if not self._figure.active_panel.move_series(series.id, delta):
+            return
+        self.refresh(select_id=series.id)
         self.changed.emit()
 
     def _on_remove_clicked(self) -> None:

@@ -62,6 +62,31 @@ def test_load_project_round_trips_dataset_series_and_id(tmp_path):
     assert loaded.workbenches[0].figure.series[0].dataset is loaded_dataset
 
 
+def test_reordered_series_round_trip_in_their_new_logical_order(tmp_path):
+    # Issue #51: Panel.move_series is a pure list-position change, and
+    # Panel.to_dict()/from_dict() already serialize `series` as a plain
+    # ordered list -- so a reorder should round-trip with no project
+    # schema change (PROJECT_FORMAT_VERSION unchanged).
+    dataset = _simple_dataset()
+    project = Project.new()
+    project.dataset_manager.add(dataset)
+    figure = project.workbenches[0].figure
+    a = PlotSeries.line(dataset, "x", "y", label="a")
+    b = PlotSeries.line(dataset, "x", "y", label="b")
+    c = PlotSeries.line(dataset, "x", "y", label="c")
+    figure.add_series(a)
+    figure.add_series(b)
+    figure.add_series(c)
+    figure.active_panel.move_series(c.id, -1)
+    figure.active_panel.move_series(c.id, -1)
+    assert [s.label for s in figure.series] == ["c", "a", "b"]
+
+    out_path = save_project(project, tmp_path / "proj.gnovi")
+    loaded = load_project(out_path)
+
+    assert [s.label for s in loaded.workbenches[0].figure.series] == ["c", "a", "b"]
+
+
 def test_save_project_as_gives_the_project_a_path(tmp_path):
     project, _dataset = _basic_project()
     assert project.path is None

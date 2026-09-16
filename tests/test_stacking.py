@@ -161,3 +161,28 @@ def test_toggling_normalize_after_auto_stack_does_not_recompute_existing_offset(
     b.normalize_to_max = True
 
     assert b.y_offset == pytest.approx(1000.0)
+
+
+# --- Issue #51: Auto-Stack must follow the reordered logical series sequence ---
+
+
+def test_auto_stack_offsets_follows_reordered_series_sequence():
+    panel = Panel()
+    a = PlotSeries.line(_make_dataset("A", [0, 10, 0]), "two_theta", "intensity")
+    b = PlotSeries.line(_make_dataset("B", [0, 10, 0]), "two_theta", "intensity")
+    c = PlotSeries.line(_make_dataset("C", [0, 10, 0]), "two_theta", "intensity")
+    panel.add_series(a)
+    panel.add_series(b)
+    panel.add_series(c)
+
+    # Move C to the front: [C, A, B] -- Auto-Stack has no order-tracking
+    # state of its own (see stacking.stackable_series), so it must assign
+    # offsets by this new list order, not the original add order.
+    panel.move_series(c.id, -1)
+    panel.move_series(c.id, -1)
+
+    auto_stack_offsets(panel, step=100.0)
+
+    assert c.y_offset == 0.0
+    assert a.y_offset == 100.0
+    assert b.y_offset == 200.0

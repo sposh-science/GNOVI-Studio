@@ -102,6 +102,122 @@ def test_picking_a_color_marks_the_series_as_manual_and_never_silently_changes_a
     assert series.color_is_manual is True
 
 
+# --- Move Up / Move Down (2D series reordering, issue #51) -------------------
+
+
+def _make_ordered_2d_figure(labels):
+    figure = GnoviFigure()
+    series = [PlotSeries.line(_make_dataset(label), "x", "y", label=label) for label in labels]
+    for s in series:
+        figure.add_series(s)
+    return figure, series
+
+
+def test_move_up_button_moves_the_selected_series(qapp):
+    figure, (a, b, c) = _make_ordered_2d_figure(["a", "b", "c"])
+    panel = PlotSeriesPanel(figure)
+    panel.series_list.setCurrentRow(1)  # b
+
+    panel.move_up_button.click()
+
+    assert [s.id for s in figure.series] == [b.id, a.id, c.id]
+
+
+def test_move_down_button_moves_the_selected_series(qapp):
+    figure, (a, b, c) = _make_ordered_2d_figure(["a", "b", "c"])
+    panel = PlotSeriesPanel(figure)
+    panel.series_list.setCurrentRow(1)  # b
+
+    panel.move_down_button.click()
+
+    assert [s.id for s in figure.series] == [a.id, c.id, b.id]
+
+
+def test_move_preserves_selection_by_series_id(qapp):
+    figure, (a, b, c) = _make_ordered_2d_figure(["a", "b", "c"])
+    panel = PlotSeriesPanel(figure)
+    panel.series_list.setCurrentRow(1)  # b
+
+    panel.move_up_button.click()
+
+    assert panel._current_series().id == b.id
+    assert panel.series_list.currentRow() == 0
+
+
+def test_no_selection_disables_both_move_buttons(qapp):
+    figure, _ = _make_ordered_2d_figure(["a", "b", "c"])
+    panel = PlotSeriesPanel(figure)
+    panel.series_list.setCurrentRow(-1)
+
+    assert panel.move_up_button.isEnabled() is False
+    assert panel.move_down_button.isEnabled() is False
+
+
+def test_first_series_selected_disables_move_up_only(qapp):
+    figure, _ = _make_ordered_2d_figure(["a", "b", "c"])
+    panel = PlotSeriesPanel(figure)
+    panel.series_list.setCurrentRow(0)
+
+    assert panel.move_up_button.isEnabled() is False
+    assert panel.move_down_button.isEnabled() is True
+
+
+def test_last_series_selected_disables_move_down_only(qapp):
+    figure, _ = _make_ordered_2d_figure(["a", "b", "c"])
+    panel = PlotSeriesPanel(figure)
+    panel.series_list.setCurrentRow(2)
+
+    assert panel.move_up_button.isEnabled() is True
+    assert panel.move_down_button.isEnabled() is False
+
+
+def test_middle_series_selected_enables_both_move_buttons(qapp):
+    figure, _ = _make_ordered_2d_figure(["a", "b", "c"])
+    panel = PlotSeriesPanel(figure)
+    panel.series_list.setCurrentRow(1)
+
+    assert panel.move_up_button.isEnabled() is True
+    assert panel.move_down_button.isEnabled() is True
+
+
+def test_single_series_list_disables_both_move_buttons(qapp):
+    figure, _ = _make_ordered_2d_figure(["a"])
+    panel = PlotSeriesPanel(figure)
+    panel.series_list.setCurrentRow(0)
+
+    assert panel.move_up_button.isEnabled() is False
+    assert panel.move_down_button.isEnabled() is False
+
+
+def test_successful_move_emits_changed_exactly_once(qapp):
+    figure, _ = _make_ordered_2d_figure(["a", "b", "c"])
+    panel = PlotSeriesPanel(figure)
+    panel.series_list.setCurrentRow(1)
+    calls = []
+    panel.changed.connect(lambda: calls.append(1))
+
+    panel.move_up_button.click()
+
+    assert len(calls) == 1
+
+
+def test_boundary_move_does_not_emit_changed(qapp):
+    # Exercises the handler's own safety net directly -- the button is
+    # already disabled at this boundary (see
+    # test_first_series_selected_disables_move_up_only), so this proves
+    # `_move_selected_series` itself refuses a no-op move rather than
+    # relying only on the UI to prevent the click.
+    figure, _ = _make_ordered_2d_figure(["a", "b", "c"])
+    panel = PlotSeriesPanel(figure)
+    panel.series_list.setCurrentRow(0)  # first series -- Move Up is a boundary no-op
+    calls = []
+    panel.changed.connect(lambda: calls.append(1))
+
+    panel._on_move_up_clicked()
+
+    assert calls == []
+
+
 # --- Adaptive 3D page (Panel3D / Series3D) ------------------------------------
 
 
