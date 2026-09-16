@@ -8,8 +8,8 @@ repository.
 
 ## Project overview
 
-GNOVI Studio (package name `gnovi-plot`, version 0.9.0 "Beta", tagged `v0.9.0`
-with a citable DOI in `CITATION.cff`) is a cross-platform, open-source Python
+GNOVI Studio (package name `gnovi-plot`, version 1.0.0, with a citable DOI
+in `CITATION.cff`) is a cross-platform, open-source Python
 desktop application for scientific plotting and analysis. It combines
 experimental data visualization, mathematical equation graphing, and
 publication-quality figure creation in a single tool.
