@@ -9,7 +9,7 @@ authors:
 license: GPL-3.0-or-later
 repository-code: "https://github.com/sposh-science/GNOVI-Studio"
 url: "https://github.com/sposh-science/GNOVI-Studio"
-version: 0.9.0
+version: 1.0.0
 date-released: 2026-08-23
 identifiers:
   - type: doi
