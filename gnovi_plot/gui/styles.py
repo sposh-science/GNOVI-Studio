@@ -76,11 +76,11 @@ _LIGHT_PALETTE = {
     "border_strong": "#c1c6d0",
     "text": "#20242b",
     "muted_text": "#5b6270",
-    "accent": "#2f6fed",
-    "accent_hover": "#255ac9",
-    "accent_pressed": "#1e4aa8",
+    "accent": "#3076b0",
+    "accent_hover": "#2a6698",
+    "accent_pressed": "#235680",
     "accent_text": "#ffffff",
-    "accent_soft": "#e4ecfd",
+    "accent_soft": "#e7f0f8",
     # Restrained current-context/status color (Active panel / Graph / Data,
     # active dataset) -- see module docstring. Deliberately calmer/less
     # saturated than `accent` (which still means "selected/interactive")
@@ -106,14 +106,18 @@ WARNING_COLOR = "#b06000"
 # so the badge reads as its own distinct, still-on-brand signal. An opaque
 # pill with white text, so it stays legible sitting over either a Light or
 # Dark Plot Theme canvas background without needing its own dark variant.
-ACTIVE_PANEL_BADGE_COLOR = "#1e4aa8"
+ACTIVE_PANEL_BADGE_COLOR = "#235680"
 
 # GUI-only Workbench header background (see
 # gui.widgets.workbench_header.WorkbenchHeader) -- application chrome, kept
 # out of the Matplotlib Figure entirely (a plain Qt widget docked above the
 # canvas, never a scientific artist), same reasoning as the active-panel
-# badge above.
-WORKBENCH_HEADER_BG = "#f6f7fa"
+# badge above. A very pale accent-family tint (not the neutral bg_recessed
+# grey used elsewhere) -- this is the one band that names GNOVI's own
+# Workbench concept, so it gets a restrained touch of brand identity;
+# deliberately paler/less saturated than accent_soft so it reads as
+# identity, not as a checked/selected state.
+WORKBENCH_HEADER_BG = "#edf3f8"
 
 # QSpinBox/QDoubleSpinBox `::up-arrow`/`::down-arrow` image files -- see
 # `_ensure_spin_arrow_icon_files` (generates them) and the matching QSS
@@ -216,8 +220,12 @@ QGroupBox::title {{
     letter-spacing: 0.3px;
 }}
 
+/* Flat, not gradient -- see the matching QToolBar#MainToolBar QToolButton
+comment below for why the gloss/raised-bevel look was dropped from these
+two ordinary-button states specifically (checked/primary/pressed below
+were already flat and are unchanged). */
 QPushButton {{
-    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {bg_control}, stop:1 {bg_recessed});
+    background-color: {bg_control};
     border: 1px solid {border};
     border-radius: 5px;
     padding: 5px 12px;
@@ -228,7 +236,7 @@ QPushButton {{
 state reads as a distinct signal rather than three shades of the same blue
 border (see the state-system note in the module docstring). */
 QPushButton:hover {{
-    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {bg_raised_top}, stop:1 {bg_control});
+    background-color: {bg_raised_top};
     border-color: {border_strong};
 }}
 
@@ -305,15 +313,20 @@ chrome below is scoped to stay off Matplotlib's own toolbar entirely. Every
 other QToolButton in the app (ToolStrip, WorkbenchNewButton, the
 collapsible-section toggle) carries its own objectName/property selector
 and so was never affected either way. */
+/* Flat, not gradient -- the glossy raised-bevel look on these two ordinary
+button/toolbar-button states was the most dated-reading part of the chrome
+(1.0 cosmetic pass); every other state on these two selectors (:pressed/
+:checked/:disabled/:focus, and the primary-button variant) was already
+flat and is unchanged here. */
 QToolBar#MainToolBar QToolButton {{
-    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {bg_control}, stop:1 {bg_recessed});
+    background-color: {bg_control};
     border: 1px solid {border};
     border-radius: 4px;
     padding: 4px;
 }}
 
 QToolBar#MainToolBar QToolButton:hover {{
-    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {bg_raised_top}, stop:1 {bg_control});
+    background-color: {bg_raised_top};
     border-color: {border_strong};
 }}
 
@@ -719,11 +732,12 @@ QLabel[pageHeading="true"] {{
 
 /* Workbench header -- see gui.widgets.workbench_header.WorkbenchHeader.
 Surface 2 (Workbench-adjacent chrome), GUI-only application chrome docked
-above the plot canvas, never part of the Matplotlib Figure/exports. */
+above the plot canvas, never part of the Matplotlib Figure/exports. Flat
+fill from `WORKBENCH_HEADER_BG` (a pale accent-family tint, not a shared
+neutral gradient) -- deliberately the one band in this stack carrying a
+restrained touch of GNOVI identity; see that constant's own comment. */
 QWidget#WorkbenchHeader {{
-    background-color: qlineargradient(
-        x1:0, y1:0, x2:0, y2:1, stop:0 {bg_raised_top}, stop:1 {bg_raised_bottom}
-    );
+    background-color: {workbench_header_bg};
     border-bottom: 1px solid {border};
 }}
 
@@ -761,7 +775,7 @@ QTabBar#WorkbenchTabBar::tab:hover {{
 
 QTabBar#WorkbenchTabBar::tab:selected {{
     color: {accent_pressed};
-    border-bottom: 2px solid {accent};
+    border-bottom: 3px solid {accent};
 }}
 
 QToolButton#WorkbenchNewButton {{
@@ -910,6 +924,7 @@ def build_stylesheet(palette: dict[str, str] = _LIGHT_PALETTE) -> str:
         spin_down_arrow_path=_SPIN_DOWN_ARROW_PATH.as_posix(),
         spin_up_arrow_disabled_path=_SPIN_UP_ARROW_DISABLED_PATH.as_posix(),
         spin_down_arrow_disabled_path=_SPIN_DOWN_ARROW_DISABLED_PATH.as_posix(),
+        workbench_header_bg=WORKBENCH_HEADER_BG,
         **palette,
     )
 

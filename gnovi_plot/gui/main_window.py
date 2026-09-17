@@ -42,7 +42,7 @@ from gnovi_plot.core.project_io import ProjectIOError, load_project, save_projec
 from gnovi_plot.core.workbench import Workbench
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
 from gnovi_plot.gui.dialogs.export_figure_dialog import ExportFigureDialog
-from gnovi_plot.gui.styles import PlotTheme, apply_app_theme
+from gnovi_plot.gui.styles import _LIGHT_PALETTE, PlotTheme, apply_app_theme
 from gnovi_plot.gui.undo_manager import UndoManager, snapshot_figure
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.analysis_panel import AnalysisPanel
@@ -72,7 +72,7 @@ from gnovi_plot.plotting.series3d import Series3D
 _COORD_LABEL_SAMPLE_TEXT = "x = -0000.0000, y = -0000.0000"
 
 _UNDO_REDO_ICON_SIZE = 24
-_UNDO_REDO_ICON_COLOR = "#20242b"  # matches styles._LIGHT_PALETTE["text"]; see _make_undo_redo_icon
+_UNDO_REDO_ICON_COLOR = _LIGHT_PALETTE["muted_text"]
 
 
 def _arrowhead_polygon(tip: QPointF, direction: QPointF, size: float) -> QPolygonF:
