@@ -14,9 +14,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gnovi_plot.gui.styles import _LIGHT_PALETTE
+
 STRIP_WIDTH = 64
 _ICON_SIZE = 22
-_ICON_COLOR = "#5b6270"
+_ICON_COLOR = _LIGHT_PALETTE["muted_text"]
 
 
 def _make_icon(kind: str) -> QIcon:
