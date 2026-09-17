@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -36,6 +35,7 @@ from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.analysis_result_view import resolve_live_xy
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.gui.widgets.cv_analysis_section import CVAnalysisSection
+from gnovi_plot.gui.widgets.scroll_safe_controls import ScrollSafeComboBox, ScrollSafeSpinBox
 from gnovi_plot.gui.widgets.xrd_analysis_section import XRDAnalysisSection
 from gnovi_plot.modules.electrochemistry.results import CVCycleAnalysisResult
 from gnovi_plot.modules.xrd.fitting import XRDPeakFitResult
@@ -214,7 +214,7 @@ class AnalysisPanel(QWidget):
         # CollapsibleSection group is visible; Analysis History below is
         # shared by every tool, never duplicated per tool.
         self.tool_label = QLabel("Analysis Tool")
-        self.tool_combo = QComboBox()
+        self.tool_combo = ScrollSafeComboBox()
         self.tool_combo.addItems([_TOOL_CURVE_FITTING, _TOOL_XRD, _TOOL_CV])
 
         self.xrd_section_widget = XRDAnalysisSection(figure, dataset_manager)
@@ -224,20 +224,35 @@ class AnalysisPanel(QWidget):
         self.cv_section = CollapsibleSection("Cyclic Voltammetry", self.cv_section_widget)
 
         self.source_label = QLabel("Source series")
-        self.source_combo = QComboBox()
+        self.source_combo = ScrollSafeComboBox()
         self.source_combo.setMinimumWidth(90)
+        # Populated from arbitrary dataset/series labels (see refresh()) --
+        # left at Qt's default AdjustToContentsOnFirstShow, a long imported
+        # name would force this combo wider than the drawer, and -- because
+        # that policy only measures once, the first time the combo becomes
+        # visible -- Curve Fitting happens to dodge this today only because
+        # it's shown (while still empty) before XRD/CV ever are, not
+        # because it's actually safe. Bounded the same way XRD/CV's source
+        # combos are: 20 characters shows a meaningfully differentiating
+        # prefix of a real dataset name while keeping this comfortably
+        # under the workflow viewport; Qt elides the displayed text,
+        # currentData()/currentText() still return the full label/id.
+        self.source_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.source_combo.setMinimumContentsLength(20)
 
         self.status_label = QLabel(_NO_SOURCE_TEXT)
         self.status_label.setWordWrap(True)
 
         self.model_label = QLabel("Model")
-        self.model_combo = QComboBox()
+        self.model_combo = ScrollSafeComboBox()
         for text, model in _MODEL_OPTIONS:
             self.model_combo.addItem(text, model)
         self.model_combo.setMinimumWidth(90)
 
         self.degree_label = QLabel("Polynomial order")
-        self.degree_spin = QSpinBox()
+        self.degree_spin = ScrollSafeSpinBox()
         self.degree_spin.setRange(1, 10)
         self.degree_spin.setValue(2)
 

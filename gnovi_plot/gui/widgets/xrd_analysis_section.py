@@ -8,7 +8,6 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -16,7 +15,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -27,6 +25,11 @@ from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
+from gnovi_plot.gui.widgets.scroll_safe_controls import (
+    ScrollSafeComboBox,
+    ScrollSafeDoubleSpinBox,
+    ScrollSafeSpinBox,
+)
 from gnovi_plot.modules.xrd.bragg import InvalidBraggInputError, d_spacing
 from gnovi_plot.modules.xrd.fitting import (
     BASELINE_CONSTANT,
@@ -310,17 +313,32 @@ class XRDAnalysisSection(QWidget):
 
         # --- Source -----------------------------------------------------
         self.source_label = QLabel("Source series")
-        self.source_combo = QComboBox()
+        self.source_combo = ScrollSafeComboBox()
+        # Populated from arbitrary dataset/series labels (see refresh()) --
+        # left at Qt's default AdjustToContentsOnFirstShow, a long imported
+        # name would force this combo (and the whole sidebar section) wider
+        # than the drawer, and the width would stick even after a shorter
+        # name replaced it (AdjustToContentsOnFirstShow only measures once,
+        # the first time the combo becomes visible). Bounded here the same
+        # way CVAnalysisSection.sign_combo already is -- 20 characters shows
+        # a meaningfully differentiating prefix of a real dataset name while
+        # keeping this section's minimum width comfortably under the
+        # workflow viewport; Qt elides the displayed text, currentData()/
+        # currentText() still return the full label/id.
+        self.source_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.source_combo.setMinimumContentsLength(20)
         self.status_label = QLabel(_NO_SOURCE_TEXT)
         self.status_label.setWordWrap(True)
 
         # --- Radiation ----------------------------------------------------
-        self.radiation_combo = QComboBox()
+        self.radiation_combo = ScrollSafeComboBox()
         self.radiation_combo.addItem("Select radiation…", None)
         for preset_id, radiation in RADIATION_PRESETS.items():
             self.radiation_combo.addItem(radiation.label, preset_id)
         self.radiation_combo.addItem("Custom…", "custom")
-        self.custom_wavelength_spin = QDoubleSpinBox()
+        self.custom_wavelength_spin = ScrollSafeDoubleSpinBox()
         self.custom_wavelength_spin.setDecimals(6)
         self.custom_wavelength_spin.setRange(0.000001, 100.0)
         self.custom_wavelength_spin.setValue(1.5406)
@@ -335,15 +353,15 @@ class XRDAnalysisSection(QWidget):
         radiation_layout.addWidget(self.resolved_wavelength_label)
 
         # --- Background -----------------------------------------------------
-        self.background_method_combo = QComboBox()
+        self.background_method_combo = ScrollSafeComboBox()
         self.background_method_combo.addItems([_BACKGROUND_NONE, _BACKGROUND_ARPLS, _BACKGROUND_POLYNOMIAL])
-        self.arpls_lam_spin = QDoubleSpinBox()
+        self.arpls_lam_spin = ScrollSafeDoubleSpinBox()
         self.arpls_lam_spin.setDecimals(0)
         self.arpls_lam_spin.setRange(1.0, 1e12)
         self.arpls_lam_spin.setValue(1e5)
         self.baseline_points_edit = QLineEdit()
         self.baseline_points_edit.setPlaceholderText("e.g. 0-15, 180-200")
-        self.polynomial_degree_spin = QSpinBox()
+        self.polynomial_degree_spin = ScrollSafeSpinBox()
         self.polynomial_degree_spin.setRange(0, 10)
         self.polynomial_degree_spin.setValue(2)
         self.preview_background_button = QPushButton("Preview Background")
@@ -368,11 +386,11 @@ class XRDAnalysisSection(QWidget):
 
         # --- Smoothing -----------------------------------------------------
         self.smoothing_enabled_check = QCheckBox("Enable Savitzky–Golay")
-        self.smoothing_window_spin = QSpinBox()
+        self.smoothing_window_spin = ScrollSafeSpinBox()
         self.smoothing_window_spin.setRange(3, 9999)
         self.smoothing_window_spin.setSingleStep(2)
         self.smoothing_window_spin.setValue(11)
-        self.smoothing_order_spin = QSpinBox()
+        self.smoothing_order_spin = ScrollSafeSpinBox()
         self.smoothing_order_spin.setRange(0, 20)
         self.smoothing_order_spin.setValue(3)
         self.preview_smoothed_button = QPushButton("Preview Smoothed")
@@ -393,22 +411,22 @@ class XRDAnalysisSection(QWidget):
         smoothing_layout.addWidget(self.add_smoothed_button)
 
         # --- Detection input chain -----------------------------------------
-        self.detection_input_combo = QComboBox()
+        self.detection_input_combo = ScrollSafeComboBox()
         self.detection_input_label = QLabel("Peak detection input: Raw")
 
         # --- Peak detection -----------------------------------------------
-        self.prominence_spin = QDoubleSpinBox()
+        self.prominence_spin = ScrollSafeDoubleSpinBox()
         self.prominence_spin.setDecimals(4)
         self.prominence_spin.setRange(0.0, 1e12)
         self.prominence_spin.setValue(0.0)
-        self.distance_spin = QSpinBox()
+        self.distance_spin = ScrollSafeSpinBox()
         self.distance_spin.setRange(0, 100000)
         self.distance_spin.setValue(0)
-        self.height_spin = QDoubleSpinBox()
+        self.height_spin = ScrollSafeDoubleSpinBox()
         self.height_spin.setDecimals(4)
         self.height_spin.setRange(0.0, 1e12)
         self.height_spin.setValue(0.0)
-        self.width_spin = QDoubleSpinBox()
+        self.width_spin = ScrollSafeDoubleSpinBox()
         self.width_spin.setDecimals(4)
         self.width_spin.setRange(0.0, 1e12)
         self.width_spin.setValue(0.0)
@@ -458,7 +476,7 @@ class XRDAnalysisSection(QWidget):
         manual_row.addWidget(self.toggle_enabled_button)
 
         # --- Labels -----------------------------------------------------
-        self.label_mode_combo = QComboBox()
+        self.label_mode_combo = ScrollSafeComboBox()
         self.label_mode_combo.addItems(
             [_LABEL_MODE_OFF, _LABEL_MODE_NUMBER, _LABEL_MODE_TWO_THETA, _LABEL_MODE_D_SPACING]
         )
@@ -475,19 +493,19 @@ class XRDAnalysisSection(QWidget):
         results_layout.addWidget(self.export_table_button)
 
         # --- Peak Profile Fitting (collapsed by default) ----------------
-        self.fit_peak_combo = QComboBox()
-        self.fit_min_spin = QDoubleSpinBox()
-        self.fit_max_spin = QDoubleSpinBox()
+        self.fit_peak_combo = ScrollSafeComboBox()
+        self.fit_min_spin = ScrollSafeDoubleSpinBox()
+        self.fit_max_spin = ScrollSafeDoubleSpinBox()
         for spin in (self.fit_min_spin, self.fit_max_spin):
             spin.setDecimals(4)
             spin.setSuffix(" °2θ")
             spin.setSingleStep(0.01)
             spin.setRange(0.0, 180.0)
-        self.fit_model_combo = QComboBox()
+        self.fit_model_combo = ScrollSafeComboBox()
         for text, key in _FIT_MODEL_LABELS:
             self.fit_model_combo.addItem(text, key)
         self.fit_model_combo.setToolTip(_FIT_MODEL_TOOLTIP)
-        self.fit_baseline_combo = QComboBox()
+        self.fit_baseline_combo = ScrollSafeComboBox()
         for text, key in _FIT_BASELINE_LABELS:
             self.fit_baseline_combo.addItem(text, key)
         self.fit_baseline_combo.setToolTip(_FIT_BASELINE_TOOLTIP)

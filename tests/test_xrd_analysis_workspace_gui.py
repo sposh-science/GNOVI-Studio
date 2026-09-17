@@ -80,6 +80,61 @@ def test_switching_to_xrd_tool_shows_xrd_section_and_hides_fit_section(qapp):
     assert not panel.fit_section.isVisibleTo(panel)
 
 
+def test_xrd_prominence_spin_ignores_an_unfocused_wheel_scroll(qapp):
+    # Issue #56: a real XRD control, not just the shared
+    # ScrollSafeDoubleSpinBox class in isolation (see
+    # test_scroll_safe_controls.py).
+    from PySide6.QtCore import QCoreApplication, QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+
+    figure = GnoviFigure()
+    panel = AnalysisPanel(figure, DatasetManager())
+    panel.show()
+    panel.tool_combo.setCurrentText("XRD Peak Analysis")
+    QCoreApplication.processEvents()
+    spin = panel.xrd_section_widget.prominence_spin
+    assert spin.hasFocus() is False
+    value_before = spin.value()
+
+    event = QWheelEvent(
+        QPointF(spin.rect().center()), QPointF(spin.mapToGlobal(spin.rect().center())),
+        QPoint(0, 0), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False,
+    )
+    QApplication.sendEvent(spin, event)
+    QCoreApplication.processEvents()
+
+    assert spin.value() == value_before
+    assert event.isAccepted() is False
+
+
+def test_xrd_source_combo_width_does_not_grow_with_a_long_series_label(qapp):
+    # Issue #56: source_combo used Qt's default AdjustToContentsOnFirstShow,
+    # unbounded for an arbitrary, import-derived series label -- confirmed to
+    # force XRDAnalysisSection wider than the drawer's workflow viewport at
+    # realistic dataset-name lengths. Verify it's now bounded.
+    empty_panel = AnalysisPanel(GnoviFigure(), DatasetManager())
+    empty_panel.tool_combo.setCurrentText("XRD Peak Analysis")
+    baseline_section_width = empty_panel.xrd_section_widget.minimumSizeHint().width()
+
+    long_name = "XRD_Sample_Batch3_2026-09-16_CuKalpha_RoomTemp_Scan001_ExtraLong"
+    figure = GnoviFigure()
+    dataset = _synthetic_pattern_dataset(name=long_name)
+    series = _panel_with_series(figure, dataset)
+    panel = AnalysisPanel(figure, DatasetManager())
+    panel.tool_combo.setCurrentText("XRD Peak Analysis")
+
+    xrd = panel.xrd_section_widget
+    # Bounded: the section's own minimum stays within a small, constant
+    # margin of the empty-combo baseline, regardless of label length (the
+    # unbounded default policy would instead scale directly with the label's
+    # character count -- 500+px for a label this long, per the #56 audit).
+    assert xrd.minimumSizeHint().width() < baseline_section_width + 250
+    # Presentation-only: the full label/id must still be intact underneath.
+    assert xrd.source_combo.currentText() == series.label
+    assert xrd.source_combo.currentData() == series.id
+
+
 def test_curve_fitting_still_works_unchanged_alongside_xrd(qapp):
     """Regression: adding XRD must not disturb existing curve-fit behavior."""
     figure = GnoviFigure()

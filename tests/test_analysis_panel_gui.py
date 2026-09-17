@@ -45,6 +45,84 @@ def test_source_combo_lists_line_and_scatter_series_in_the_active_panel(qapp):
     assert panel.source_combo.itemData(1) == scatter.id
 
 
+def test_source_combo_width_does_not_grow_with_a_long_series_label(qapp):
+    # Issue #56: source_combo used Qt's default AdjustToContentsOnFirstShow,
+    # which sizes to the full unwrapped text of whatever's in the list --
+    # unbounded for an arbitrary, import-derived series label. Curve Fitting
+    # only "looked" safe by construction-order accident (its combo is
+    # first-shown, and its cached width locked in, while still empty, before
+    # XRD/CV are ever shown) -- verify it's now genuinely bounded, not just
+    # accidentally narrow.
+    figure = GnoviFigure()
+    short_ds = _dataset("short")
+    short_width = AnalysisPanel(figure, DatasetManager())
+    baseline = short_width.source_combo.minimumSizeHint().width()
+
+    long_name = "XRD_Sample_Batch3_2026-09-16_CuKalpha_RoomTemp_Scan001_ExtraLong"
+    figure2 = GnoviFigure()
+    ds = _dataset(long_name)
+    figure2.add_series(PlotSeries.line(ds, "x", "y", label=long_name))
+    panel = AnalysisPanel(figure2, DatasetManager())
+
+    # Bounded: nowhere near what the raw label length would otherwise force
+    # (~500+px for this label under the old default policy -- see the #56
+    # audit), and within a small, constant margin of the short-label case.
+    assert panel.source_combo.minimumSizeHint().width() < baseline + 250
+    # Presentation-only: the full label/id must still be intact underneath.
+    assert panel.source_combo.currentText() == long_name
+    assert panel.source_combo.currentData() is not None
+
+
+def test_workflow_scroll_stays_horizontal_off_and_vertical_scrollable(qapp):
+    # Issue #56: the fix must not touch the (already-correct) scroll
+    # architecture -- only the combo width demand. Horizontal scrolling
+    # must stay disabled, and vertical scrolling into a tall XRD/CV
+    # workflow must still work, at a narrow width where it's actually
+    # needed.
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QScrollArea
+
+    figure = GnoviFigure()
+    ds = _dataset("XRD_Sample_Batch3_2026-09-16_CuKalpha_RoomTemp_Scan001_ExtraLong")
+    figure.add_series(PlotSeries.line(ds, "x", "y", label=ds.name))
+    panel = AnalysisPanel(figure, DatasetManager())
+    panel.tool_combo.setCurrentText("XRD Peak Analysis")
+    panel.resize(320, 500)
+
+    scroll = panel.findChildren(QScrollArea)[0]
+    assert scroll.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+    vbar = scroll.verticalScrollBar()
+    assert vbar.maximum() > 0  # still needs, and can, scroll vertically
+
+
+def test_degree_spin_ignores_an_unfocused_wheel_scroll(qapp):
+    # Issue #56: a real Curve Fitting control, not just the shared
+    # ScrollSafeSpinBox class in isolation (see test_scroll_safe_controls.py).
+    from PySide6.QtCore import QCoreApplication, QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+
+    figure = GnoviFigure()
+    panel = AnalysisPanel(figure, DatasetManager())
+    panel.show()
+    panel.model_combo.setCurrentText("Polynomial")  # degree_spin is only visible for this model
+    QCoreApplication.processEvents()
+    assert panel.degree_spin.isVisible() is True
+    assert panel.degree_spin.hasFocus() is False
+    value_before = panel.degree_spin.value()
+
+    event = QWheelEvent(
+        QPointF(panel.degree_spin.rect().center()),
+        QPointF(panel.degree_spin.mapToGlobal(panel.degree_spin.rect().center())),
+        QPoint(0, 0), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False,
+    )
+    from PySide6.QtWidgets import QApplication
+    QApplication.sendEvent(panel.degree_spin, event)
+    QCoreApplication.processEvents()
+
+    assert panel.degree_spin.value() == value_before
+    assert event.isAccepted() is False
+
+
 def test_source_combo_excludes_histogram_series(qapp):
     figure = GnoviFigure()
     ds = _dataset()
