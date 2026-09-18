@@ -644,7 +644,13 @@ def test_add_peak_disarms_on_active_panel_switch(qapp):
     assert xrd.is_manual_peak_mode()
     window._set_active_panel(1)
     assert not xrd.is_manual_peak_mode()
-    assert not window._xrd_manual_peak_mode
+    # MainWindow no longer mirrors this in its own state (Issue #62) --
+    # it queries the active AnalysisSection live instead. Still XRD Peak
+    # Analysis here (only the active panel changed, not the tool), so
+    # this is exactly the same check the removed `_xrd_manual_peak_mode`
+    # flag used to make, just against the real, live source of truth.
+    assert window.analysis_panel.active_section() is xrd
+    assert not window.analysis_panel.active_section().is_manual_peak_mode()
 
 
 def test_add_peak_disarms_on_source_series_change(qapp):

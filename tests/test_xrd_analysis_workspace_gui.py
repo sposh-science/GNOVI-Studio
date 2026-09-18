@@ -993,7 +993,6 @@ def test_manual_peak_click_ignores_when_active_panel_is_3d(qapp):
     # something re-arms Add Peak afterward.
     window._set_active_panel(1)
     window.analysis_panel.xrd_section_widget._set_manual_peak_mode(True)
-    window._xrd_manual_peak_mode = True
     axes_3d = window.plot_canvas.axes_list[1]
     window._on_canvas_click(_FakeClickEvent(inaxes=axes_3d, xdata=45.0, ydata=200.0))
     assert xrd.current_result() is None

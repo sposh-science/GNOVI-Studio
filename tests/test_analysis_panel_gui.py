@@ -95,6 +95,24 @@ def test_workflow_scroll_stays_horizontal_off_and_vertical_scrollable(qapp):
     assert vbar.maximum() > 0  # still needs, and can, scroll vertically
 
 
+def test_active_section_returns_the_widget_matching_the_selected_tool(qapp):
+    # Issue #62: MainWindow routes interaction (manual canvas clicks, ...)
+    # against whichever AnalysisSection this reports, instead of asking
+    # "is this XRD or CV?" itself -- must always agree with what
+    # `_update_tool_visibility` actually shows.
+    figure = GnoviFigure()
+    panel = AnalysisPanel(figure, DatasetManager())
+
+    panel.tool_combo.setCurrentText("XRD Peak Analysis")
+    assert panel.active_section() is panel.xrd_section_widget
+
+    panel.tool_combo.setCurrentText("Cyclic Voltammetry")
+    assert panel.active_section() is panel.cv_section_widget
+
+    panel.tool_combo.setCurrentText("Curve Fitting")
+    assert panel.active_section() is None
+
+
 def test_degree_spin_ignores_an_unfocused_wheel_scroll(qapp):
     # Issue #56: a real Curve Fitting control, not just the shared
     # ScrollSafeSpinBox class in isolation (see test_scroll_safe_controls.py).
