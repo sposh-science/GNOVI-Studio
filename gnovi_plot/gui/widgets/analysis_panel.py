@@ -33,7 +33,7 @@ from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.analysis_result_view import resolve_live_xy
-from gnovi_plot.gui.widgets.analysis_section import eligible_analysis_series
+from gnovi_plot.gui.widgets.analysis_section import AnalysisSection, eligible_analysis_series
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.gui.widgets.cv_analysis_section import CVAnalysisSection
 from gnovi_plot.gui.widgets.scroll_safe_controls import ScrollSafeComboBox, ScrollSafeSpinBox
@@ -372,6 +372,23 @@ class AnalysisPanel(QWidget):
         # re-render.
         self.cv_overlay_changed.emit()
         self.xrd_overlay_changed.emit()
+
+    def active_section(self) -> AnalysisSection | None:
+        """Whichever `AnalysisSection` the tool selector currently shows --
+        `None` for Curve Fitting, which has no dedicated `AnalysisSection`
+        (it stays inline in this panel; see Issue #61's own scope note on
+        why it wasn't extracted). Mirrors the exact `is_xrd`/`is_cv`
+        resolution `_update_tool_visibility` already uses, so this can
+        never disagree with what's actually visible. Lets `MainWindow`
+        route interaction (manual canvas clicks, ...) generically against
+        whichever section is active, instead of asking "is this XRD or
+        CV?" itself -- see Issue #62."""
+        tool = self.tool_combo.currentText()
+        if tool == _TOOL_XRD:
+            return self.xrd_section_widget
+        if tool == _TOOL_CV:
+            return self.cv_section_widget
+        return None
 
     def disarm_xrd_manual_peak_mode(self) -> None:
         """Called by `MainWindow` on an active-panel switch (see `_on_

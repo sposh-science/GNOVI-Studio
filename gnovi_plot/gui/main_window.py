@@ -47,6 +47,7 @@ from gnovi_plot.gui.undo_manager import UndoManager, snapshot_figure
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.analysis_panel import AnalysisPanel
 from gnovi_plot.gui.widgets.analysis_result_view import AnalysisResultView
+from gnovi_plot.gui.widgets.analysis_section import AnalysisSection
 from gnovi_plot.gui.widgets.bottom_panel import BottomPanel
 from gnovi_plot.gui.widgets.data_tools_panel import DataToolsPanel
 from gnovi_plot.gui.widgets.dataframe_table_model import DataFrameTableModel
@@ -567,11 +568,6 @@ class MainWindow(QMainWindow):
         self._current_workbench_id = self._project.active_workbench.id
         self.figure_model = self._project.active_workbench.figure
         self._dirty = False
-        # True right after XRD Peak Analysis's "Add Peak" is toggled on --
-        # see `_on_canvas_click`/`AnalysisPanel.xrd_manual_peak_mode_changed`.
-        self._xrd_manual_peak_mode = False
-        # The CV sibling -- Cyclic Voltammetry's "Add Peak (click graph)".
-        self._cv_manual_peak_mode = False
 
         # `_pending_undo_snapshot` always holds a snapshot of the figure as
         # of the last committed checkpoint; see `_commit_undo_checkpoint`.
@@ -965,13 +961,18 @@ class MainWindow(QMainWindow):
         self.analysis_panel.add_to_plot_requested.connect(self._on_add_to_plot)
         self.analysis_panel.remove_fit_curve_requested.connect(self._on_remove_fit_curve)
         self.analysis_panel.history_result_selected.connect(self._on_history_result_selected)
-        self.analysis_panel.xrd_result_updated.connect(self._on_xrd_result_updated)
+        # xrd_result_updated/cv_result_updated both carry the same in-place-
+        # edit semantics (see `_on_active_result_updated`'s own docstring)
+        # -- one shared handler, not a pair, per Issue #62's dispatch
+        # generalization (this is a mechanical consequence of the already-
+        # identical AnalysisSection.result_updated payload/semantics, not a
+        # new signal architecture -- AnalysisPanel's xrd_*/cv_* signals
+        # themselves are unchanged).
+        self.analysis_panel.xrd_result_updated.connect(self._on_active_result_updated)
+        self.analysis_panel.cv_result_updated.connect(self._on_active_result_updated)
         self.analysis_panel.xrd_overlay_changed.connect(self._refresh_xrd_overlay)
-        self.analysis_panel.xrd_manual_peak_mode_changed.connect(self._on_xrd_manual_peak_mode_changed)
         self.analysis_panel.xrd_status_message.connect(lambda msg: self.statusBar().showMessage(msg, 4000))
-        self.analysis_panel.cv_result_updated.connect(self._on_cv_result_updated)
         self.analysis_panel.cv_overlay_changed.connect(self._refresh_cv_overlay)
-        self.analysis_panel.cv_manual_peak_mode_changed.connect(self._on_cv_manual_peak_mode_changed)
         self.analysis_panel.cv_status_message.connect(lambda msg: self.statusBar().showMessage(msg, 4000))
         # The detailed XRD / CV peak table lives in the bottom Results tab
         # now (too wide for the left drawer); its row selection drives the
@@ -1796,34 +1797,20 @@ class MainWindow(QMainWindow):
         self.analysis_result_view.show_result(result)
         self._set_dirty(True)
 
-    def _on_xrd_result_updated(self, result) -> None:
-        """An in-place edit to the current XRDAnalysisResult (manual peak
-        add/remove/enable, radiation change -- see `AnalysisPanel.
-        xrd_result_updated`'s own docstring): the exact object already in
-        `PanelResultHistory` was mutated, not replaced, so this only
-        re-displays it and marks the project dirty -- never a new
-        History entry, never an undo checkpoint (analysis-result edits
-        aren't part of the figure/series undo snapshot, same as any
-        other result selection)."""
-        self.analysis_result_view.show_result(result)
-        self._set_dirty(True)
-
-    def _on_xrd_manual_peak_mode_changed(self, active: bool) -> None:
-        self._xrd_manual_peak_mode = active
-
-    def _on_cv_result_updated(self, result) -> None:
-        """The CV sibling of `_on_xrd_result_updated`: an in-place edit to
-        the current CVCycleAnalysisResult (manual candidate add/remove,
-        enable/disable, process reassignment, sign-convention change) --
-        the exact object already in `PanelResultHistory` was mutated, not
+    def _on_active_result_updated(self, result) -> None:
+        """An in-place edit to the current result of whichever analysis
+        tool is active (XRD: manual peak add/remove/enable, radiation
+        change; CV: manual candidate add/remove/enable, process
+        reassignment, sign-convention change -- see `AnalysisPanel.
+        xrd_result_updated`/`cv_result_updated`'s own docstrings): the
+        exact object already in `PanelResultHistory` was mutated, not
         replaced, so this only re-displays it and marks the project dirty
-        (no new History entry, no undo checkpoint -- analysis-result edits
-        aren't part of the figure/series undo snapshot)."""
+        -- never a new History entry, never an undo checkpoint (analysis-
+        result edits aren't part of the figure/series undo snapshot, same
+        as any other result selection). One shared handler for both --
+        see this method's own connection site for why."""
         self.analysis_result_view.show_result(result)
         self._set_dirty(True)
-
-    def _on_cv_manual_peak_mode_changed(self, active: bool) -> None:
-        self._cv_manual_peak_mode = active
 
     def _on_mouse_move(self, event) -> None:
         if event.inaxes is None or event.xdata is None or event.ydata is None:
@@ -1851,16 +1838,14 @@ class MainWindow(QMainWindow):
         other double-click behavior on the canvas."""
         if event.inaxes is None:
             return
-        if self._xrd_manual_peak_mode and event.button == 1:
+        active_section = self.analysis_panel.active_section()
+        if active_section is not None and active_section.is_manual_peak_mode() and event.button == 1:
             # Consumes the click entirely -- never also activates/focuses
             # a panel, and never falls through to the ordinary
             # activate-on-click branch below, even when rejected (see
-            # `_handle_xrd_manual_peak_click`'s own docstring for exactly
+            # `_handle_manual_peak_click`'s own docstring for exactly
             # what a rejected click does -- namely, nothing at all).
-            self._handle_xrd_manual_peak_click(event)
-            return
-        if self._cv_manual_peak_mode and event.button == 1:
-            self._handle_cv_manual_peak_click(event)
+            self._handle_manual_peak_click(event, active_section)
             return
         if event.dblclick and event.button == 1 and self._is_current_workbench_focused():
             self._restore_multi_panel_view()
@@ -1870,27 +1855,33 @@ class MainWindow(QMainWindow):
             return
         self._set_active_panel(index)
 
-    def _handle_xrd_manual_peak_click(self, event) -> None:
-        """A click while "Add Peak" is armed only ever adds a seed to the
-        Panel `AnalysisPanel.xrd_add_manual_peak` actually targets --
-        `figure_model.active_panel` (see `XRDAnalysisSection.
-        add_manual_peak`, which stamps `source_panel_id=self._figure.
-        active_panel.id`). So the click's own Axes must resolve, via
-        `panel_index_for_axes` -- the same click-to-panel mapping
-        `_on_canvas_click`'s ordinary activate-on-click branch already
-        uses below -- to that SAME active panel index; deliberately not
-        `plot_canvas.active_axes()` (which answers "what panel is
-        active", not "what panel did this click land in" -- using it
-        here would accept a click on any panel while Add Peak is armed,
-        recreating exactly the wrong-panel bug this guards against).
+    def _handle_manual_peak_click(self, event, section: AnalysisSection) -> None:
+        """A click while `section`'s manual-peak-add mode is armed only
+        ever adds a seed to the Panel `section.add_manual_peak` actually
+        targets -- `figure_model.active_panel` (every current
+        `AnalysisSection.add_manual_peak` override stamps
+        `source_panel_id=self._figure.active_panel.id`). So the click's
+        own Axes must resolve, via `panel_index_for_axes` -- the same
+        click-to-panel mapping `_on_canvas_click`'s ordinary activate-on-
+        click branch already uses below -- to that SAME active panel
+        index; deliberately not `plot_canvas.active_axes()` (which
+        answers "what panel is active", not "what panel did this click
+        land in" -- using it here would accept a click on any panel while
+        Add Peak is armed, recreating exactly the wrong-panel bug this
+        guards against).
 
         A click on any other panel's Axes (a second 2D panel, a
         `Panel3D`, or anything `panel_index_for_axes` doesn't recognize
         as one of ours), non-finite coordinates, or a click outside any
         data area is silently ignored: no seed added, active panel never
-        switched, `xrd_add_manual_peak` never called at all -- so no
+        switched, `add_manual_peak` never called at all -- so no
         result/history mutation and no `_set_dirty` call happens for a
-        rejected click, same as clicking outside any Axes already does."""
+        rejected click, same as clicking outside any Axes already does.
+        One shared handler for every `AnalysisSection` (XRD's own
+        radiation-seeded peak, CV's own nearest-sample-snapped candidate,
+        ...) -- see Issue #62; the guards above are identical regardless
+        of which section armed the click, only the final
+        `section.add_manual_peak(...)` call is section-specific."""
         index = self.plot_canvas.panel_index_for_axes(event.inaxes)
         if index is None or index != self.figure_model.active_panel_index:
             return
@@ -1900,27 +1891,7 @@ class MainWindow(QMainWindow):
             return
         if not (math.isfinite(event.xdata) and math.isfinite(event.ydata)):
             return
-        self.analysis_panel.xrd_add_manual_peak(event.xdata, event.ydata)
-
-    def _handle_cv_manual_peak_click(self, event) -> None:
-        """The CV sibling of `_handle_xrd_manual_peak_click` -- identical
-        wrong-panel guard (`panel_index_for_axes` must resolve to the
-        active panel index, NOT `active_axes()`), `Panel3D` guard, and
-        finite-coordinate guard. A rejected click does nothing: no
-        candidate added, no panel switch, no dirty. The CV section itself
-        then snaps the click to the nearest sample within the sweep it
-        landed in and assigns a best-guess process (see `CVAnalysisSection.
-        add_manual_peak`)."""
-        index = self.plot_canvas.panel_index_for_axes(event.inaxes)
-        if index is None or index != self.figure_model.active_panel_index:
-            return
-        if isinstance(self.figure_model.active_panel, Panel3D):
-            return
-        if event.xdata is None or event.ydata is None:
-            return
-        if not (math.isfinite(event.xdata) and math.isfinite(event.ydata)):
-            return
-        self.analysis_panel.cv_add_manual_peak(event.xdata, event.ydata)
+        section.add_manual_peak(event.xdata, event.ydata)
 
     def _on_canvas_release(self, event) -> None:
         """A left-button release on the canvas. Interactive mouse rotation
