@@ -51,6 +51,7 @@ from gnovi_plot.analysis.segments import (
 )
 from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
+from gnovi_plot.gui.widgets.analysis_section import AnalysisSection, eligible_analysis_series
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.gui.widgets.scroll_safe_controls import ScrollSafeComboBox, ScrollSafeDoubleSpinBox
 from gnovi_plot.modules.electrochemistry.common import (
@@ -128,41 +129,18 @@ _SCAN_RATE_UNITS = ["mV/s", "V/s"]
 _PROCESS_FLIP = {PROCESS_ANODIC: PROCESS_CATHODIC, PROCESS_CATHODIC: PROCESS_ANODIC}
 
 
-def eligible_cv_series(figure: GnoviFigure) -> list[PlotSeries]:
-    """Line/scatter series in the active panel usable as a CV source --
-    excludes histograms (no ``y_column``), stale series, and anything that
-    isn't a ``PlotSeries`` (a ``Panel3D``'s ``Series3D`` items). Empty when
-    the active panel is a ``Panel3D``. Mirrors
-    ``gui.widgets.xrd_analysis_section._eligible_series``.
-    """
-    if isinstance(figure.active_panel, Panel3D):
-        return []
-    return [
-        s
-        for s in figure.series
-        if isinstance(s, PlotSeries) and s.y_column is not None and not s.stale
-    ]
-
-
-class CVAnalysisSection(QWidget):
+class CVAnalysisSection(AnalysisSection):
     """See the module docstring. Emits the generic ``analysis_result_ready``
     for a fresh Find Peaks (a new history entry) and ``result_updated`` for
     an in-place edit of the current result."""
 
-    analysis_result_ready = Signal(AnalysisResult)
-    result_updated = Signal(AnalysisResult)
-    overlay_changed = Signal()
-    manual_peak_mode_changed = Signal(bool)
-    status_message = Signal(str)
+    # analysis_result_ready/result_updated/overlay_changed/manual_peak_mode_
+    # changed/status_message are inherited from AnalysisSection unchanged.
     add_to_plot_requested = Signal(list)  # plumbed for CV-2B; unused in CV-2A
 
     def __init__(self, figure: GnoviFigure, dataset_manager: DatasetManager, parent=None):
-        super().__init__(parent)
-        self._figure = figure
-        self._manager = dataset_manager
+        super().__init__(figure, dataset_manager, parent)
         self._current_result: CVCycleAnalysisResult | None = None
-        self._manual_peak_mode = False
-        self._results_selected_rows: list[int] = []
         self._detection_defaults_touched = False
         # Cached per-refresh; recomputed from the source series.
         self._cycles: list[Cycle] = []
@@ -408,8 +386,7 @@ class CVAnalysisSection(QWidget):
         self._invalidate_transient()
         self.refresh()
 
-    def set_manager(self, dataset_manager: DatasetManager) -> None:
-        self._manager = dataset_manager
+    # set_manager is inherited from AnalysisSection unchanged.
 
     def _invalidate_transient(self) -> None:
         """Drop every piece of state that is only meaningful against the
@@ -430,7 +407,7 @@ class CVAnalysisSection(QWidget):
         eligible 2D series). Called by ``MainWindow`` after any figure-
         content change or panel switch."""
         is_panel3d = isinstance(self._figure.active_panel, Panel3D)
-        eligible = eligible_cv_series(self._figure)
+        eligible = eligible_analysis_series(self._figure)
 
         previous_id = self.source_combo.currentData()
         # Rebuild AND re-select under blocked signals -- `setCurrentIndex`
@@ -549,14 +526,8 @@ class CVAnalysisSection(QWidget):
     def current_result(self) -> CVCycleAnalysisResult | None:
         return self._current_result
 
-    def is_manual_peak_mode(self) -> bool:
-        return self._manual_peak_mode
-
-    def set_selected_peak_rows(self, rows: list[int]) -> None:
-        self._results_selected_rows = sorted({int(r) for r in rows})
-
-    def disarm_manual_peak_mode(self) -> None:
-        self._set_manual_peak_mode(False)
+    # is_manual_peak_mode/set_selected_peak_rows/disarm_manual_peak_mode
+    # are inherited from AnalysisSection unchanged.
 
     def overlay_payload(self) -> dict | None:
         """The transient CV overlay for the active panel, or ``None`` when

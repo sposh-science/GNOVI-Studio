@@ -24,6 +24,7 @@ from gnovi_plot.core.app_info import __version__ as _APP_VERSION
 from gnovi_plot.data.dataset import Dataset
 from gnovi_plot.data.dataset_manager import DatasetManager
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_xy
+from gnovi_plot.gui.widgets.analysis_section import AnalysisSection, eligible_analysis_series
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
 from gnovi_plot.gui.widgets.scroll_safe_controls import (
     ScrollSafeComboBox,
@@ -148,15 +149,6 @@ _FIT_MODEL_LABEL_BY_KEY = {
 _PROMINENCE_NOISE_MULTIPLIER = 5.0
 
 
-def _eligible_series(figure: GnoviFigure) -> list[PlotSeries]:
-    """Line/scatter series in the active panel -- empty if the active
-    panel is a Panel3D (XRD never operates on 3D data, see the class
-    docstring)."""
-    if isinstance(figure.active_panel, Panel3D):
-        return []
-    return [s for s in figure.series if isinstance(s, PlotSeries) and s.y_column is not None and not s.stale]
-
-
 def _default_prominence_from_signal(y: np.ndarray) -> float:
     """A conservative, transparent, data-dependent STARTING Prominence for
     `scipy.signal.find_peaks` -- see `_PROMINENCE_NOISE_MULTIPLIER`'s own
@@ -216,7 +208,7 @@ def _parse_index_ranges(text: str, max_index: int) -> list[int]:
     return sorted(indices)
 
 
-class XRDAnalysisSection(QWidget):
+class XRDAnalysisSection(AnalysisSection):
     """XRD Peak Analysis -- the second Analysis-page tool, alongside
     Curve Fitting (see `AnalysisPanel`'s own docstring: one Analysis
     destination, one `CollapsibleSection` per tool, sharing the same
@@ -265,31 +257,22 @@ class XRDAnalysisSection(QWidget):
     peak list, not a fresh analysis run.
     """
 
-    analysis_result_ready = Signal(AnalysisResult)
-    result_updated = Signal(AnalysisResult)
+    # analysis_result_ready/result_updated/overlay_changed/manual_peak_mode_
+    # changed/status_message are inherited from AnalysisSection unchanged --
+    # add_to_plot_requested/remove_fit_curve_requested stay declared here:
+    # XRD has both (a corrected/smoothed/fitted curve to add, a fitted
+    # curve to remove), CV has no removal signal at all -- see
+    # analysis_section.py's own module docstring for why these aren't
+    # forced into the shared contract.
     add_to_plot_requested = Signal(list)  # list[PlotSeries]
     remove_fit_curve_requested = Signal(list)  # list[str] of PlotSeries ids
-    overlay_changed = Signal()
-    manual_peak_mode_changed = Signal(bool)
-    status_message = Signal(str)
 
     def __init__(self, figure: GnoviFigure, dataset_manager: DatasetManager, parent=None):
-        super().__init__(parent)
-        self._figure = figure
-        self._manager = dataset_manager
+        super().__init__(figure, dataset_manager, parent)
         self._current_result: XRDAnalysisResult | None = None
         self._radiation: Radiation | None = None
         self._background_preview = None
         self._smooth_preview = None
-        self._manual_peak_mode = False
-        # Peak rows currently selected in the bottom Results-tab detail
-        # table (the authoritative detailed peak table; it moved there out
-        # of this narrow sidebar). Pushed in by `MainWindow` via
-        # `AnalysisPanel.xrd_set_selected_peak_rows` whenever that table's
-        # selection changes, and read by Remove Selected / Enable-Disable
-        # here so those actions act on exactly what the researcher selected
-        # in the Results table -- see `set_selected_peak_rows`.
-        self._results_selected_rows: list[int] = []
         # See `_maybe_apply_default_detection_params`'s own docstring --
         # True once the researcher has edited Prominence/Minimum
         # separation themselves for the currently-selected source series,
@@ -619,13 +602,12 @@ class XRDAnalysisSection(QWidget):
         self._set_manual_peak_mode(False)
         self.refresh()
 
-    def set_manager(self, dataset_manager: DatasetManager) -> None:
-        self._manager = dataset_manager
+    # set_manager is inherited from AnalysisSection unchanged.
 
     def refresh(self) -> None:
         """Rebuild the source-series list; disable everything with a clear
-        explanation when the active panel is a Panel3D (see `_eligible_
-        series`) or has no eligible 2D series yet.
+        explanation when the active panel is a Panel3D (see
+        `eligible_analysis_series`) or has no eligible 2D series yet.
 
         Called for far more than a source-series change -- e.g. active-
         panel switch (`MainWindow._on_panel_switched`) and any figure-
@@ -640,7 +622,7 @@ class XRDAnalysisSection(QWidget):
         unrelated refresh (e.g. editing some other panel's series style)
         must not discard an in-progress preview for no reason."""
         is_panel3d = isinstance(self._figure.active_panel, Panel3D)
-        eligible = _eligible_series(self._figure)
+        eligible = eligible_analysis_series(self._figure)
 
         previous_id = self.source_combo.currentData()
         self.source_combo.blockSignals(True)
@@ -714,8 +696,7 @@ class XRDAnalysisSection(QWidget):
     def current_fit_result(self) -> XRDPeakFitResult | None:
         return self._fit_result
 
-    def is_manual_peak_mode(self) -> bool:
-        return self._manual_peak_mode
+    # is_manual_peak_mode is inherited from AnalysisSection unchanged.
 
     def load_result(self, result: AnalysisResult | None) -> None:
         """Called when the shared Analysis History selection changes --
@@ -1616,20 +1597,13 @@ class XRDAnalysisSection(QWidget):
     def _on_add_peak_toggled(self, checked: bool) -> None:
         self._set_manual_peak_mode(checked)
 
-    def disarm_manual_peak_mode(self) -> None:
-        """Publicly disarm "Add Peak" (a no-op if it wasn't armed) --
-        called from every context change where an already-armed click
-        target stops making sense: this widget's own `_on_source_changed`/
-        `set_figure` (source series/Workbench/project change), and
-        `AnalysisPanel` reaching in on an active-panel switch
-        (`disarm_xrd_manual_peak_mode`) or a switch away from the XRD
-        tool (`_update_tool_visibility`) -- see each call site's own
-        comment. A successful `add_manual_peak` or the researcher
-        toggling the button off both already disarm directly; this method
-        exists for every OTHER exit path Part 8 of this milestone's own
-        bug-report notes lists, so none of them can leave a stale armed
-        state (and its checked button/status text) behind."""
-        self._set_manual_peak_mode(False)
+    # disarm_manual_peak_mode is inherited from AnalysisSection unchanged --
+    # called from every context change where an already-armed click target
+    # stops making sense: this widget's own `_on_source_changed`/
+    # `set_figure` (source series/Workbench/project change), and
+    # `AnalysisPanel` reaching in on an active-panel switch
+    # (`disarm_xrd_manual_peak_mode`) or a switch away from the XRD tool
+    # (`_update_tool_visibility`) -- see each call site's own comment.
 
     def add_manual_peak(self, two_theta: float, intensity: float) -> None:
         """Called by MainWindow after a canvas click while manual-peak
@@ -1675,13 +1649,11 @@ class XRDAnalysisSection(QWidget):
         self.overlay_changed.emit()
         self.result_updated.emit(self._current_result)
 
-    def set_selected_peak_rows(self, rows: list[int]) -> None:
-        """Record which peak rows are selected in the bottom Results-tab
-        detail table -- pushed in by `MainWindow` via `AnalysisPanel.
-        xrd_set_selected_peak_rows` whenever that table's selection
-        changes. Remove Selected / Enable-Disable act on exactly this
-        (see `_selected_peak_rows`)."""
-        self._results_selected_rows = sorted({int(r) for r in rows})
+    # set_selected_peak_rows is inherited from AnalysisSection unchanged --
+    # pushed in by `MainWindow` via `AnalysisPanel.xrd_set_selected_peak_
+    # rows` whenever the bottom Results-tab detail table's selection
+    # changes; Remove Selected / Enable-Disable act on exactly this (see
+    # `_selected_peak_rows` below).
 
     def _selected_peak_rows(self) -> list[int]:
         """The currently-selected peak rows, clamped to the current
