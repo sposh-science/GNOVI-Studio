@@ -7,8 +7,6 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
-    QComboBox,
-    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -17,7 +15,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -26,6 +23,11 @@ from PySide6.QtWidgets import (
 from gnovi_plot.gui.styles import STALE_COLOR, WARNING_COLOR
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
+from gnovi_plot.gui.widgets.scroll_safe_controls import (
+    ScrollSafeComboBox,
+    ScrollSafeDoubleSpinBox,
+    ScrollSafeSpinBox,
+)
 from gnovi_plot.plotting.backends.matplotlib_backend import is_low_contrast
 from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D, theme_color_cycle
 from gnovi_plot.plotting.graph_library import GraphLibrary
@@ -154,35 +156,35 @@ class PlotSeriesPanel(QWidget):
         self.color_button.setFixedWidth(48)
         self.visible_check = QCheckBox("Visible")
 
-        self.width_spin = QDoubleSpinBox()
+        self.width_spin = ScrollSafeDoubleSpinBox()
         self.width_spin.setRange(0.5, 10.0)
         self.width_spin.setSingleStep(0.5)
 
-        self.style_combo = QComboBox()
+        self.style_combo = ScrollSafeComboBox()
         for text, code in _LINE_STYLE_OPTIONS:
             self.style_combo.addItem(text, code)
 
-        self.marker_combo = QComboBox()
+        self.marker_combo = ScrollSafeComboBox()
         for text, code in _MARKER_OPTIONS:
             self.marker_combo.addItem(text, code)
 
-        self.marker_size_spin = QDoubleSpinBox()
+        self.marker_size_spin = ScrollSafeDoubleSpinBox()
         self.marker_size_spin.setRange(1.0, 30.0)
 
         self.marker_filled_check = QCheckBox("Filled marker")
-        self.marker_edge_width_spin = QDoubleSpinBox()
+        self.marker_edge_width_spin = ScrollSafeDoubleSpinBox()
         self.marker_edge_width_spin.setRange(0.1, 10.0)
         self.marker_edge_width_spin.setSingleStep(0.1)
 
-        self.alpha_spin = QDoubleSpinBox()
+        self.alpha_spin = ScrollSafeDoubleSpinBox()
         self.alpha_spin.setRange(0.05, 1.0)
         self.alpha_spin.setSingleStep(0.05)
 
-        self.zorder_spin = QDoubleSpinBox()
+        self.zorder_spin = ScrollSafeDoubleSpinBox()
         self.zorder_spin.setRange(-100.0, 100.0)
 
         self.offset_label = QLabel("Y offset")
-        self.offset_spin = QDoubleSpinBox()
+        self.offset_spin = ScrollSafeDoubleSpinBox()
         self.offset_spin.setRange(-_OFFSET_RANGE, _OFFSET_RANGE)
         self.offset_spin.setDecimals(4)
         # Qt's own automatic minimumSizeHint scales with the widest value
@@ -195,11 +197,11 @@ class PlotSeriesPanel(QWidget):
         self.normalize_check = QCheckBox("Normalize to max")
 
         self.bins_label = QLabel("Bins")
-        self.bins_spin = QSpinBox()
+        self.bins_spin = ScrollSafeSpinBox()
         self.bins_spin.setRange(0, 1000)
         self.bins_spin.setSpecialValueText("Auto")
         self.hist_mode_label = QLabel("Histogram mode")
-        self.hist_mode_combo = QComboBox()
+        self.hist_mode_combo = ScrollSafeComboBox()
         for text, code in _HIST_MODE_OPTIONS:
             self.hist_mode_combo.addItem(text, code)
         # "Frequency" (the longest configured option) was driving this
@@ -251,7 +253,7 @@ class PlotSeriesPanel(QWidget):
         form.addRow(self.hist_mode_label, self.hist_mode_combo)
         form.addRow(self.visible_check)
 
-        self.offset_step_spin = QDoubleSpinBox()
+        self.offset_step_spin = ScrollSafeDoubleSpinBox()
         self.offset_step_spin.setRange(0.0, _OFFSET_RANGE)
         self.offset_step_spin.setDecimals(4)
         self.offset_step_spin.setSpecialValueText("Auto")
@@ -329,30 +331,30 @@ class PlotSeriesPanel(QWidget):
         self.d3_color_button.setFixedWidth(48)
         self.d3_visible_check = QCheckBox("Visible")
 
-        self.d3_plot_type_combo = QComboBox()
+        self.d3_plot_type_combo = ScrollSafeComboBox()
         for text, plot_type in _PLOT3D_TYPE_OPTIONS:
             self.d3_plot_type_combo.addItem(text, plot_type)
 
         self.d3_marker_label = QLabel("Marker")
-        self.d3_marker_combo = QComboBox()
+        self.d3_marker_combo = ScrollSafeComboBox()
         for text, code in _MARKER_OPTIONS_3D:
             self.d3_marker_combo.addItem(text, code)
 
         self.d3_marker_size_label = QLabel("Marker size")
-        self.d3_marker_size_spin = QDoubleSpinBox()
+        self.d3_marker_size_spin = ScrollSafeDoubleSpinBox()
         self.d3_marker_size_spin.setRange(1.0, 30.0)
 
         self.d3_line_style_label = QLabel("Line style")
-        self.d3_line_style_combo = QComboBox()
+        self.d3_line_style_combo = ScrollSafeComboBox()
         for text, code in _LINE_STYLE_OPTIONS:
             self.d3_line_style_combo.addItem(text, code)
 
         self.d3_line_width_label = QLabel("Line width")
-        self.d3_line_width_spin = QDoubleSpinBox()
+        self.d3_line_width_spin = ScrollSafeDoubleSpinBox()
         self.d3_line_width_spin.setRange(0.5, 10.0)
         self.d3_line_width_spin.setSingleStep(0.5)
 
-        self.d3_alpha_spin = QDoubleSpinBox()
+        self.d3_alpha_spin = ScrollSafeDoubleSpinBox()
         self.d3_alpha_spin.setRange(0.05, 1.0)
         self.d3_alpha_spin.setSingleStep(0.05)
 

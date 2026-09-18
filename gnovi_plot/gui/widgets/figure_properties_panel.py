@@ -8,21 +8,23 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
-    QComboBox,
-    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
-    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
+from gnovi_plot.gui.widgets.scroll_safe_controls import (
+    ScrollSafeComboBox,
+    ScrollSafeDoubleSpinBox,
+    ScrollSafeSpinBox,
+)
 from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D
 from gnovi_plot.plotting.graph_library import GraphLibrary
 
@@ -202,7 +204,7 @@ class FigurePropertiesPanel(QWidget):
         self.spine_bottom_check = QCheckBox("Bottom")
         self.spine_left_check = QCheckBox("Left")
         self.spine_right_check = QCheckBox("Right")
-        self.spine_width_spin = QDoubleSpinBox()
+        self.spine_width_spin = ScrollSafeDoubleSpinBox()
         self.spine_width_spin.setRange(0.1, 10.0)
         self.spine_width_spin.setSingleStep(0.1)
 
@@ -211,13 +213,13 @@ class FigurePropertiesPanel(QWidget):
         # figure-wide; see `_FIGURE_GRID_FIELDS` above) ---
         self.grid_check = QCheckBox("Show grid")
         self.grid_which_combo = self._make_option_combo(_GRID_WHICH_OPTIONS)
-        self.grid_style_combo = QComboBox()
+        self.grid_style_combo = ScrollSafeComboBox()
         for text, code in _GRID_STYLE_OPTIONS:
             self.grid_style_combo.addItem(text, code)
-        self.grid_width_spin = QDoubleSpinBox()
+        self.grid_width_spin = ScrollSafeDoubleSpinBox()
         self.grid_width_spin.setRange(0.1, 10.0)
         self.grid_width_spin.setSingleStep(0.1)
-        self.grid_alpha_spin = QDoubleSpinBox()
+        self.grid_alpha_spin = ScrollSafeDoubleSpinBox()
         self.grid_alpha_spin.setRange(0.05, 1.0)
         self.grid_alpha_spin.setSingleStep(0.05)
         self.grid_custom_color_check = QCheckBox("Custom grid color")
@@ -226,14 +228,14 @@ class FigurePropertiesPanel(QWidget):
 
         # --- Legend ---
         self.legend_check = QCheckBox("Show legend")
-        self.legend_loc_combo = QComboBox()
+        self.legend_loc_combo = ScrollSafeComboBox()
         self.legend_loc_combo.addItems(_LEGEND_LOCATIONS)
         # The longest Matplotlib location strings ("outside bottom" etc.)
         # were driving this combo's own natural minimumSizeHint -- see the
         # matching note on `figure_size_panel.font_family_combo` for the
         # same pattern.
         self.legend_loc_combo.setMinimumWidth(90)
-        self.legend_ncol_spin = QSpinBox()
+        self.legend_ncol_spin = ScrollSafeSpinBox()
         self.legend_ncol_spin.setRange(1, 10)
         self.legend_frame_check = QCheckBox("Legend frame")
         self.legend_title_edit = QLineEdit()
@@ -440,13 +442,13 @@ class FigurePropertiesPanel(QWidget):
         # that function's own docstring for why and how it fails
         # gracefully. Same widget pattern as the 2D Grid group.
         self.d3_grid_check = QCheckBox("Show grid")
-        self.d3_grid_style_combo = QComboBox()
+        self.d3_grid_style_combo = ScrollSafeComboBox()
         for text, code in _GRID_STYLE_OPTIONS:
             self.d3_grid_style_combo.addItem(text, code)
-        self.d3_grid_width_spin = QDoubleSpinBox()
+        self.d3_grid_width_spin = ScrollSafeDoubleSpinBox()
         self.d3_grid_width_spin.setRange(0.1, 10.0)
         self.d3_grid_width_spin.setSingleStep(0.1)
-        self.d3_grid_alpha_spin = QDoubleSpinBox()
+        self.d3_grid_alpha_spin = ScrollSafeDoubleSpinBox()
         self.d3_grid_alpha_spin.setRange(0.05, 1.0)
         self.d3_grid_alpha_spin.setSingleStep(0.05)
         self.d3_grid_custom_color_check = QCheckBox("Custom grid color")
@@ -461,7 +463,7 @@ class FigurePropertiesPanel(QWidget):
         self.d3_pane_custom_color_check = QCheckBox("Custom pane color")
         self.d3_pane_color_button = QPushButton()
         self.d3_pane_color_button.setFixedWidth(48)
-        self.d3_pane_alpha_spin = QDoubleSpinBox()
+        self.d3_pane_alpha_spin = ScrollSafeDoubleSpinBox()
         self.d3_pane_alpha_spin.setRange(0.05, 1.0)
         self.d3_pane_alpha_spin.setSingleStep(0.05)
 
@@ -469,15 +471,15 @@ class FigurePropertiesPanel(QWidget):
         # visible/location only; still no title/per-panel font-size
         # override/outside-placement (see `Panel3D`'s own docstring).
         self.d3_legend_check = QCheckBox("Show legend")
-        self.d3_legend_loc_combo = QComboBox()
+        self.d3_legend_loc_combo = ScrollSafeComboBox()
         self.d3_legend_loc_combo.addItems(_LEGEND_LOCATIONS_3D)
-        self.d3_legend_ncol_spin = QSpinBox()
+        self.d3_legend_ncol_spin = ScrollSafeSpinBox()
         self.d3_legend_ncol_spin.setRange(1, 10)
         self.d3_legend_frame_check = QCheckBox("Legend frame")
 
-        self.d3_elevation_spin = QDoubleSpinBox()
+        self.d3_elevation_spin = ScrollSafeDoubleSpinBox()
         self.d3_elevation_spin.setRange(-180.0, 180.0)
-        self.d3_azimuth_spin = QDoubleSpinBox()
+        self.d3_azimuth_spin = ScrollSafeDoubleSpinBox()
         self.d3_azimuth_spin.setRange(-360.0, 360.0)
         self.d3_set_current_view_button = QPushButton("Set Current View")
         self.d3_reset_view_button = QPushButton("Reset View")
@@ -614,8 +616,8 @@ class FigurePropertiesPanel(QWidget):
         return page
 
     @staticmethod
-    def _make_limit_spin() -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
+    def _make_limit_spin() -> ScrollSafeDoubleSpinBox:
+        spin = ScrollSafeDoubleSpinBox()
         spin.setRange(-_LIMIT_RANGE, _LIMIT_RANGE)
         spin.setDecimals(6)
         spin.setEnabled(False)
@@ -633,8 +635,8 @@ class FigurePropertiesPanel(QWidget):
         return spin
 
     @staticmethod
-    def _make_spacing_spin() -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
+    def _make_spacing_spin() -> ScrollSafeDoubleSpinBox:
+        spin = ScrollSafeDoubleSpinBox()
         spin.setRange(0.0, _TICK_SPACING_RANGE)
         spin.setDecimals(6)
         spin.setSpecialValueText("Auto")
@@ -647,16 +649,16 @@ class FigurePropertiesPanel(QWidget):
         return spin
 
     @staticmethod
-    def _make_tick_geometry_spin() -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
+    def _make_tick_geometry_spin() -> ScrollSafeDoubleSpinBox:
+        spin = ScrollSafeDoubleSpinBox()
         spin.setRange(0.0, _TICK_GEOMETRY_RANGE)
         spin.setSingleStep(0.5)
         spin.setDecimals(2)
         return spin
 
     @staticmethod
-    def _make_option_combo(options: list[tuple[str, str]]) -> QComboBox:
-        combo = QComboBox()
+    def _make_option_combo(options: list[tuple[str, str]]) -> ScrollSafeComboBox:
+        combo = ScrollSafeComboBox()
         for text, code in options:
             combo.addItem(text, code)
         return combo

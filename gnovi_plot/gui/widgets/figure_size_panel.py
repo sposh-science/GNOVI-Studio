@@ -6,8 +6,6 @@ from PySide6.QtCore import Signal
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
-    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QPushButton,
@@ -17,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from gnovi_plot.gui.styles import PlotTheme
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
+from gnovi_plot.gui.widgets.scroll_safe_controls import ScrollSafeComboBox, ScrollSafeDoubleSpinBox
 from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.graph_library import GraphLibrary
 from gnovi_plot.plotting.units import (
@@ -117,7 +116,7 @@ class FigureSizePanel(QWidget):
 
         self.active_panel_label = ActivePanelLabel(figure, get_graph_library)
 
-        self.aspect_combo = QComboBox()
+        self.aspect_combo = ScrollSafeComboBox()
         self.aspect_combo.addItems(list(ASPECT_RATIO_PRESETS))
         # Same "configured content, not this widget's own layout needs,
         # inflated the natural floor" pattern as `font_family_combo` below --
@@ -131,7 +130,7 @@ class FigureSizePanel(QWidget):
             "Figure Aspect Ratio: shape of the complete figure containing all panels."
         )
 
-        self.panel_aspect_combo = QComboBox()
+        self.panel_aspect_combo = ScrollSafeComboBox()
         self.panel_aspect_combo.addItems(list(PANEL_ASPECT_RATIO_PRESETS))
         # Distinct label/tooltip from Figure Aspect Ratio just above -- this
         # one is each individual graph box's shape only.
@@ -140,20 +139,20 @@ class FigureSizePanel(QWidget):
             "Does not change numerical X/Y scaling."
         )
 
-        self.publication_combo = QComboBox()
+        self.publication_combo = ScrollSafeComboBox()
         self.publication_combo.addItems([_NO_PUBLICATION_PRESET] + list(PUBLICATION_PRESETS_MM))
         # Same pattern -- "Journal double column" (the longest configured
         # preset name) was driving this combo's natural floor.
         self.publication_combo.setMinimumWidth(90)
 
-        self.unit_combo = QComboBox()
+        self.unit_combo = ScrollSafeComboBox()
         self.unit_combo.addItems(_UNITS)
 
-        self.width_spin = QDoubleSpinBox()
+        self.width_spin = ScrollSafeDoubleSpinBox()
         self.width_spin.setRange(1.0, 5000.0)
         self.width_spin.setDecimals(2)
 
-        self.height_spin = QDoubleSpinBox()
+        self.height_spin = ScrollSafeDoubleSpinBox()
         self.height_spin.setRange(1.0, 5000.0)
         self.height_spin.setDecimals(2)
 
@@ -169,10 +168,10 @@ class FigureSizePanel(QWidget):
         size_form.addRow("Height", self.height_spin)
         size_form.addRow(self.lock_check)
 
-        self.layout_combo = QComboBox()
+        self.layout_combo = ScrollSafeComboBox()
         for text, _dims in LAYOUT_PRESETS:
             self.layout_combo.addItem(text)
-        self.panel_combo = QComboBox()
+        self.panel_combo = ScrollSafeComboBox()
         self.panel_labels_check = QCheckBox("Show panel labels (a), (b), …")
 
         panels_group = QGroupBox("Panels")
@@ -189,7 +188,7 @@ class FigureSizePanel(QWidget):
         # handler the View menu and toolbar already use, and
         # `set_current_theme` below keeps this combo in sync with whichever
         # of those the user changed it from.
-        self.theme_combo = QComboBox()
+        self.theme_combo = ScrollSafeComboBox()
         for mode, label in _PLOT_THEME_OPTIONS:
             self.theme_combo.addItem(label, mode)
 
@@ -197,7 +196,7 @@ class FigureSizePanel(QWidget):
         theme_form = QFormLayout(theme_group)
         theme_form.addRow("Theme", self.theme_combo)
 
-        self.font_family_combo = QComboBox()
+        self.font_family_combo = ScrollSafeComboBox()
         self.font_family_combo.addItem(_SYSTEM_DEFAULT_FONT)
         self.font_family_combo.addItems(QFontDatabase.families())
         # A QComboBox's own minimumSizeHint is driven by its single widest
@@ -262,8 +261,8 @@ class FigureSizePanel(QWidget):
         self._sync_from_figure()
 
     @staticmethod
-    def _make_font_spin() -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
+    def _make_font_spin() -> ScrollSafeDoubleSpinBox:
+        spin = ScrollSafeDoubleSpinBox()
         spin.setRange(4.0, 48.0)
         spin.setSuffix(" pt")
         return spin

@@ -4,7 +4,6 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -13,7 +12,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
-    QSpinBox,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -31,6 +29,7 @@ from gnovi_plot.data.importers.text_importer import SUPPORTED_EXTENSIONS, DataIm
 from gnovi_plot.data.numeric import InsufficientNumericDataError, numeric_column, numeric_xy
 from gnovi_plot.gui.dialogs.import_data_dialog import ImportDataDialog
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
+from gnovi_plot.gui.widgets.scroll_safe_controls import ScrollSafeComboBox, ScrollSafeSpinBox
 from gnovi_plot.plotting.series import PlotSeries, PlotType
 
 # Driven by SUPPORTED_EXTENSIONS (never a second, hand-maintained
@@ -153,7 +152,7 @@ class DatasetPanel(QWidget):
         # so there is exactly one "current dataset" state, never a second,
         # independent one -- see `_sync_dataset_combo`/`_on_dataset_combo_changed`.
         self.dataset_combo_label = QLabel("Dataset")
-        self.active_dataset_combo = QComboBox()
+        self.active_dataset_combo = ScrollSafeComboBox()
         # Dataset names are user-chosen and open-ended -- the combo still
         # shows the full name whenever the drawer is wide enough for it;
         # this only stops a single long dataset name from forcing the
@@ -161,30 +160,30 @@ class DatasetPanel(QWidget):
         # `figure_size_panel.font_family_combo`.
         self.active_dataset_combo.setMinimumWidth(90)
 
-        self.plot_preset_combo = QComboBox()
+        self.plot_preset_combo = ScrollSafeComboBox()
         for text, preset in _PLOT_PRESET_OPTIONS:
             self.plot_preset_combo.addItem(text, preset)
         self.plot_preset_combo.setMinimumWidth(80)
 
-        self.plot_type_combo = QComboBox()
+        self.plot_type_combo = ScrollSafeComboBox()
         for text, plot_type in _PLOT_TYPE_OPTIONS:
             self.plot_type_combo.addItem(text, plot_type)
         self.plot_type_combo.setMinimumWidth(80)
 
         self.x_label = QLabel("X column")
-        self.x_combo = QComboBox()
+        self.x_combo = ScrollSafeComboBox()
         self.x_combo.setMinimumWidth(90)  # column names are open-ended, same pattern
         self.y_label = QLabel("Y column")
-        self.y_combo = QComboBox()
+        self.y_combo = ScrollSafeComboBox()
         self.y_combo.setMinimumWidth(90)
         self.bins_label = QLabel("Bins")
-        self.bins_spin = QSpinBox()
+        self.bins_spin = ScrollSafeSpinBox()
         self.bins_spin.setRange(0, 1000)
         self.bins_spin.setValue(0)
         self.bins_spin.setSpecialValueText("Auto")
 
         self.plot_mode_label = QLabel("Plot mode")
-        self.plot_mode_combo = QComboBox()
+        self.plot_mode_combo = ScrollSafeComboBox()
         for text, mode in _PLOT_MODE_OPTIONS:
             self.plot_mode_combo.addItem(text, mode)
         # "Entire dataset" (the longest configured option) was driving this
@@ -196,7 +195,7 @@ class DatasetPanel(QWidget):
         self.cycle_status_label.setWordWrap(True)
 
         self.cycle_source_label = QLabel("Cycle source")
-        self.cycle_source_combo = QComboBox()
+        self.cycle_source_combo = ScrollSafeComboBox()
         for text, source in _CYCLE_SOURCE_OPTIONS:
             self.cycle_source_combo.addItem(text, source)
         # Same pattern -- "Auto detect" was driving the natural floor.

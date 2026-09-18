@@ -4,7 +4,6 @@ from collections.abc import Callable
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -14,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
+from gnovi_plot.gui.widgets.scroll_safe_controls import ScrollSafeDoubleSpinBox
 from gnovi_plot.plotting.backends.matplotlib_backend import compute_tight_layout
 from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.graph_library import GraphLibrary
@@ -120,16 +120,16 @@ class FigureLayoutPanel(QWidget):
         self.refresh()
 
     @staticmethod
-    def _make_margin_spin() -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
+    def _make_margin_spin() -> ScrollSafeDoubleSpinBox:
+        spin = ScrollSafeDoubleSpinBox()
         spin.setRange(0.0, 1.0)
         spin.setSingleStep(0.01)
         spin.setDecimals(3)
         return spin
 
     @staticmethod
-    def _make_spacing_spin() -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
+    def _make_spacing_spin() -> ScrollSafeDoubleSpinBox:
+        spin = ScrollSafeDoubleSpinBox()
         spin.setRange(0.0, 5.0)
         spin.setSingleStep(0.05)
         spin.setDecimals(2)

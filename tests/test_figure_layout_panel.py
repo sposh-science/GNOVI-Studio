@@ -7,6 +7,35 @@ from gnovi_plot.plotting.figure import GnoviFigure
 from gnovi_plot.plotting.series import PlotSeries
 
 
+def test_left_spin_ignores_an_unfocused_wheel_scroll(qapp):
+    # Issue #58: a real, factory-produced control (_make_margin_spin) --
+    # not just the shared ScrollSafeDoubleSpinBox class in isolation (see
+    # test_scroll_safe_controls.py) -- confirms the factory conversion
+    # itself.
+    from PySide6.QtCore import QCoreApplication, QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+
+    figure = GnoviFigure()
+    panel = FigureLayoutPanel(figure)
+    panel.show()
+    panel.reset_button.setFocus()  # left_spin is first in tab order and
+    QCoreApplication.processEvents()  # would otherwise pick up default focus
+    spin = panel.left_spin
+    assert spin.hasFocus() is False
+    value_before = spin.value()
+
+    event = QWheelEvent(
+        QPointF(spin.rect().center()), QPointF(spin.mapToGlobal(spin.rect().center())),
+        QPoint(0, 0), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False,
+    )
+    QApplication.sendEvent(spin, event)
+    QCoreApplication.processEvents()
+
+    assert spin.value() == value_before
+    assert event.isAccepted() is False
+
+
 def test_default_values_match_figure_defaults(qapp):
     figure = GnoviFigure()
     panel = FigureLayoutPanel(figure)
