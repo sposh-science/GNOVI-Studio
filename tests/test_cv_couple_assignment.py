@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from gnovi_plot.data.dataset import Dataset
-from gnovi_plot.gui.widgets.cv_analysis_section import eligible_cv_series
+from gnovi_plot.gui.widgets.analysis_section import eligible_analysis_series
 from gnovi_plot.modules.electrochemistry.common import SWEEP_RISING, segment_sweeps
 from gnovi_plot.modules.electrochemistry.cv import (
     DEFAULT_PROMINENCE_MULTIPLIER,
@@ -43,7 +43,8 @@ def _peak(process, e, i, prom=1e-5, enabled=True, origin="automatic") -> CVPeakR
     )
 
 
-# --- eligible_cv_series ------------------------------------------------
+# --- eligible_analysis_series (CV's own use of the shared filter -- see
+# Issue #61) ---------------------------------------------------------------
 
 
 def test_eligible_cv_series_line_and_scatter_only():
@@ -53,7 +54,7 @@ def test_eligible_cv_series_line_and_scatter_only():
     figure.add_series(PlotSeries.line(ds, "E", "I"))
     figure.add_series(PlotSeries.scatter(ds, "E", "I"))
     figure.add_series(PlotSeries.histogram(ds, "E"))
-    assert len(eligible_cv_series(figure)) == 2
+    assert len(eligible_analysis_series(figure)) == 2
 
 
 def test_eligible_cv_series_empty_for_panel3d():
@@ -63,7 +64,7 @@ def test_eligible_cv_series_empty_for_panel3d():
     figure.panels[0] = Panel3D(panel_label="3D")
     figure.panels[0].add_series(Series3D(dataset=ds, x_column="x", y_column="y", z_column="z",
                                          plot_type=Plot3DType.SCATTER, label="s"))
-    assert eligible_cv_series(figure) == []
+    assert eligible_analysis_series(figure) == []
 
 
 # --- default_prominence ---------------------------------------------
