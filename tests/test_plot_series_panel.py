@@ -25,6 +25,36 @@ def _make_3d_figure():
     return GnoviFigure(panels=[panel3d])
 
 
+def test_alpha_spin_ignores_an_unfocused_wheel_scroll(qapp):
+    # Issue #58: a real Series-page control, not just the shared
+    # ScrollSafeDoubleSpinBox class in isolation (see
+    # test_scroll_safe_controls.py).
+    from PySide6.QtCore import QCoreApplication, QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+
+    figure = GnoviFigure()
+    figure.add_series(PlotSeries.line(_make_dataset(), "x", "y"))
+    panel = PlotSeriesPanel(figure)
+    panel.show()
+    panel.series_list.setCurrentRow(0)
+    QCoreApplication.processEvents()
+    spin = panel.alpha_spin
+    assert spin.isEnabled() is True
+    assert spin.hasFocus() is False
+    value_before = spin.value()
+
+    event = QWheelEvent(
+        QPointF(spin.rect().center()), QPointF(spin.mapToGlobal(spin.rect().center())),
+        QPoint(0, 0), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False,
+    )
+    QApplication.sendEvent(spin, event)
+    QCoreApplication.processEvents()
+
+    assert spin.value() == value_before
+    assert event.isAccepted() is False
+
+
 # --- Theme-aware contrast warning (manual colors only) -----------------------
 
 

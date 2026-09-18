@@ -61,6 +61,34 @@ def _fill_xyz(panel, x, y, z):
 # --- Dataset/column selection --------------------------------------------------------
 
 
+def test_dataset_combo_ignores_an_unfocused_wheel_scroll(qapp):
+    # Issue #58: a real 3D-page control, not just the shared
+    # ScrollSafeComboBox class in isolation (see
+    # test_scroll_safe_controls.py).
+    from PySide6.QtCore import QCoreApplication, QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+
+    d1, d2 = _make_dataset("First"), _make_dataset("Second")
+    panel, _manager, _figure = _make_panel(d1, d2)
+    panel.show()
+    QCoreApplication.processEvents()
+    combo = panel.dataset_combo
+    assert combo.hasFocus() is False
+    index_before = combo.currentIndex()
+
+    event = QWheelEvent(
+        QPointF(combo.rect().center()), QPointF(combo.mapToGlobal(combo.rect().center())),
+        QPoint(0, 0), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False,
+    )
+    QApplication.sendEvent(combo, event)
+    QCoreApplication.processEvents()
+
+    assert combo.currentIndex() == index_before
+    assert event.isAccepted() is False
+    panel.close()
+
+
 def test_dataset_combo_lists_every_dataset(qapp):
     d1, d2 = _make_dataset("First"), _make_dataset("Second")
     panel, _manager, _figure = _make_panel(d1, d2)

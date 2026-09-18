@@ -6,6 +6,34 @@ from gnovi_plot.gui.widgets.figure_size_panel import FigureSizePanel
 from gnovi_plot.plotting.figure import GnoviFigure
 
 
+def test_base_font_spin_ignores_an_unfocused_wheel_scroll(qapp):
+    # Issue #58: a real, factory-produced control (_make_font_spin) -- not
+    # just the shared ScrollSafeDoubleSpinBox class in isolation (see
+    # test_scroll_safe_controls.py) -- confirms the factory conversion
+    # itself.
+    from PySide6.QtCore import QCoreApplication, QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+
+    figure = GnoviFigure()
+    panel = FigureSizePanel(figure)
+    panel.show()
+    QCoreApplication.processEvents()
+    spin = panel.base_font_spin
+    assert spin.hasFocus() is False
+    value_before = spin.value()
+
+    event = QWheelEvent(
+        QPointF(spin.rect().center()), QPointF(spin.mapToGlobal(spin.rect().center())),
+        QPoint(0, 0), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False,
+    )
+    QApplication.sendEvent(spin, event)
+    QCoreApplication.processEvents()
+
+    assert spin.value() == value_before
+    assert event.isAccepted() is False
+
+
 def test_default_unit_is_inches_and_matches_figure_defaults(qapp):
     figure = GnoviFigure()
     panel = FigureSizePanel(figure)

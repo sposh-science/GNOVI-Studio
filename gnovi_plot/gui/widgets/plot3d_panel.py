@@ -4,7 +4,6 @@ from collections.abc import Callable
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QGroupBox,
     QLabel,
     QPushButton,
@@ -17,6 +16,7 @@ from gnovi_plot.data.numeric import InsufficientNumericDataError, group_row_posi
 from gnovi_plot.gui.styles import STALE_COLOR
 from gnovi_plot.gui.widgets.active_panel_label import ActivePanelLabel
 from gnovi_plot.gui.widgets.collapsible_section import CollapsibleSection
+from gnovi_plot.gui.widgets.scroll_safe_controls import ScrollSafeComboBox
 from gnovi_plot.plotting.figure import GnoviFigure, Panel3D
 from gnovi_plot.plotting.graph_library import GraphLibrary
 from gnovi_plot.plotting.series3d import Plot3DType, Series3D
@@ -102,16 +102,16 @@ class Plot3DPanel(QWidget):
 
         self.active_panel_label = ActivePanelLabel(figure, get_graph_library)
 
-        self.dataset_combo = QComboBox()
-        self.plot_type_combo = QComboBox()
+        self.dataset_combo = ScrollSafeComboBox()
+        self.plot_type_combo = ScrollSafeComboBox()
         for text, plot_type in _PLOT_TYPE_OPTIONS:
             self.plot_type_combo.addItem(text, plot_type)
 
-        self.x_combo = QComboBox()
-        self.y_combo = QComboBox()
-        self.z_combo = QComboBox()
+        self.x_combo = ScrollSafeComboBox()
+        self.y_combo = ScrollSafeComboBox()
+        self.z_combo = ScrollSafeComboBox()
 
-        self.group_by_combo = QComboBox()
+        self.group_by_combo = ScrollSafeComboBox()
 
         self.add_button = QPushButton("Add to 3D Plot")
         self.add_button.setProperty("primary", True)

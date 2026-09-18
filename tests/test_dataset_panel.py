@@ -33,6 +33,32 @@ def _combo_dataset_ids(panel) -> list[str | None]:
     return [combo.itemData(i) for i in range(combo.count())]
 
 
+def test_active_dataset_combo_ignores_an_unfocused_wheel_scroll(qapp):
+    # Issue #58: a real Data-page control, not just the shared
+    # ScrollSafeComboBox class in isolation (see
+    # test_scroll_safe_controls.py).
+    from PySide6.QtCore import QCoreApplication, QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+
+    panel, _manager = _make_panel(_make_dataset("a"), _make_dataset("b"))
+    panel.show()
+    QCoreApplication.processEvents()
+    combo = panel.active_dataset_combo
+    assert combo.hasFocus() is False
+    index_before = combo.currentIndex()
+
+    event = QWheelEvent(
+        QPointF(combo.rect().center()), QPointF(combo.mapToGlobal(combo.rect().center())),
+        QPoint(0, 0), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False,
+    )
+    QApplication.sendEvent(combo, event)
+    QCoreApplication.processEvents()
+
+    assert combo.currentIndex() == index_before
+    assert event.isAccepted() is False
+
+
 def test_combo_shows_only_the_placeholder_when_no_dataset_exists(qapp):
     panel, _manager = _make_panel()
 

@@ -7,6 +7,35 @@ from gnovi_plot.plotting.figure import GnoviFigure, Panel, Panel3D
 from gnovi_plot.plotting.series3d import Series3D
 
 
+def test_major_spacing_x_spin_ignores_an_unfocused_wheel_scroll(qapp):
+    # Issue #58: a real, factory-produced control (_make_spacing_spin) --
+    # not just the shared ScrollSafeDoubleSpinBox class in isolation (see
+    # test_scroll_safe_controls.py) -- confirms the factory conversion
+    # itself, not only direct construction sites in this file.
+    from PySide6.QtCore import QCoreApplication, QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+
+    figure = GnoviFigure()
+    panel = FigurePropertiesPanel(figure)
+    panel.show()
+    QCoreApplication.processEvents()
+    spin = panel.major_spacing_x_spin
+    assert spin.isEnabled() is True
+    assert spin.hasFocus() is False
+    value_before = spin.value()
+
+    event = QWheelEvent(
+        QPointF(spin.rect().center()), QPointF(spin.mapToGlobal(spin.rect().center())),
+        QPoint(0, 0), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False,
+    )
+    QApplication.sendEvent(spin, event)
+    QCoreApplication.processEvents()
+
+    assert spin.value() == value_before
+    assert event.isAccepted() is False
+
+
 # --- Grid (single authoritative location -- see the module's
 # `_FIGURE_GRID_FIELDS` docstring note) --------------------------------------
 
