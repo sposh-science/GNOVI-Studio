@@ -113,6 +113,61 @@ def test_active_section_returns_the_widget_matching_the_selected_tool(qapp):
     assert panel.active_section() is None
 
 
+def test_tool_combo_category_headings_are_disabled_and_non_selectable(qapp):
+    # Issue #63: GENERAL/DIFFRACTION/ELECTROCHEMISTRY are group headings,
+    # not selectable tools -- Qt's own item enabled/selectable flags on
+    # the combo's default model, not a ScrollSafeComboBox change.
+    from PySide6.QtCore import Qt
+
+    figure = GnoviFigure()
+    panel = AnalysisPanel(figure, DatasetManager())
+    combo = panel.tool_combo
+    model = combo.model()
+
+    heading_rows = [i for i in range(combo.count()) if combo.itemText(i) in ("GENERAL", "DIFFRACTION", "ELECTROCHEMISTRY")]
+    assert heading_rows  # sanity: headings actually exist
+    for row in heading_rows:
+        flags = model.item(row).flags()
+        assert not (flags & Qt.ItemIsEnabled)
+        assert not (flags & Qt.ItemIsSelectable)
+
+    tool_rows = [i for i in range(combo.count()) if combo.itemText(i) not in ("GENERAL", "DIFFRACTION", "ELECTROCHEMISTRY")]
+    for row in tool_rows:
+        flags = model.item(row).flags()
+        assert flags & Qt.ItemIsEnabled
+        assert flags & Qt.ItemIsSelectable
+
+
+def test_tool_combo_keyboard_navigation_skips_category_headings(qapp):
+    # Issue #63: Down from Curve Fitting must land on XRD Peak Analysis,
+    # never on the DIFFRACTION heading in between -- Qt's native
+    # disabled/non-selectable-item skip behavior, not custom code here.
+    # A raw QKeyEvent via QApplication.sendEvent (not PySide6.QtTest,
+    # which isn't available on every stack this project tests against --
+    # see the Debian CI job) reproduces the same widget-level handling,
+    # mirroring the synthetic-event pattern test_scroll_safe_controls.py
+    # already uses for wheel events.
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtWidgets import QApplication
+
+    figure = GnoviFigure()
+    panel = AnalysisPanel(figure, DatasetManager())
+    combo = panel.tool_combo
+    combo.setCurrentText("Curve Fitting")
+    combo.setFocus(Qt.FocusReason.MouseFocusReason)
+
+    def press_down():
+        QApplication.sendEvent(combo, QKeyEvent(QEvent.KeyPress, Qt.Key_Down, Qt.NoModifier))
+        QApplication.sendEvent(combo, QKeyEvent(QEvent.KeyRelease, Qt.Key_Down, Qt.NoModifier))
+
+    press_down()
+    assert combo.currentText() == "XRD Peak Analysis"
+
+    press_down()
+    assert combo.currentText() == "Cyclic Voltammetry"
+
+
 def test_degree_spin_ignores_an_unfocused_wheel_scroll(qapp):
     # Issue #56: a real Curve Fitting control, not just the shared
     # ScrollSafeSpinBox class in isolation (see test_scroll_safe_controls.py).

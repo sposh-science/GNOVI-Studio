@@ -58,10 +58,17 @@ def _panel_with_series(figure: GnoviFigure, dataset: Dataset) -> PlotSeries:
 
 
 def test_analysis_tool_selector_offers_curve_fitting_and_xrd(qapp):
+    # Issue #63: grouped by scientific domain -- category headings
+    # (GENERAL/DIFFRACTION/ELECTROCHEMISTRY) interleaved with the
+    # selectable tool labels.
     figure = GnoviFigure()
     panel = AnalysisPanel(figure, DatasetManager())
     options = [panel.tool_combo.itemText(i) for i in range(panel.tool_combo.count())]
-    assert options == ["Curve Fitting", "XRD Peak Analysis", "Cyclic Voltammetry"]
+    assert options == [
+        "GENERAL", "Curve Fitting",
+        "DIFFRACTION", "XRD Peak Analysis",
+        "ELECTROCHEMISTRY", "Cyclic Voltammetry",
+    ]
 
 
 def test_curve_fitting_section_visible_by_default_xrd_hidden(qapp):
