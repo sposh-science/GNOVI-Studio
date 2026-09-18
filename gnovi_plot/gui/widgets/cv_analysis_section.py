@@ -1084,7 +1084,7 @@ class CVAnalysisSection(AnalysisSection):
     def add_manual_peak(self, potential_v: float, current_a: float) -> None:
         """Called by ``MainWindow`` after a canvas click while Add Peak is
         armed (the wrong-panel / Panel3D / non-finite guards already
-        passed in ``MainWindow._handle_cv_manual_peak_click``).
+        passed in ``MainWindow._handle_manual_peak_click``).
 
         Finds the closest point on the SELECTED CYCLE's trace to the click,
         in (potential, current) space normalised by the cycle's own
