@@ -57,8 +57,13 @@ def _make_panel(figure=None):
 
 def test_tool_selector_shows_cv_and_hides_the_others(qapp):
     panel, _cv, _ds = _make_panel()
+    # Issue #63: grouped by scientific domain -- category headings
+    # (GENERAL/DIFFRACTION/ELECTROCHEMISTRY) interleaved with the
+    # selectable tool labels.
     assert [panel.tool_combo.itemText(i) for i in range(panel.tool_combo.count())] == [
-        "Curve Fitting", "XRD Peak Analysis", "Cyclic Voltammetry",
+        "GENERAL", "Curve Fitting",
+        "DIFFRACTION", "XRD Peak Analysis",
+        "ELECTROCHEMISTRY", "Cyclic Voltammetry",
     ]
     assert panel.cv_section.isVisibleTo(panel)
     assert not panel.fit_section.isVisibleTo(panel)

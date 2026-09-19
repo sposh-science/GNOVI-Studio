@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pandas as pd
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -47,6 +49,26 @@ from gnovi_plot.plotting.series import PlotSeries
 _TOOL_CURVE_FITTING = "Curve Fitting"
 _TOOL_XRD = "XRD Peak Analysis"
 _TOOL_CV = "Cyclic Voltammetry"
+
+
+@dataclass(frozen=True)
+class _ToolEntry:
+    """One row of `AnalysisPanel`'s tool registry -- see Issue #63. The
+    smallest data-driven mapping from a user-facing tool label to its
+    scientific category (the selector's group heading), its
+    `CollapsibleSection` (shown/hidden by `_update_tool_visibility`),
+    and its `AnalysisSection` (`None` for Curve Fitting, which has none
+    -- see Issue #61's own scope note on why it wasn't extracted; it's
+    still a registry entry so combo population/visibility toggling
+    don't need to special-case it). Deliberately not a plugin
+    framework: adding a future domain (Raman, I-V, ...) is one more
+    entry, nothing else in this module changes shape."""
+
+    label: str
+    category: str
+    section: CollapsibleSection
+    analysis_section: AnalysisSection | None
+
 
 # Compact history-list label for an `XRDPeakFitResult` (parallel to the
 # `"<Model> fit — <y column>"` label a generic `FitResult` gets).
@@ -201,7 +223,9 @@ class AnalysisPanel(QWidget):
         # shared by every tool, never duplicated per tool.
         self.tool_label = QLabel("Analysis Tool")
         self.tool_combo = ScrollSafeComboBox()
-        self.tool_combo.addItems([_TOOL_CURVE_FITTING, _TOOL_XRD, _TOOL_CV])
+        # Populated from self._tool_registry once every CollapsibleSection/
+        # AnalysisSection it references exists -- see the registry's own
+        # construction further down.
 
         self.xrd_section_widget = XRDAnalysisSection(figure, dataset_manager)
         self.xrd_section = CollapsibleSection("XRD Peak Analysis", self.xrd_section_widget)
@@ -277,6 +301,16 @@ class AnalysisPanel(QWidget):
 
         self.fit_section = CollapsibleSection("Curve Fitting", fit_group)
 
+        # Current entries only -- GENERAL/DIFFRACTION/ELECTROCHEMISTRY.
+        # SPECTROSCOPY/Raman and ELECTRICAL & DIELECTRIC/I-V join this list
+        # only once their real AnalysisSections exist (see Issue #63).
+        self._tool_registry: list[_ToolEntry] = [
+            _ToolEntry(_TOOL_CURVE_FITTING, "GENERAL", self.fit_section, None),
+            _ToolEntry(_TOOL_XRD, "DIFFRACTION", self.xrd_section, self.xrd_section_widget),
+            _ToolEntry(_TOOL_CV, "ELECTROCHEMISTRY", self.cv_section, self.cv_section_widget),
+        ]
+        self._populate_tool_combo()
+
         self.history_list = QListWidget()
         self.history_status_label = QLabel(_HISTORY_EMPTY_TEXT)
         self.history_status_label.setWordWrap(True)
@@ -349,13 +383,42 @@ class AnalysisPanel(QWidget):
         self._update_tool_visibility()
         self.refresh()
 
+    def _populate_tool_combo(self) -> None:
+        """Build `tool_combo` from `self._tool_registry`, inserting a
+        disabled, non-selectable category heading (`Qt.ItemIsEnabled`/
+        `Qt.ItemIsSelectable` cleared on the combo's own default item
+        model -- no `ScrollSafeComboBox` change needed) whenever an
+        entry's category differs from the previous one's. Verified
+        directly against `ScrollSafeComboBox` during Issue #63's own
+        audit that these flags alone are enough to keep a heading from
+        ever becoming the active tool via mouse, keyboard, or wheel --
+        this is Qt's own standard mechanism for a non-selectable combo
+        row, not a new one invented here."""
+        previous_category = None
+        for entry in self._tool_registry:
+            if entry.category != previous_category:
+                heading_row = self.tool_combo.count()
+                self.tool_combo.addItem(entry.category)
+                heading_item = self.tool_combo.model().item(heading_row)
+                heading_item.setFlags(heading_item.flags() & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable)
+                previous_category = entry.category
+            self.tool_combo.addItem(entry.label)
+        # Qt auto-selects row 0 as items are added to a previously-empty
+        # combo regardless of the enabled/selectable flags above (that
+        # skip only applies to keyboard/wheel navigation FROM an already-
+        # valid row, not this initial default) -- row 0 is now always a
+        # disabled category heading, so the first REAL tool must be
+        # selected explicitly or nothing would be visible/selectable at
+        # all. The first registry entry is always the intended default
+        # (Curve Fitting today).
+        self.tool_combo.setCurrentText(self._tool_registry[0].label)
+
     def _update_tool_visibility(self) -> None:
         tool = self.tool_combo.currentText()
+        for entry in self._tool_registry:
+            entry.section.setVisible(entry.label == tool)
         is_xrd = tool == _TOOL_XRD
         is_cv = tool == _TOOL_CV
-        self.fit_section.setVisible(not is_xrd and not is_cv)
-        self.xrd_section.setVisible(is_xrd)
-        self.cv_section.setVisible(is_cv)
         # Switching away from a tool while its "Add Peak" was armed must not
         # leave it armed with its own controls now hidden -- a subsequent
         # canvas click would otherwise still be consumed as a manual-peak
@@ -377,17 +440,16 @@ class AnalysisPanel(QWidget):
         """Whichever `AnalysisSection` the tool selector currently shows --
         `None` for Curve Fitting, which has no dedicated `AnalysisSection`
         (it stays inline in this panel; see Issue #61's own scope note on
-        why it wasn't extracted). Mirrors the exact `is_xrd`/`is_cv`
-        resolution `_update_tool_visibility` already uses, so this can
-        never disagree with what's actually visible. Lets `MainWindow`
-        route interaction (manual canvas clicks, ...) generically against
-        whichever section is active, instead of asking "is this XRD or
-        CV?" itself -- see Issue #62."""
+        why it wasn't extracted). Resolved through `self._tool_registry`
+        (see Issue #63), so this can never disagree with what's actually
+        visible, and a future domain needs no change here -- only a new
+        registry entry. Lets `MainWindow` route interaction (manual canvas
+        clicks, ...) generically against whichever section is active,
+        instead of asking "is this XRD or CV?" itself -- see Issue #62."""
         tool = self.tool_combo.currentText()
-        if tool == _TOOL_XRD:
-            return self.xrd_section_widget
-        if tool == _TOOL_CV:
-            return self.cv_section_widget
+        for entry in self._tool_registry:
+            if entry.label == tool:
+                return entry.analysis_section
         return None
 
     def disarm_xrd_manual_peak_mode(self) -> None:
